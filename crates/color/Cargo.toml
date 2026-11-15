@@ -1,0 +1,12 @@
+[package]
+name = "fotodit-color"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+fotodit-cms = { workspace = true }
+serde = { workspace = true }

@@ -1,0 +1,16 @@
+*~
+/plan/
+/target
+target/
+/dist
+/corpus
+/log
+/secrets
+/temp
+/book/output
+/craft-fonts
+*.log
+__pycache__/
+
+.env
+*.env
