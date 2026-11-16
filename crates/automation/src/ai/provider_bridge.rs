@@ -843,12 +843,12 @@ impl AiProviderBridge {
     // Google Gemini Visual Image Synthesis Fallback
     fn execute_gemini_image(&self, prompt: &str, timeout: Duration) -> Result<Vec<u8>, AiError> {
         let key = self.balancer.config().gemini_api_key.as_deref().ok_or_else(|| AiError::PlanningError("Missing Gemini key for image fallback".into()))?;
-        let url = "https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict";
+        let url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image:generateContent";
 
         let headers = [("x-goog-api-key", key)];
         let body = json!({
-            "instances": [{ "prompt": prompt }],
-            "parameters": { "sampleCount": 1, "aspectRatio": "1:1" }
+            "contents": [{ "parts": [{ "text": prompt }] }],
+            "generationConfig": { "responseModalities": ["IMAGE"] }
         });
 
         let (status, resp) = self.transport.execute_json("POST", url, &headers, Some(&body), timeout)?;
@@ -856,9 +856,7 @@ impl AiProviderBridge {
             return Err(AiError::PlanningError(format!("Gemini image fallback status {status}")));
         }
 
-        let b64_bytes = resp.get("predictions")
-            .and_then(|p| p.get(0))
-            .and_then(|p| p.get("bytesBase64Encoded"))
+        let b64_bytes = resp.pointer("/candidates/0/content/parts/0/inlineData/data")
             .and_then(Value::as_str)
             .ok_or_else(|| AiError::PlanningError("Missing b64 image data in Gemini response".into()))?;
 
@@ -969,7 +967,22 @@ mod tests {
             _timeout: Duration,
         ) -> Result<(u16, Value), AiError> {
             self.call_count.fetch_add(1, Ordering::SeqCst);
-            if url.contains("generativelanguage.googleapis.com") {
+            if url.contains("generativelanguage.googleapis.com") && url.contains("flash-image") {
+                if self.gemini_status == 200 {
+                    // Eight fake PNG bytes, base64-encoded, as inlineData like the real API.
+                    let resp = json!({
+                        "candidates": [{
+                            "content": {
+                                "parts": [{
+                                    "inlineData": {"mimeType": "image/png", "data": "AQIDBAUGBwg="}
+                                }]
+                            }
+                        }]
+                    });
+                    return Ok((200, resp));
+                }
+                return Ok((self.gemini_status, json!({"error": {"message": "Rate limited", "code": 429}})));
+            } else if url.contains("generativelanguage.googleapis.com") {
                 if self.gemini_status == 200 {
                     let resp = json!({
                         "candidates": [{

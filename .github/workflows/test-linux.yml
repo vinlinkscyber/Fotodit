@@ -32,10 +32,12 @@ jobs:
           set -o pipefail
           cargo test --locked -p fotodit-automation 2>&1 | tee test-output.txt
       - name: Run executed pipeline example with printed output
+        if: always()
         run: |
           set -o pipefail
           cargo test --locked -p fotodit-automation --test ai_executed_example -- --nocapture 2>&1 | tee executed-example.txt
       - name: Run ten-prompt parse diagnostic with printed output
+        if: always()
         run: |
           set -o pipefail
           cargo test --locked -p fotodit-automation --test ai_parse_diagnostic -- --nocapture 2>&1 | tee parse-diagnostic.txt

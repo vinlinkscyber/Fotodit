@@ -189,7 +189,7 @@ impl CommandCatalog {
                 description: "Apply a Gaussian blur filter with specified pixel radius".into(),
             },
             CommandCapability {
-                id: "filter.unsharpMask".into(),
+                id: "filter.sharpen.unsharpMask".into(),
                 label: "Unsharp Mask…".into(),
                 category: "Filter".into(),
                 params_schema: r#"{"amount": 1..500=50, "radius": 0.1..250.0=1.0, "threshold": 0..255=0}"#.into(),

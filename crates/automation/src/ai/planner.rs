@@ -133,7 +133,7 @@ impl DeterministicRulePlanner {
                 description: "Enhance color vibrance safely protecting skin tones".into(),
             },
             PlanStep {
-                command: "filter.unsharpMask".into(),
+                command: "filter.sharpen.unsharpMask".into(),
                 params: json!({
                     "amount": 40,
                     "radius": 1.0,
@@ -368,7 +368,7 @@ impl DeterministicRulePlanner {
             }]
         } else if p_lower.contains("sharpen") {
             vec![PlanStep {
-                command: "filter.unsharpMask".into(),
+                command: "filter.sharpen.unsharpMask".into(),
                 params: json!({ "amount": 60, "radius": 1.2, "threshold": 1 }),
                 description: "Apply unsharp mask sharpening".into(),
             }]
