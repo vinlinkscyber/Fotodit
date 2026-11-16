@@ -262,8 +262,8 @@ fn panel_chrome(ui: &mut egui::Ui, state: &mut AssistantState, mut app: Option<&
             tabs(ui, state);
             ui.add_space(14.0);
             match state.tab {
-                Tab::Chat => chat_body(ui, state, bottom_inset),
-                Tab::QuickActions => quick_actions_body(ui, state),
+                Tab::Chat => chat_body(ui, state, bottom_inset, app.as_mut().map(|a| &mut **a)),
+                Tab::QuickActions => quick_actions_body(ui, state, app.as_mut().map(|a| &mut **a)),
             }
         });
 }
@@ -363,10 +363,10 @@ fn chip(ui: &mut egui::Ui, icon: &str, label: &str) -> egui::Response {
     response
 }
 
-fn quick_actions_body(ui: &mut egui::Ui, state: &mut AssistantState) {
+fn quick_actions_body(ui: &mut egui::Ui, state: &mut AssistantState, mut app: Option<&mut FotoditApp>) {
     for &(icon, action) in QUICK_ACTIONS {
         if chip(ui, icon, action).clicked() {
-            send(state, action.to_string());
+            send(app.as_mut().map(|a| &mut **a), ui.ctx(), state, action.to_string());
         }
         ui.add_space(6.0);
     }
@@ -376,7 +376,7 @@ fn quick_actions_body(ui: &mut egui::Ui, state: &mut AssistantState) {
 }
 
 /// The chat itself: scrolling transcript with the composer pinned below.
-fn chat_body(ui: &mut egui::Ui, state: &mut AssistantState, bottom_inset: f32) {
+fn chat_body(ui: &mut egui::Ui, state: &mut AssistantState, bottom_inset: f32, mut app: Option<&mut FotoditApp>) {
     let footer_height = 74.0 + bottom_inset;
     egui::ScrollArea::vertical()
         .id_salt("assistant-transcript")
@@ -388,7 +388,7 @@ fn chat_body(ui: &mut egui::Ui, state: &mut AssistantState, bottom_inset: f32) {
                 ui.add_space(18.0);
                 for &(icon, action) in QUICK_ACTIONS {
                     if chip(ui, icon, action).clicked() {
-                        send(state, action.to_string());
+                        send(app.as_mut().map(|a| &mut **a), ui.ctx(), state, action.to_string());
                     }
                     ui.add_space(6.0);
                 }
@@ -403,7 +403,7 @@ fn chat_body(ui: &mut egui::Ui, state: &mut AssistantState, bottom_inset: f32) {
         });
 
     ui.add_space(8.0);
-    input_row(ui, state);
+    input_row(ui, state, app.as_mut().map(|a| &mut **a));
     ui.add_space((bottom_inset - 18.0).max(8.0));
 }
 
@@ -430,7 +430,7 @@ fn greeting(ui: &mut egui::Ui) {
 
 /// The composer: a rounded, violet-lit container with a large paperclip on the left and
 /// the prominent accent send button inset on the right.
-fn input_row(ui: &mut egui::Ui, state: &mut AssistantState) {
+fn input_row(ui: &mut egui::Ui, state: &mut AssistantState, app: Option<&mut FotoditApp>) {
     let top = ui.cursor().min;
     let width = ui.available_width();
     let inner = egui::Frame::NONE
@@ -464,7 +464,7 @@ fn input_row(ui: &mut egui::Ui, state: &mut AssistantState) {
                 if (send_click.clicked() || enter) && sendable {
                     let asked = state.draft.trim().to_string();
                     state.draft.clear();
-                    send(state, asked);
+                    send(app, ui.ctx(), state, asked);
                     response.request_focus();
                 }
             });
@@ -486,13 +486,25 @@ fn input_row(ui: &mut egui::Ui, state: &mut AssistantState) {
     ui.painter().add(egui::Shape::line(run, egui::Stroke::new(1.5, COMPOSER_EDGE)));
 }
 
-/// Record an exchange. The engine hookup replaces the placeholder reply when wired.
-fn send(state: &mut AssistantState, prompt: String) {
+/// Record an exchange. With an installed backend the prompt runs through the host's AI
+/// pipeline against the admitted command path; without one the panel says so instead of
+/// simulating a reply.
+fn send(app: Option<&mut FotoditApp>, ctx: &egui::Context, state: &mut AssistantState, prompt: String) {
     state.tab = Tab::Chat;
-    state.transcript.push(Exchange {
-        user: prompt,
-        assistant: tl!("(Preview) the editing engine plugs in here.").to_string(),
-    });
+    let answer = match app {
+        Some(app) => {
+            // Take the backend out so the app stays borrowable for the admitted command path.
+            let mut backend = app.services.assistant_backend.take();
+            let answer = match backend.as_mut() {
+                Some(backend) => backend.reply(app, ctx, &prompt).unwrap_or_else(|error| error),
+                None => tl!("The AI engine is not connected in this build, so I can't edit images yet.").to_string(),
+            };
+            app.services.assistant_backend = backend;
+            answer
+        }
+        None => tl!("The AI engine is not connected in this build, so I can't edit images yet.").to_string(),
+    };
+    state.transcript.push(Exchange { user: prompt, assistant: answer });
 }
 
 /// One chat bubble: the user's right-aligned in the accent colour, the assistant's on navy.
