@@ -33,8 +33,18 @@ pub struct GuiAssistant {
 }
 
 impl GuiAssistant {
+    /// Default: the offline deterministic planner. Provider planning is opt-in via the
+    /// FOTODIT_AI_PROVIDER=provider environment setting so no billable provider call can
+    /// happen unless explicitly enabled; without provider keys in the environment the
+    /// deterministic planner is always used.
     pub fn new() -> Self {
-        Self { engine: AiEngine::new(), context: AiContext::new() }
+        let provider_opt_in = std::env::var("FOTODIT_AI_PROVIDER").map(|v| v.eq_ignore_ascii_case("provider")).unwrap_or(false);
+        let config = fotodit_automation::ai::ProviderConfig::from_env();
+        let has_keys = [fotodit_automation::ai::ProviderId::Gemini, fotodit_automation::ai::ProviderId::OpenRouter, fotodit_automation::ai::ProviderId::Cohere, fotodit_automation::ai::ProviderId::Pollinations, fotodit_automation::ai::ProviderId::Lajiwa]
+            .iter()
+            .any(|p| config.has_key(*p));
+        let engine = if provider_opt_in && has_keys { AiEngine::with_provider_config(config) } else { AiEngine::new() };
+        Self { engine, context: AiContext::new() }
     }
 }
 

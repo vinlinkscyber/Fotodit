@@ -78,7 +78,7 @@ impl Group {
     pub fn compact_height(self) -> f32 {
         match self {
             Group::Color => 130.0,
-            Group::Properties => 220.0,
+            Group::Properties => 252.0,
             Group::Character => 160.0,
             Group::Navigator => 140.0,
             Group::History => 130.0,
@@ -89,10 +89,10 @@ impl Group {
     }
 
     /// The height the filling group asks for before default-sized groups above it get their
-    /// full defaults: Layers wants room for about ten rows at 900 pt (#147).
+    /// full defaults: Layers leaves room for the compact groups above at 900 pt (#147).
     pub fn preferred_fill(self) -> f32 {
         match self {
-            Group::Layers => 400.0,
+            Group::Layers => 368.0,
             Group::Brushes => 100.0,
             g => g.min_height(),
         }
