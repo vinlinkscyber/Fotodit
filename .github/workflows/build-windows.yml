@@ -1,0 +1,36 @@
+name: build-windows
+
+# Unsigned Windows x64 build of the desktop app and CLI for testing. Runs on pushes to this
+# branch and on demand; signing and full packaging stay with the release workflow.
+on:
+  push:
+    branches: [chore/optimization-efficiency]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: never
+
+jobs:
+  build:
+    name: fotodit (windows-latest, x64)
+    runs-on: windows-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release --locked -p fotodit -p fotodit-cli
+      - name: Artifact sizes
+        shell: bash
+        run: ls -l target/release/fotodit.exe target/release/fotodit-cli.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fotodit-windows-x64
+          path: |
+            target/release/fotodit.exe
+            target/release/fotodit-cli.exe
+          retention-days: 14
