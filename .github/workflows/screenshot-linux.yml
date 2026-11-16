@@ -4,6 +4,9 @@ name: screenshot-linux
 # without a local machine. Manual trigger only.
 on:
   workflow_dispatch:
+  push:
+    branches: [chore/optimization-efficiency]
+    paths: [.github/workflows/screenshot-linux.yml]
 
 permissions:
   contents: read
