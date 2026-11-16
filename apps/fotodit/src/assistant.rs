@@ -30,9 +30,6 @@ impl LiveEditSession for GuiSession<'_> {
 pub struct GuiAssistant {
     engine: AiEngine,
     context: AiContext,
-    /// The original prompt behind a design proposal awaiting the user's go-ahead: creative
-    /// and multi-step edits are planned and shown first, never silently executed.
-    pending: Option<String>,
 }
 
 impl GuiAssistant {
@@ -47,30 +44,25 @@ impl GuiAssistant {
             .iter()
             .any(|p| config.has_key(*p));
         let engine = if provider_opt_in && has_keys { AiEngine::with_provider_config(config) } else { AiEngine::new() };
-        Self { engine, context: AiContext::new(), pending: None }
+        Self { engine, context: AiContext::new() }
     }
 }
 
 impl AssistantBackend for GuiAssistant {
     fn reply(&mut self, app: &mut FotoditApp, ctx: &egui::Context, prompt: &str) -> Result<String, String> {
         let mut session = GuiSession { app, ctx };
-        // A proposed plan is waiting: a confirmation executes the original request through the
-        // full loop; anything else replaces the proposal and is planned fresh below.
-        if let Some(original) = self.pending.take() {
-            if is_confirmation(prompt) {
-                return self.run(&mut session, &original);
-            }
-        }
-        // Plan first, without executing: significant edits (new documents, multi-step work,
-        // creative design) are proposed to the user before any command runs.
-        match self.engine.plan_instruction_in(&session, prompt, &self.context) {
-            Ok(plan) if is_significant(&plan) => {
-                self.pending = Some(prompt.to_string());
-                Ok(propose(&plan))
-            }
-            Ok(_) => self.run(&mut session, prompt),
-            Err(AiError::NoDocumentOpen) => Err("Open a document first, or ask me to create one.".to_string()),
-            Err(error) => Err(format!("I couldn't complete that edit: {error}")),
+        // Plan first: significant edits (new documents, multi-step work, creative design) are
+        // planned against the live document BEFORE anything executes, and the reply reports
+        // that design next to the verified outcome. Non-destructive work runs autonomously.
+        let planned = match self.engine.plan_instruction_in(&session, prompt, &self.context) {
+            Ok(plan) => Some(plan),
+            Err(AiError::NoDocumentOpen) => return Err("Open a document first, or ask me to create one.".to_string()),
+            Err(_) => None,
+        };
+        let significant = planned.as_ref().is_some_and(is_significant);
+        match self.run(&mut session, prompt) {
+            Ok(done) if significant => Ok(format!("{} {}", propose(planned.as_ref().expect("checked above")), done)),
+            other => other,
         }
     }
 }
@@ -104,20 +96,15 @@ impl GuiAssistant {
     }
 }
 
-/// A short affirmative answer to a proposal.
-fn is_confirmation(prompt: &str) -> bool {
-    matches!(prompt.trim().to_ascii_lowercase().trim_end_matches(['.', '!']).as_ref(), "yes" | "y" | "ok" | "okay" | "go" | "go ahead" | "proceed" | "do it" | "send it" | "build it" | "confirm")
-}
-
-/// Edits big enough that the design should be confirmed before anything executes.
+/// Edits big enough that the design belongs in the reply next to the outcome.
 fn is_significant(plan: &EditingPlan) -> bool {
     plan.creates_document || plan.steps.len() > 1 || plan.category == IntentCategory::GraphicDesign
 }
 
-/// The proposed design in plain language: what will be made and the ordered steps.
+/// The executed design in plain language: what was planned and the ordered steps.
 fn propose(plan: &EditingPlan) -> String {
     let steps = plan.steps.iter().enumerate().map(|(i, s)| format!("{}. {}", i + 1, s.description)).collect::<Vec<_>>().join(" ");
-    format!("Plan: {}. {} Steps: {} Say 'go' and I'll build it.", plan.title, plan.rationale, steps)
+    format!("Plan: {}. {} Steps: {}", plan.title, plan.rationale, steps)
 }
 
 /// Human-readable chat reply for a completed run: what was done, and whether the visual
