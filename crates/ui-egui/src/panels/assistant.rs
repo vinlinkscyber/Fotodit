@@ -18,7 +18,7 @@ const COMPOSER_BG: egui::Color32 = egui::Color32::from_rgb(20, 30, 68);
 const COMPOSER_EDGE: egui::Color32 = egui::Color32::from_rgb(122, 100, 232);
 const RIM: egui::Color32 = egui::Color32::from_rgb(112, 96, 220);
 /// Electric blue: selected controls, send, saturated highlights.
-pub(crate) const ACCENT: egui::Color32 = egui::Color32::from_rgb(46, 126, 255);
+pub(crate) const ACCENT: egui::Color32 = egui::Color32::from_rgb(4, 79, 252);
 /// Saturated cyan core of the active-tab underline.
 const TAB_GLOW: egui::Color32 = egui::Color32::from_rgb(9, 191, 255);
 /// Crisp white for icons on the navy chrome.
@@ -91,7 +91,7 @@ fn panel_surface(ui: &egui::Ui, rect: egui::Rect) {
     // Barely-there outer halo: two expanding outlines at very low alpha.
     for i in 1..=2 {
         let grow = i as f32 * 2.5;
-        painter.rect_stroke(rect.expand(grow), RIM_RADIUS + grow, egui::Stroke::new(1.5, egui::Color32::from_rgba_unmultiplied(96, 80, 200, 7 - i * 2)), egui::StrokeKind::Outside);
+        painter.rect_stroke(rect.expand(grow), RIM_RADIUS + grow, egui::Stroke::new(1.5, egui::Color32::from_rgba_unmultiplied(96, 80, 200, 14 - i * 4)), egui::StrokeKind::Outside);
     }
     rounded_gradient(painter, rect, RIM_RADIUS);
     // Purple light pooled tight around the header band (upper left).
@@ -102,7 +102,7 @@ fn panel_surface(ui: &egui::Ui, rect: egui::Rect) {
     // Blue light pooled at the lower-right corner, smaller and dimmer than the old wash.
     let blue_pool = egui::pos2(rect.right() - 18.0, rect.bottom() - 44.0);
     for i in 0..6 {
-        painter.circle_filled(blue_pool, 130.0 - i as f32 * 18.0, egui::Color32::from_rgba_unmultiplied(12, 36, 153, 8));
+        painter.circle_filled(blue_pool, 150.0 - i as f32 * 20.0, egui::Color32::from_rgba_unmultiplied(12, 36, 153, 13));
     }
     // Electric-blue edge illumination: a short bright run at the lower-right corner that
     // fades as it climbs the right edge and walks the bottom edge to the left.
@@ -110,17 +110,17 @@ fn panel_surface(ui: &egui::Ui, rect: egui::Rect) {
     let corner = egui::pos2(rect.right() - RIM_RADIUS * 0.6, rect.bottom() - RIM_RADIUS * 0.6);
     for i in 0..5 {
         let y = rect.bottom() - RIM_RADIUS - 14.0 - i as f32 * 26.0;
-        let alpha = 34 - i * 6;
-        painter.line_segment([egui::pos2(rect.right() - 1.5, y + 22.0), egui::pos2(rect.right() - 1.5, y)], egui::Stroke::new(1.5, edge(alpha)));
+        let alpha = 72 - i * 12;
+        painter.line_segment([egui::pos2(rect.right() - 1.5, y + 22.0), egui::pos2(rect.right() - 1.5, y)], egui::Stroke::new(2.0, edge(alpha)));
     }
     for i in 0..5 {
         let x = rect.right() - RIM_RADIUS - 14.0 - i as f32 * 26.0;
-        let alpha = 34 - i * 6;
-        painter.line_segment([egui::pos2(x + 22.0, rect.bottom() - 1.5), egui::pos2(x, rect.bottom() - 1.5)], egui::Stroke::new(1.5, edge(alpha)));
+        let alpha = 72 - i * 12;
+        painter.line_segment([egui::pos2(x + 22.0, rect.bottom() - 1.5), egui::pos2(x, rect.bottom() - 1.5)], egui::Stroke::new(2.0, edge(alpha)));
     }
     let _ = corner;
     // Fine violet rim, stroke only, not a luminous perimeter.
-    painter.rect_stroke(rect, RIM_RADIUS, egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(RIM.r(), RIM.g(), RIM.b(), 76)), egui::StrokeKind::Inside);
+    painter.rect_stroke(rect, RIM_RADIUS, egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(RIM.r(), RIM.g(), RIM.b(), 108)), egui::StrokeKind::Inside);
 }
 
 /// The identity badge: a filled, softly glowing purple disk with a bold white
