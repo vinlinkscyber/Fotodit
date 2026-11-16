@@ -38,23 +38,40 @@ jobs:
         run: |
           export WGPU_BACKEND=gl
           convert -size 1200x800 gradient:steelblue-firebrick -colors 32 /tmp/sample.png
-          xvfb-run -a -s "-screen 0 1600x1000x24" bash -c '
+          # Fixed 1600x900 root and a maximized app window so captures compare 1:1
+          # with the 1600x900 reference frame.
+          xvfb-run -a -s "-screen 0 1600x900x24" bash -c '
             FOTODIT_ASSISTANT_DEMO=1 ./target/debug/fotodit /tmp/sample.png &
             APP=$!
             sleep 30
+            xdotool search --name Fotodit windowactivate --sync windowsize --sync 1600 900 windowmove 0 0 || true
+            sleep 2
             import -window root /tmp/fotodit-1.png
-            xdotool search --name Fotodit windowactivate --sync || true
             xdotool mousemove --sync 655 687 click 1
             sleep 4
             import -window root /tmp/fotodit-2.png
             sleep 2
             import -window root /tmp/fotodit-3.png
             kill $APP || true
+            sleep 3
+            # Independent close/reopen: a fresh process must come back to the same look.
+            FOTODIT_ASSISTANT_DEMO=1 ./target/debug/fotodit /tmp/sample.png &
+            APP=$!
+            sleep 30
+            xdotool search --name Fotodit windowactivate --sync windowsize --sync 1600 900 windowmove 0 0 || true
+            sleep 2
+            import -window root /tmp/fotodit-reopen-1.png
+            xdotool mousemove --sync 655 687 click 1
+            sleep 4
+            import -window root /tmp/fotodit-reopen-2.png
+            kill $APP || true
           '
-          xvfb-run -a -s "-screen 0 1600x1000x24" bash -c '
+          xvfb-run -a -s "-screen 0 1600x900x24" bash -c '
             FOTODIT_ASSISTANT_DEMO=1 ./target/debug/fotodit &
             APP=$!
             sleep 30
+            xdotool search --name Fotodit windowactivate --sync windowsize --sync 1600 900 windowmove 0 0 || true
+            sleep 2
             import -window root /tmp/fotodit-home-1.png
             sleep 3
             import -window root /tmp/fotodit-home-2.png
