@@ -801,6 +801,7 @@ fn toggle_panel(app: &mut FotoditApp, id: &str) -> Result<Value, String> {
         "history" => &mut panels.history,
         "properties" => &mut panels.properties,
         "color" => &mut panels.color,
+        "assistant" => &mut panels.assistant,
         "navigator" => &mut panels.navigator,
         "toolbar" => &mut panels.toolbar,
         "options" => &mut panels.options_bar,

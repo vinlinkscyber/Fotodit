@@ -70,38 +70,40 @@ fn seed_demo(state: &mut AssistantState) {
 }
 
 pub(crate) fn assistant_panel(app: &mut FotoditApp, ui: &mut egui::Ui) {
-    let _ = app;
     let demo = demo_enabled();
     let mut state = ui.ctx().data_mut(|d| d.get_temp::<AssistantState>(state_id()).unwrap_or_default());
     if demo {
         seed_demo(&mut state);
     }
 
-    panel_chrome(ui, &mut state);
+    panel_chrome(ui, &mut state, Some(app));
 
     ui.ctx().data_mut(|d| d.insert_temp(state_id(), state.clone()));
 
     if demo {
         let mut state = state;
+        let mut open = true;
         egui::Window::new("AI Assistant")
             .default_pos([80.0, 90.0])
             .default_size([320.0, 640.0])
             .resizable(true)
             .collapsible(false)
+            .open(&mut open)
             .show(ui.ctx(), |ui| {
-                panel_chrome(ui, &mut state);
+                panel_chrome(ui, &mut state, None);
             });
         ui.ctx().data_mut(|d| d.insert_temp(state_id(), state));
     }
 }
 
-/// Navy frame + header + tabs, with the active tab's body inside.
-fn panel_chrome(ui: &mut egui::Ui, state: &mut AssistantState) {
+/// Navy frame + header + tabs, with the active tab's body inside. In the dock, `app`
+/// is present and the header's close control hides the group (reopen from the Window menu).
+fn panel_chrome(ui: &mut egui::Ui, state: &mut AssistantState, mut app: Option<&mut FotoditApp>) {
     egui::Frame::NONE
         .fill(PANEL_BG)
         .inner_margin(egui::Margin::symmetric(10, 8))
         .show(ui, |ui| {
-            header(ui);
+            header(ui, app.as_mut().map(|a| &mut **a));
             ui.add_space(6.0);
             tabs(ui, state);
             ui.add_space(8.0);
@@ -112,8 +114,8 @@ fn panel_chrome(ui: &mut egui::Ui, state: &mut AssistantState) {
         });
 }
 
-/// Monogram + title, like the reference design's header.
-fn header(ui: &mut egui::Ui) {
+/// Monogram + title + close control, like the reference design's header.
+fn header(ui: &mut egui::Ui, app: Option<&mut FotoditApp>) {
     ui.horizontal(|ui| {
         egui::Frame::NONE
             .fill(ACCENT)
@@ -123,6 +125,15 @@ fn header(ui: &mut egui::Ui) {
                 ui.label(egui::RichText::new("AI").color(egui::Color32::WHITE).strong().size(12.0));
             });
         ui.label(egui::RichText::new(tl!("AI Assistant")).color(egui::Color32::WHITE).strong().size(15.0));
+        if let Some(app) = app {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let close = egui::Button::new(egui::RichText::new("×").size(16.0).color(egui::Color32::from_rgb(160, 168, 200)))
+                    .fill(egui::Color32::TRANSPARENT);
+                if ui.add(close).on_hover_text(tl!("Close panel")).clicked() {
+                    app.ui.panels.assistant = false;
+                }
+            });
+        }
     });
 }
 
