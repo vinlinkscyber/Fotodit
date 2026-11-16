@@ -37,7 +37,7 @@ jobs:
         if: always()
         run: |
           set -o pipefail
-          cargo test --locked -p fotodit-automation 2>&1 | tee full-suite.txt
+          cargo test --locked --no-fail-fast -p fotodit-automation 2>&1 | tee full-suite.txt
       - name: rustfmt check on PR files
         if: always()
         run: |
