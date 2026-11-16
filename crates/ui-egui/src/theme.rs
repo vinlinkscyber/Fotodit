@@ -878,7 +878,7 @@ pub fn install_fonts_with(ctx: &egui::Context, cjk: crate::cjk_fonts::Sources) {
     // other faces. They are not registered into this static stack: `cjk_fonts` installs a
     // per-character font provider for them, so a broad Simplified Chinese face is not put in the
     // family stack ahead of the Japanese or Korean face, and a locale without a Traditional Chinese
-    // craft face leaves Han to the system font. (A single linear per-family chain still decides a
+    // plyra face leaves Han to the system font. (A single linear per-family chain still decides a
     // glyph once a broad face is discovered; see `cjk_fonts`.)
     // Served script fallbacks the web build has received (Arabic, Japanese…), after everything else.
     for (name, data) in crate::served_fonts::ui_faces() {
@@ -999,7 +999,7 @@ impl egui::Plugin for UiFontSizePlugin {
         // The provider must use the scale of the definitions that were active while this pass
         // laid out text. A face it discovers during the pass is inserted at that old scale; after
         // `set_fonts` the rescaled definitions take effect and the provider follows them.
-        crate::cjk_fonts::set_craft_font_scale(ctx, font_scale(size));
+        crate::cjk_fonts::set_plyra_font_scale(ctx, font_scale(size));
         self.applied = size;
         ctx.request_repaint();
     }

@@ -39,7 +39,7 @@ fn discovered_faces_use_the_scale_of_the_definitions_they_were_laid_out_with() {
         Some(synthetic_font(&[(0x0E01, 0x0E5B)]))
     }
     let ctx = egui::Context::default();
-    crate::theme::install_fonts_with(&ctx, craft_only(|| None));
+    crate::theme::install_fonts_with(&ctx, plyra_only(|| None));
     ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
     let mut provider = PlyraFontProvider::new(
         &Sources {
@@ -56,7 +56,7 @@ fn discovered_faces_use_the_scale_of_the_definitions_they_were_laid_out_with() {
     );
     provider.reader = thai_reader;
     let provider = std::sync::Arc::new(provider);
-    ctx.data_mut(|d| d.insert_temp(craft_provider_id(), provider.clone()));
+    ctx.data_mut(|d| d.insert_temp(plyra_provider_id(), provider.clone()));
     let as_provider: std::sync::Arc<dyn FontProvider> = provider.clone();
     ctx.set_font_providers(vec![as_provider]);
 
@@ -64,7 +64,7 @@ fn discovered_faces_use_the_scale_of_the_definitions_they_were_laid_out_with() {
     // provider discovered for Thai.
     let inter_scale = |ctx: &egui::Context| -> Option<f32> { ctx.fonts(|f| f.definitions().font_data.get("Inter").map(|data| data.tweak.scale)) };
     let thai_scale = |ctx: &egui::Context| -> Option<f32> {
-        ctx.fonts(|f| f.discovered_fonts().iter().find(|insert| insert.name.starts_with("craft-system-")).map(|insert| insert.data.tweak.scale))
+        ctx.fonts(|f| f.discovered_fonts().iter().find(|insert| insert.name.starts_with("plyra-system-")).map(|insert| insert.data.tweak.scale))
     };
     // A frame that checks the state during the change pass, before laying out Thai (the
     // character that makes the provider discover a face).
@@ -340,7 +340,7 @@ fn picks_preferred_script_skips_unreadable_and_exhausts() {
     assert_eq!(data.index, 0);
     assert_eq!(fb.tried, vec![CjkScript::Korean]);
     // Han on an English locale: system fallback keeps the locale order (SC first); the
-    // Japanese-first craft-manifest baseline is a separate provider/lazy-craft path.
+    // Japanese-first plyra-manifest baseline is a separate provider/lazy-plyra path.
     // SC, TC, JA have nothing readable here, and the last-resort file was already loaded,
     // so nothing new; everything is now tried.
     assert!(fb.next_font('日', CjkChar::Han).is_none());
@@ -665,7 +665,7 @@ fn lazy_registration_triggers_only_for_supported_scripts() {
     }
 }
 
-/// Craft fonts available through the first-frame provider, as the desktop shell does.
+/// Plyra fonts available through the first-frame provider, as the desktop shell does.
 fn eager_sources(locale: fn() -> Option<String>) -> Sources {
     Sources {
         locale,
@@ -680,7 +680,7 @@ fn eager_sources(locale: fn() -> Option<String>) -> Sources {
 }
 
 /// No system fonts at all: plyra-fonts alone draws CJK through the lazy loader.
-fn craft_only(locale: fn() -> Option<String>) -> Sources {
+fn plyra_only(locale: fn() -> Option<String>) -> Sources {
     Sources {
         locale,
         files: |_| vec![],
@@ -693,16 +693,16 @@ fn craft_only(locale: fn() -> Option<String>) -> Sources {
     }
 }
 
-/// The migration baseline's first craft face covering `c`: the first non-empty face in
+/// The migration baseline's first plyra face covering `c`: the first non-empty face in
 /// manifest order (what the old family stack appended first), not the UI-first sort.
 fn baseline_face(c: char) -> Option<&'static PlyraFont> {
     plyra_fonts::PLYRA_FONTS.iter().find(|f| !f.bytes.is_empty() && scripts::face_covers(f.bytes, 0, c))
 }
 
-/// A test-only craft face backed by a collection built with [`two_face_ttc`]: face 0 maps
-/// Thai only, face 1 maps 龍. `craft_insert` would install face 0, so the craft coverage
+/// A test-only plyra face backed by a collection built with [`two_face_ttc`]: face 0 maps
+/// Thai only, face 1 maps 龍. `plyra_insert` would install face 0, so the plyra coverage
 /// helpers must not accept it for 龍 even though a later face covers the character.
-fn ttc_craft_face() -> &'static PlyraFont {
+fn ttc_plyra_face() -> &'static PlyraFont {
     static FACE: std::sync::OnceLock<PlyraFont> = std::sync::OnceLock::new();
     FACE.get_or_init(|| {
         let bytes: &'static [u8] = Box::leak(two_face_ttc(&synthetic_font(&[(0x0E01, 0x0E5B)]), &synthetic_font(&[(0x9F8D, 0x9F8D)])).into_boxed_slice());
@@ -710,37 +710,37 @@ fn ttc_craft_face() -> &'static PlyraFont {
     })
 }
 
-/// The craft helpers must test face 0, the face `FontData::from_static` installs. The old
+/// The plyra helpers must test face 0, the face `FontData::from_static` installs. The old
 /// any-face coverage check returned the face for a character only a later collection face
 /// maps, which then drew tofu in the installed face 0.
 #[test]
-fn craft_face_coverage_matches_the_face_craft_insert_installs() {
-    let face = ttc_craft_face();
+fn plyra_face_coverage_matches_the_face_plyra_insert_installs() {
+    let face = ttc_plyra_face();
     // Precondition: an any-face check really accepts 龍 (face 1), so this regression would
     // fail if the helpers went back to `scripts::covering_face`.
     assert_eq!(scripts::covering_face(face.bytes, '龍'), Some(1), "face 1 maps 龍");
     assert!(!scripts::face_covers(face.bytes, 0, '龍'), "the installed face 0 does not map 龍");
-    assert!(!craft_face_installs_coverage(face, '龍'), "face 0 lacks the glyph; craft_insert installs face 0");
-    assert!(craft_face_installs_coverage(face, 'ก'), "face 0 maps Thai");
+    assert!(!plyra_face_installs_coverage(face, '龍'), "face 0 lacks the glyph; plyra_insert installs face 0");
+    assert!(plyra_face_installs_coverage(face, 'ก'), "face 0 maps Thai");
 }
 
-static EMPTY_CRAFT_FACE: PlyraFont = PlyraFont { family: "Empty", style: "Regular", scripts: &["Zsym"], bytes: &[] };
+static EMPTY_PLYRA_FACE: PlyraFont = PlyraFont { family: "Empty", style: "Regular", scripts: &["Zsym"], bytes: &[] };
 
-fn only_empty_craft_face(_: &'static str) -> Vec<&'static PlyraFont> {
-    vec![&EMPTY_CRAFT_FACE]
+fn only_empty_plyra_face(_: &'static str) -> Vec<&'static PlyraFont> {
+    vec![&EMPTY_PLYRA_FACE]
 }
 
-/// A craft entry without bytes, or a face injected only by a test that is absent from the
+/// A plyra entry without bytes, or a face injected only by a test that is absent from the
 /// global manifest, has no installable face index: selection must return `None`, not a face
 /// name egui cannot resolve.
 #[test]
-fn craft_face_selection_ignores_empty_and_unindexed_faces() {
-    assert!(!craft_face_installs_coverage(&EMPTY_CRAFT_FACE, '☃'));
-    assert!(craft_face_for(only_empty_craft_face, "Zsym", '☃').is_none());
-    assert!(craft_face_manifest(only_empty_craft_face, "Zsym", '☃').is_none());
+fn plyra_face_selection_ignores_empty_and_unindexed_faces() {
+    assert!(!plyra_face_installs_coverage(&EMPTY_PLYRA_FACE, '☃'));
+    assert!(plyra_face_for(only_empty_plyra_face, "Zsym", '☃').is_none());
+    assert!(plyra_face_manifest(only_empty_plyra_face, "Zsym", '☃').is_none());
 }
 
-/// Every script the lazy fallback can see has a valid ISO 15924 tag, so its injected craft
+/// Every script the lazy fallback can see has a valid ISO 15924 tag, so its injected plyra
 /// faces and the CJK scripts are selected by the same tags the manifest declares.
 #[test]
 fn fallback_scripts_map_to_iso_15924_tags() {
@@ -788,7 +788,7 @@ fn plyra_fonts_render_cjk_without_system_fonts() {
         eprintln!("skipping: the plyra-fonts manifest has no Simplified Chinese face");
         return;
     };
-    // The craft manifest's Japanese faces come before Noto Sans CJK SC and the baseline
+    // The plyra manifest's Japanese faces come before Noto Sans CJK SC and the baseline
     // appended them in manifest order, so a non-CJK/unknown effective locale keeps Shippori
     // Mincho (the first covering face). An explicit locale keeps its own UI-first script face.
     let Some(baseline) = baseline_face('日') else {
@@ -802,7 +802,7 @@ fn plyra_fonts_render_cjk_without_system_fonts() {
         ((|| None) as fn() -> Option<String>, baseline),
     ] {
         let ctx = egui::Context::default();
-        crate::theme::install_fonts_with(&ctx, craft_only(locale));
+        crate::theme::install_fonts_with(&ctx, plyra_only(locale));
         assert!(render(&ctx, "日本語の文字"), "tofu in 日本語の文字");
         assert!(render(&ctx, "レイヤー 1"), "tofu in kana");
         let fonts = ctx.fonts(|f| f.definitions().clone());
@@ -863,8 +863,8 @@ fn no_files(_: CjkScript) -> Vec<FontFile> {
     Vec::new()
 }
 
-/// A stand-in system Traditional Chinese file, so the system-before-SC-craft ordering is
-/// testable without depending on the host's fonts. Its content is the SC craft face (which
+/// A stand-in system Traditional Chinese file, so the system-before-SC-plyra ordering is
+/// testable without depending on the host's fonts. Its content is the SC plyra face (which
 /// covers the sample Han character).
 fn hant_system_file() -> Option<PathBuf> {
     static FILE: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
@@ -885,12 +885,12 @@ fn hant_files(script: CjkScript) -> Vec<FontFile> {
 }
 
 #[test]
-fn craft_font_provider_keeps_the_baseline_face_for_unknown_locales() {
+fn plyra_font_provider_keeps_the_baseline_face_for_unknown_locales() {
     let Some(ui_font) = plyra_fonts::japanese_for_ui().first().copied() else {
         eprintln!("skipping: built without plyra-fonts (set PLYRA_FONTS_DIR to a plyra-fonts checkout)");
         return;
     };
-    let Some(ui_index) = craft_index(ui_font) else { return };
+    let Some(ui_index) = plyra_index(ui_font) else { return };
     let Some((sc_index, sc)) = plyra_fonts::PLYRA_FONTS.iter().enumerate().find(|(_, f)| f.family == "Noto Sans CJK SC") else {
         eprintln!("skipping: the plyra-fonts manifest has no Simplified Chinese face");
         return;
@@ -915,15 +915,15 @@ fn craft_font_provider_keeps_the_baseline_face_for_unknown_locales() {
         eprintln!("skipping: the plyra-fonts manifest has no face covering あ");
         return;
     };
-    let baseline_han_index = craft_index(baseline_han).expect("a manifest face has an index");
-    let baseline_kana_index = craft_index(baseline_kana).expect("a manifest face has an index");
-    let baseline_han_name = format!("craft-font-{baseline_han_index}");
-    let baseline_kana_name = format!("craft-font-{baseline_kana_index}");
-    let ui_name = format!("craft-font-{ui_index}");
-    let sc_name = format!("craft-font-{sc_index}");
-    let korean_name = format!("craft-font-{korean_index}");
-    let arabic_name = format!("craft-font-{arabic_index}");
-    let devanagari_name = format!("craft-font-{devanagari_index}");
+    let baseline_han_index = plyra_index(baseline_han).expect("a manifest face has an index");
+    let baseline_kana_index = plyra_index(baseline_kana).expect("a manifest face has an index");
+    let baseline_han_name = format!("plyra-font-{baseline_han_index}");
+    let baseline_kana_name = format!("plyra-font-{baseline_kana_index}");
+    let ui_name = format!("plyra-font-{ui_index}");
+    let sc_name = format!("plyra-font-{sc_index}");
+    let korean_name = format!("plyra-font-{korean_index}");
+    let arabic_name = format!("plyra-font-{arabic_index}");
+    let devanagari_name = format!("plyra-font-{devanagari_index}");
 
     let ja = test_provider((|| Some("ja_JP".into())) as fn() -> Option<String>);
     assert_eq!(provided(&ja, 'あ').as_deref(), Some(ui_name.as_str()), "explicit ja keeps the Japanese UI face");
@@ -945,8 +945,8 @@ fn craft_font_provider_keeps_the_baseline_face_for_unknown_locales() {
         Some(ui_name.as_str()),
         "English UI on a Japanese OS follows the OS locale; the manifest baseline is not universal for English UI"
     );
-    assert_eq!(provided(&en, 'م').as_deref(), Some(arabic_name.as_str()), "Arabic uses its own craft face");
-    assert_eq!(provided(&en, 'न').as_deref(), Some(devanagari_name.as_str()), "Devanagari uses its own craft face");
+    assert_eq!(provided(&en, 'م').as_deref(), Some(arabic_name.as_str()), "Arabic uses its own plyra face");
+    assert_eq!(provided(&en, 'न').as_deref(), Some(devanagari_name.as_str()), "Devanagari uses its own plyra face");
 
     let hans = test_provider((|| Some("zh-CN".into())) as fn() -> Option<String>);
     assert_eq!(provided(&hans, '日').as_deref(), Some(sc_name.as_str()));
@@ -957,7 +957,7 @@ fn craft_font_provider_keeps_the_baseline_face_for_unknown_locales() {
     assert_eq!(provided(&hant, '\u{3105}').as_deref(), Some(sc_name.as_str()), "Bopomofo follows the same locale-order fallback");
     assert_eq!(provided(&hant, 'あ').as_deref(), Some(ui_name.as_str()), "kana in a Hant UI keeps the Japanese face");
 
-    // A system Hant file, when present, is read before the Simplified Chinese craft fallback.
+    // A system Hant file, when present, is read before the Simplified Chinese plyra fallback.
     if hant_system_file().is_some() {
         let sources = Sources {
             locale: (|| Some("zh-Hant-TW".into())) as fn() -> Option<String>,
@@ -971,8 +971,8 @@ fn craft_font_provider_keeps_the_baseline_face_for_unknown_locales() {
         };
         let hant = PlyraFontProvider::new(&sources, 1.0);
         let got = provided(&hant, '龍').expect("the system Hant face");
-        assert!(got.starts_with("craft-system-"), "the system Hant face comes before the SC craft fallback: {got}");
-        assert_ne!(got, sc_name, "the SC craft face must not pre-empt a system Hant face");
+        assert!(got.starts_with("plyra-system-"), "the system Hant face comes before the SC plyra fallback: {got}");
+        assert_ne!(got, sc_name, "the SC plyra face must not pre-empt a system Hant face");
     }
 
     let ko = test_provider((|| Some("ko_KR".into())) as fn() -> Option<String>);
@@ -982,7 +982,7 @@ fn craft_font_provider_keeps_the_baseline_face_for_unknown_locales() {
 }
 
 static PENDING_LAST_RESORT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-static PENDING_CRAFT_SC: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static PENDING_PLYRA_SC: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static PENDING_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static STRICT_PENDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
@@ -990,8 +990,8 @@ fn pending_last_resort() -> bool {
     PENDING_LAST_RESORT.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-fn pending_craft_sc() -> bool {
-    PENDING_CRAFT_SC.load(std::sync::atomic::Ordering::Relaxed)
+fn pending_plyra_sc() -> bool {
+    PENDING_PLYRA_SC.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 fn pending_ready() -> bool {
@@ -1049,17 +1049,17 @@ fn provider_honours_the_injected_embedded_faces() {
         eprintln!("skipping: built without plyra-fonts (set PLYRA_FONTS_DIR to a plyra-fonts checkout)");
         return;
     };
-    if craft_index(ui_font).is_none() {
+    if plyra_index(ui_font).is_none() {
         return;
     }
     let Some(baseline) = baseline_face('あ') else { return };
-    let baseline_name = format!("craft-font-{}", craft_index(baseline).expect("a manifest face has an index"));
-    let with_craft = test_provider((|| Some("en_US".into())) as fn() -> Option<String>);
-    assert_eq!(provided(&with_craft, 'あ').as_deref(), Some(baseline_name.as_str()));
+    let baseline_name = format!("plyra-font-{}", plyra_index(baseline).expect("a manifest face has an index"));
+    let with_plyra = test_provider((|| Some("en_US".into())) as fn() -> Option<String>);
+    assert_eq!(provided(&with_plyra, 'あ').as_deref(), Some(baseline_name.as_str()));
 
-    let no_craft = Sources { embedded: no_embedded, ..test_sources((|| Some("en_US".into())) as fn() -> Option<String>) };
-    let provider = PlyraFontProvider::new(&no_craft, 1.0);
-    assert!(provided(&provider, 'あ').is_none(), "the provider must use Sources::embedded, not the global craft table");
+    let no_plyra = Sources { embedded: no_embedded, ..test_sources((|| Some("en_US".into())) as fn() -> Option<String>) };
+    let provider = PlyraFontProvider::new(&no_plyra, 1.0);
+    assert!(provided(&provider, 'あ').is_none(), "the provider must use Sources::embedded, not the global plyra table");
 }
 
 #[test]
@@ -1069,7 +1069,7 @@ fn provider_reaches_a_fontconfig_match_after_six_missing_candidates() {
     files.push(fake("hant.ttf"));
     let provider = PlyraFontProvider::new(&test_sources((|| Some("zh-Hant-TW".into())) as fn() -> Option<String>), 1.0);
     let insert = provider.system_insert_files(files, '龍').expect("the seventh (Fontconfig) candidate must be reachable");
-    assert!(insert.name.starts_with("craft-system-"));
+    assert!(insert.name.starts_with("plyra-system-"));
     let cache = provider.system.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     assert_eq!(cache.reads, 1, "only the real file counts as a read; absent paths do not");
     assert_eq!(cache.failed_reads.len(), MAX_SCRIPT_READS);
@@ -1232,7 +1232,7 @@ fn provider_reaches_a_later_covering_candidate_under_budget_pressure() {
     let covering = fake("hant.ttf").path;
     files.push(FontFile { path: covering.clone(), family: String::new() });
     let insert = provider.system_insert_files(files, '龍').expect("the later covering candidate must be reached");
-    assert!(insert.name.starts_with("craft-system-"), "{insert:?}");
+    assert!(insert.name.starts_with("plyra-system-"), "{insert:?}");
     let cache = provider.system.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     assert!(cache.faces.iter().any(|face| face.path == covering), "the covering file became a selected face");
     assert!(cache.reads >= 13, "all retained candidates plus the matching file were read");
@@ -1258,7 +1258,7 @@ fn provider_has_no_lifetime_read_cap_for_the_final_fontconfig_candidate() {
     let insert = provider
         .system_insert_files(vec![FontFile { path: covering, family: String::new() }], '龍')
         .expect("the final candidate must still be read after 130 successful reads");
-    assert!(insert.name.starts_with("craft-system-"), "{insert:?}");
+    assert!(insert.name.starts_with("plyra-system-"), "{insert:?}");
     let cache = provider.system.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     assert_eq!(cache.reads, 131, "130 non-covering reads plus the final candidate");
 }
@@ -1328,7 +1328,7 @@ fn provider_negative_caches_invalid_fonts_separately_from_noncovering_faces() {
     drop(cache);
     let file = vec![FontFile { path: inter, family: String::new() }];
     let insert = provider.system_insert_files(file, 'A').expect("the cached valid font still covers A");
-    assert!(insert.name.starts_with("craft-system-"), "{insert:?}");
+    assert!(insert.name.starts_with("plyra-system-"), "{insert:?}");
 }
 
 #[test]
@@ -1425,13 +1425,13 @@ fn language_change_reloads_eager_faces_through_the_app_context() {
         eprintln!("skipping: built without plyra-fonts (set PLYRA_FONTS_DIR to a plyra-fonts checkout)");
         return;
     };
-    let Some(ui_index) = craft_index(ui_font) else { return };
+    let Some(ui_index) = plyra_index(ui_font) else { return };
     let Some((sc_index, _)) = plyra_fonts::PLYRA_FONTS.iter().enumerate().find(|(_, f)| f.family == "Noto Sans CJK SC") else {
         eprintln!("skipping: the plyra-fonts manifest has no Simplified Chinese face");
         return;
     };
-    let ui_name = format!("craft-font-{ui_index}");
-    let sc_name = format!("craft-font-{sc_index}");
+    let ui_name = format!("plyra-font-{ui_index}");
+    let sc_name = format!("plyra-font-{sc_index}");
     crate::i18n::with_language(crate::i18n::Lang::EN, || {
         let ctx = egui::Context::default();
         crate::i18n::sync_context(&ctx, "ja");
@@ -1558,7 +1558,7 @@ fn malformed_selected_collection_face_falls_back_before_lazy_and_provider_regist
     let provider = PlyraFontProvider::new(&test_sources(|| Some("en".into())), 1.0);
     let insert = provider.system_insert_files(candidates, 'A').expect("the provider reaches the valid alternative");
     assert_eq!(insert.data.index, 0, "the provider does not hand the malformed selected face to epaint");
-    assert!(insert.name.starts_with("craft-system-"), "{insert:?}");
+    assert!(insert.name.starts_with("plyra-system-"), "{insert:?}");
 
     // Installing the selected font under the strict policy must not panic: only the valid
     // fallback reaches egui's family builder.
@@ -1615,15 +1615,15 @@ fn lazy_loader_registers_each_loaded_font_once() {
     assert_eq!(fallback.scripts_tried, vec![Script::Thai], "the script is still marked tried only once");
 }
 
-/// A craft face is registered once: a later request for the same embedded file must not add
+/// A plyra face is registered once: a later request for the same embedded file must not add
 /// another font with a new name and a duplicate blob.
 #[test]
-fn lazy_loader_registers_an_embedded_craft_face_once() {
+fn lazy_loader_registers_an_embedded_plyra_face_once() {
     if baseline_face('あ').is_none() {
         eprintln!("skipping: built without plyra-fonts (set PLYRA_FONTS_DIR to a plyra-fonts checkout)");
         return;
     }
-    let mut fallback = CjkFallback::new(craft_only(|| Some("en".into())));
+    let mut fallback = CjkFallback::new(plyra_only(|| Some("en".into())));
     fallback.load_embedded(CjkScript::Japanese, 'あ').expect("the manifest covers kana");
     assert!(fallback.load_embedded(CjkScript::Japanese, 'あ').is_none(), "the same embedded face is not registered twice");
     assert_eq!(fallback.registered.len(), 1);
@@ -1647,9 +1647,9 @@ fn provider_uses_system_script_candidates_and_last_resort_for_non_cjk() {
     };
     let provider = PlyraFontProvider::new(&sources, 1.0);
     let tamil = provided(&provider, 'த').expect("Tamil system candidate");
-    assert!(tamil.starts_with("craft-system-"), "{tamil}");
+    assert!(tamil.starts_with("plyra-system-"), "{tamil}");
     let ethiopic = provided(&provider, 'ሀ').expect("last-resort face");
-    assert!(ethiopic.starts_with("craft-system-"), "{ethiopic}");
+    assert!(ethiopic.starts_with("plyra-system-"), "{ethiopic}");
 }
 
 static PROVIDER_SCRIPT_CALLS: Mutex<Vec<CjkScript>> = Mutex::new(Vec::new());
@@ -1682,33 +1682,33 @@ fn provider_tries_each_script_once_when_the_preferred_script_repeats_the_order()
 }
 
 /// An unclassified symbol (not CJK, not one of the non-CJK scripts) only has the optional
-/// craft `Zsym` face. Without one the provider must return missing rather than read unrelated
+/// plyra `Zsym` face. Without one the provider must return missing rather than read unrelated
 /// system fonts, and an empty cluster is likewise no request at all.
 #[test]
 fn provider_missing_symbol_and_empty_cluster_do_not_touch_system_fonts() {
     let sources = Sources { embedded: no_embedded, ..test_sources(|| Some("en".into())) };
     let provider = PlyraFontProvider::new(&sources, 1.0);
     assert!(provider.font_for(&FallbackRequest { cluster: "", family: &FontFamily::Proportional }).is_none());
-    assert!(provided(&provider, '☃').is_none(), "no injected Zsym craft face covers the symbol");
+    assert!(provided(&provider, '☃').is_none(), "no injected Zsym plyra face covers the symbol");
     let cache = provider.system.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     assert_eq!(cache.reads, 0, "a symbol is not a CJK or script fallback request");
     assert!(cache.failed_reads.is_empty() && cache.invalid_fonts.is_empty());
 }
 
 #[test]
-fn provider_applies_the_current_scale_to_craft_faces() {
+fn provider_applies_the_current_scale_to_plyra_faces() {
     if baseline_face('あ').is_none() {
         eprintln!("skipping: built without plyra-fonts (set PLYRA_FONTS_DIR to a plyra-fonts checkout)");
         return;
     }
     let provider = test_provider(|| Some("en".into()));
-    let first = provided_insert(&provider, 'あ').expect("the craft manifest covers kana");
+    let first = provided_insert(&provider, 'あ').expect("the plyra manifest covers kana");
     assert_eq!(first.data.tweak.scale, 1.0);
     assert!(first.families.iter().any(|f| f.family == FontFamily::Proportional));
     assert!(first.families.iter().any(|f| f.family == FontFamily::Monospace));
     provider.set_scale(4.0 / 3.0);
-    let second = provided_insert(&provider, 'あ').expect("the craft face is resolved again at the current scale");
-    assert_eq!(second.data.tweak.scale, 4.0 / 3.0, "a craft face must not bake in the scale of an earlier pass");
+    let second = provided_insert(&provider, 'あ').expect("the plyra face is resolved again at the current scale");
+    assert_eq!(second.data.tweak.scale, 4.0 / 3.0, "a plyra face must not bake in the scale of an earlier pass");
 }
 
 /// Face-name metadata is capped independently of the retained-blob budget: forgetting the
@@ -1718,11 +1718,11 @@ fn provider_applies_the_current_scale_to_craft_faces() {
 fn system_face_names_are_bounded_independently_of_font_blobs() {
     let mut cache = SystemCache::default();
     for i in 0..MAX_SYSTEM_FACE_NAMES + 4 {
-        cache.remember_face(PathBuf::from(format!("face-{i}.ttf")), i as u32, format!("craft-system-{i}"));
+        cache.remember_face(PathBuf::from(format!("face-{i}.ttf")), i as u32, format!("plyra-system-{i}"));
     }
     assert_eq!(cache.faces.len(), MAX_SYSTEM_FACE_NAMES);
-    assert_eq!(cache.faces.first().map(|face| face.name.as_str()), Some("craft-system-4"), "the oldest names are evicted first");
-    assert_eq!(cache.faces.last().map(|face| face.name.as_str()), Some("craft-system-1027"));
+    assert_eq!(cache.faces.first().map(|face| face.name.as_str()), Some("plyra-system-4"), "the oldest names are evicted first");
+    assert_eq!(cache.faces.last().map(|face| face.name.as_str()), Some("plyra-system-1027"));
     assert!(cache.files.is_empty() && cache.retained_bytes == 0, "face names do not retain or charge font bytes");
 }
 
@@ -1743,42 +1743,42 @@ fn pending_fontconfig_defers_the_last_resort_instead_of_returning_none_forever()
     assert!(provided(&provider, '龍').is_none(), "pending Hant scan must not fall through to a last resort");
     PENDING_LAST_RESORT.store(false, std::sync::atomic::Ordering::Relaxed);
     let got = provided(&provider, '龍').expect("after the scan the last resort is usable");
-    assert!(got.starts_with("craft-system-"), "{got}");
+    assert!(got.starts_with("plyra-system-"), "{got}");
 }
 
 #[test]
-fn pending_fontconfig_does_not_cache_the_lower_priority_sc_craft_face_for_hant() {
+fn pending_fontconfig_does_not_cache_the_lower_priority_sc_plyra_face_for_hant() {
     let Some((sc_index, _)) = plyra_fonts::PLYRA_FONTS.iter().enumerate().find(|(_, f)| f.family == "Noto Sans CJK SC") else {
         eprintln!("skipping: the plyra-fonts manifest has no Simplified Chinese face");
         return;
     };
-    PENDING_CRAFT_SC.store(true, std::sync::atomic::Ordering::Relaxed);
+    PENDING_PLYRA_SC.store(true, std::sync::atomic::Ordering::Relaxed);
     let sources = Sources {
         locale: || Some("zh-Hant-TW".into()),
         files: no_files,
         last_resort: Vec::new,
-        pending: pending_craft_sc,
+        pending: pending_plyra_sc,
         scripts: no_script_files,
         covers: scripts::covering_face,
         embedded: plyra_embedded_iso,
         eager_plyra_fonts: false,
     };
     let provider = PlyraFontProvider::new(&sources, 1.0);
-    assert!(provided(&provider, '龍').is_none(), "a pending Hant scan must not return (and cache) the lower-priority SC craft face");
-    PENDING_CRAFT_SC.store(false, std::sync::atomic::Ordering::Relaxed);
-    let expected = format!("craft-font-{sc_index}");
+    assert!(provided(&provider, '龍').is_none(), "a pending Hant scan must not return (and cache) the lower-priority SC plyra face");
+    PENDING_PLYRA_SC.store(false, std::sync::atomic::Ordering::Relaxed);
+    let expected = format!("plyra-font-{sc_index}");
     assert_eq!(provided(&provider, '龍').as_deref(), Some(expected.as_str()));
 }
 
 #[test]
-fn every_craft_face_is_available_to_both_ui_families() {
+fn every_plyra_face_is_available_to_both_ui_families() {
     let mut checked = 0;
     for (i, face) in plyra_fonts::PLYRA_FONTS.iter().enumerate() {
         if face.bytes.is_empty() {
             continue;
         }
-        let insert = craft_insert(i, face, 1.0);
-        assert_eq!(insert.name, format!("craft-font-{i}"));
+        let insert = plyra_insert(i, face, 1.0);
+        assert_eq!(insert.name, format!("plyra-font-{i}"));
         assert!(insert.families.iter().any(|f| f.family == FontFamily::Proportional), "{} is missing from Proportional", face.family);
         assert!(insert.families.iter().any(|f| f.family == FontFamily::Monospace), "{} is missing from Monospace", face.family);
         checked += 1;
@@ -1789,12 +1789,12 @@ fn every_craft_face_is_available_to_both_ui_families() {
 }
 
 #[test]
-fn the_craft_provider_shapes_the_first_headless_frame_in_both_families() {
+fn the_plyra_provider_shapes_the_first_headless_frame_in_both_families() {
     let Some(ui_font) = plyra_fonts::japanese_for_ui().first().copied() else {
         eprintln!("skipping: built without plyra-fonts (set PLYRA_FONTS_DIR to a plyra-fonts checkout)");
         return;
     };
-    let Some(ui_index) = craft_index(ui_font) else { return };
+    let Some(ui_index) = plyra_index(ui_font) else { return };
     let Some((sc_index, _)) = plyra_fonts::PLYRA_FONTS.iter().enumerate().find(|(_, f)| f.family == "Noto Sans CJK SC") else {
         eprintln!("skipping: the plyra-fonts manifest has no Simplified Chinese face");
         return;
@@ -1813,8 +1813,8 @@ fn the_craft_provider_shapes_the_first_headless_frame_in_both_families() {
     };
     let Some(baseline_kana) = baseline_face('か') else { return };
     let Some(baseline_han) = baseline_face('日') else { return };
-    let baseline_kana_index = craft_index(baseline_kana).expect("a manifest face has an index");
-    let baseline_han_index = craft_index(baseline_han).expect("a manifest face has an index");
+    let baseline_kana_index = plyra_index(baseline_kana).expect("a manifest face has an index");
+    let baseline_han_index = plyra_index(baseline_han).expect("a manifest face has an index");
     for (locale, text, expected) in [
         ((|| Some("ja_JP".into())) as fn() -> Option<String>, "かな", ui_index),
         ((|| Some("en_US".into())) as fn() -> Option<String>, "かな", baseline_kana_index),
@@ -1838,16 +1838,16 @@ fn the_craft_provider_shapes_the_first_headless_frame_in_both_families() {
         assert!(ctx.fonts_mut(|f| f.has_glyphs(&FontId::monospace(12.0), text)), "{text} is missing from Monospace");
         let discovered = ctx.fonts(|f| f.discovered_fonts().to_vec());
         assert!(
-            discovered.iter().any(|insert| insert.name == format!("craft-font-{expected}")),
-            "{text}: expected craft-font-{expected}, discovered {discovered:?}"
+            discovered.iter().any(|insert| insert.name == format!("plyra-font-{expected}")),
+            "{text}: expected plyra-font-{expected}, discovered {discovered:?}"
         );
         for insert in &discovered {
             assert!(insert.families.iter().any(|f| f.family == FontFamily::Proportional), "{insert:?}");
             assert!(insert.families.iter().any(|f| f.family == FontFamily::Monospace), "{insert:?}");
         }
     }
-    // A Traditional Chinese locale has no Hant craft face. A system Hant file, when present,
-    // must be read before the Simplified Chinese craft fallback.
+    // A Traditional Chinese locale has no Hant plyra face. A system Hant file, when present,
+    // must be read before the Simplified Chinese plyra fallback.
     if hant_system_file().is_some() {
         let mut sources = eager_sources((|| Some("zh-Hant-TW".into())) as fn() -> Option<String>);
         sources.files = hant_files;
@@ -1859,9 +1859,9 @@ fn the_craft_provider_shapes_the_first_headless_frame_in_both_families() {
         .textures_delta
         .clear();
         let discovered = ctx.fonts(|f| f.discovered_fonts().to_vec());
-        assert!(discovered.iter().any(|insert| insert.name.starts_with("craft-system-")), "the system Hant face draws the first frame: {discovered:?}");
+        assert!(discovered.iter().any(|insert| insert.name.starts_with("plyra-system-")), "the system Hant face draws the first frame: {discovered:?}");
         assert!(
-            !discovered.iter().any(|insert| insert.name == format!("craft-font-{sc_index}")),
+            !discovered.iter().any(|insert| insert.name == format!("plyra-font-{sc_index}")),
             "the Simplified Chinese face must not pre-empt the Hant system font: {discovered:?}"
         );
     }

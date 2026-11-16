@@ -17,7 +17,7 @@
 //! prefers a Japanese font, Hangul a Korean one, Bopomofo a Traditional Chinese one, and Han the
 //! locale's script. The effective locale is the translated UI language when it names
 //! ja/ko/zh-Hans/zh-Hant; otherwise it is the OS locale. An English UI on a Japanese, Korean or
-//! Chinese OS therefore follows that OS script, not the English baseline. The craft manifest
+//! Chinese OS therefore follows that OS script, not the English baseline. The plyra manifest
 //! lists Shippori Mincho and BIZ UDPGothic before Noto Sans CJK SC, so a non-CJK/unknown
 //! effective locale keeps the migration baseline's first covering face for shared Han and kana
 //! (Shippori Mincho Regular); Hangul intentionally uses the Korean face (NanumGothic) instead,
@@ -77,28 +77,28 @@ pub struct Sources {
     pub scripts: fn(Script) -> Vec<PathBuf>,
     /// The face of a font file whose character map has the character (`None`: not this file).
     pub covers: fn(&[u8], char) -> Option<u32>,
-    /// Embedded craft faces declaring an ISO 15924 script, in the script's own order. The
-    /// provider and lazy loader both use this injection (tests can therefore pin craft-font
+    /// Embedded plyra faces declaring an ISO 15924 script, in the script's own order. The
+    /// provider and lazy loader both use this injection (tests can therefore pin plyra-font
     /// selection without depending on the build input).
     pub embedded: fn(&'static str) -> Vec<&'static PlyraFont>,
-    /// Install the per-character craft-font provider, so a headless first frame can shape CJK
+    /// Install the per-character plyra-font provider, so a headless first frame can shape CJK
     /// and other scripts before the lazy loader gets a second pass (tests panic on a missing
     /// glyph). It selects a face for the character's script instead of putting a broad face into
     /// the family stack up front for every later character.
     pub eager_plyra_fonts: bool,
 }
 
-/// Craft fonts declaring `iso`, Regular first and (for Japanese) the UI face first; empty
+/// Plyra fonts declaring `iso`, Regular first and (for Japanese) the UI face first; empty
 /// without plyra-fonts. This is the explicit-locale order; a non-CJK/unknown effective locale
-/// uses the raw manifest order through [`craft_face_manifest`] instead.
+/// uses the raw manifest order through [`plyra_face_manifest`] instead.
 ///
 /// The lazy loader tries these before system files for a script, so its fallback order stays
 /// `preferred script, then the locale order` even for a character the provider left to it.
 pub fn plyra_embedded_iso(iso: &'static str) -> Vec<&'static PlyraFont> {
-    craft_faces(iso).into_iter().map(|(_, f)| f).collect()
+    plyra_faces(iso).into_iter().map(|(_, f)| f).collect()
 }
 
-/// Craft fonts for a CJK script; a convenience wrapper for callers that already hold the enum.
+/// Plyra fonts for a CJK script; a convenience wrapper for callers that already hold the enum.
 pub fn plyra_embedded(script: CjkScript) -> Vec<&'static PlyraFont> {
     plyra_embedded_iso(cjk_iso(script))
 }
@@ -108,12 +108,12 @@ pub fn no_embedded(_: &'static str) -> Vec<&'static PlyraFont> {
     Vec::new()
 }
 
-/// Craft fonts chosen per character, the way the lazy loader chooses them for one missing glyph.
+/// Plyra fonts chosen per character, the way the lazy loader chooses them for one missing glyph.
 ///
 /// A single linear font stack cannot express the per-script preference: a broad Noto Sans CJK SC
 /// face covers kana and Hangul too, so putting it in the stack would make it win there over the
 /// Japanese or Korean face. A [`FontProvider`] is asked per missing character instead, and this
-/// one returns the face for that character's script. When the preferred script has no craft face
+/// one returns the face for that character's script. When the preferred script has no plyra face
 /// (e.g. Traditional Chinese), it asks the system font for that script first, and only falls
 /// through the locale order (so a Simplified Chinese face comes last) when the system has none.
 ///
@@ -131,7 +131,7 @@ struct PlyraFontProvider {
     embedded: fn(&'static str) -> Vec<&'static PlyraFont>,
     /// Interface > UI Font Size multiplier for the discovered faces (see `theme::ui_font_scale`).
     scale: std::sync::Arc<std::sync::atomic::AtomicU32>,
-    /// System files, faces and failed lookups read for characters no craft face covers.
+    /// System files, faces and failed lookups read for characters no plyra face covers.
     system: std::sync::Mutex<SystemCache>,
     /// I/O for a candidate path; `read_font` in production, injectable by tests.
     reader: fn(&std::path::Path) -> Option<Vec<u8>>,
@@ -314,7 +314,7 @@ impl PlyraFontProvider {
         let name = match cache.faces.iter().find(|f| f.path == path && f.index == index) {
             Some(face) => face.name.clone(),
             None => {
-                let name = format!("craft-system-{}", cache.next_face_name);
+                let name = format!("plyra-system-{}", cache.next_face_name);
                 cache.next_face_name = cache.next_face_name.saturating_add(1);
                 cache.remember_face(path, index, name.clone());
                 name
@@ -375,15 +375,15 @@ impl FontProvider for PlyraFontProvider {
         let c = request.cluster.chars().next()?;
         let locale = (self.locale)();
         let order = cjk::script_order(locale.as_deref());
-        // The migration baseline appended every craft face to the family stack in manifest
+        // The migration baseline appended every plyra face to the family stack in manifest
         // order, so a non-CJK/unknown effective locale drew shared Han/kana with the first
         // manifest face that covered the character (Shippori Mincho Regular). An explicit
         // ja/ko/zh preference is a new choice and keeps the UI-first order for its script.
         // `locale` already resolves an English UI on a CJK OS to that OS locale, so this
         // baseline does not apply there.
         let manifest_baseline = cjk::locale_script(locale.as_deref()).is_none();
-        let craft = |iso: &'static str| {
-            if manifest_baseline { craft_face_manifest(self.embedded, iso, c) } else { craft_face_for(self.embedded, iso, c) }
+        let plyra = |iso: &'static str| {
+            if manifest_baseline { plyra_face_manifest(self.embedded, iso, c) } else { plyra_face_for(self.embedded, iso, c) }
         };
         if let Some(kind) = cjk::classify(c) {
             // Han follows the locale's script. For a non-CJK/unknown effective locale, try the
@@ -391,13 +391,13 @@ impl FontProvider for PlyraFontProvider {
             // SC-first system order.
             if kind == cjk::CjkChar::Han
                 && manifest_baseline
-                && let Some((index, face)) = craft_face_manifest(self.embedded, "Jpan", c)
+                && let Some((index, face)) = plyra_face_manifest(self.embedded, "Jpan", c)
             {
-                return Some(craft_insert(index, face, self.scale()));
+                return Some(plyra_insert(index, face, self.scale()));
             }
             // The same order as `CjkFallback::next_font`: the character's preferred script first,
-            // then the locale order; craft faces and system files per script. A Traditional
-            // Chinese locale therefore checks its system Hant font before any Simplified craft
+            // then the locale order; plyra faces and system files per script. A Traditional
+            // Chinese locale therefore checks its system Hant font before any Simplified plyra
             // face, and only falls through when the system has no Hant face either.
             //
             // While fontconfig is still looking for the preferred script's face, do not cache a
@@ -411,8 +411,8 @@ impl FontProvider for PlyraFontProvider {
                     continue;
                 }
                 tried.push(script);
-                if let Some((index, face)) = craft(cjk_iso(script)) {
-                    return Some(craft_insert(index, face, self.scale()));
+                if let Some((index, face)) = plyra(cjk_iso(script)) {
+                    return Some(plyra_insert(index, face, self.scale()));
                 }
                 if let Some(insert) = self.system_insert_files((self.files)(script), c) {
                     return Some(insert);
@@ -424,10 +424,10 @@ impl FontProvider for PlyraFontProvider {
             return self.system_insert_files((self.last_resort)(), c);
         }
         let Some(script) = scripts::classify(c) else {
-            return craft("Zsym").map(|(index, face)| craft_insert(index, face, self.scale()));
+            return plyra("Zsym").map(|(index, face)| plyra_insert(index, face, self.scale()));
         };
-        if let Some((index, face)) = craft(script_iso(script)) {
-            return Some(craft_insert(index, face, self.scale()));
+        if let Some((index, face)) = plyra(script_iso(script)) {
+            return Some(plyra_insert(index, face, self.scale()));
         }
         if let Some(insert) = self.system_insert_paths((self.scripts)(script), c) {
             return Some(insert);
@@ -438,35 +438,35 @@ impl FontProvider for PlyraFontProvider {
     }
 }
 
-/// Whether `face` really maps `c` in the face [`craft_insert`] would install.
+/// Whether `face` really maps `c` in the face [`plyra_insert`] would install.
 ///
-/// `craft_insert` builds `FontData::from_static(face.bytes)`, whose default face index is 0, so
+/// `plyra_insert` builds `FontData::from_static(face.bytes)`, whose default face index is 0, so
 /// testing any face of a collection would select a face whose glyphs egui never uses. Test face
 /// 0 here, exactly like the lazy loader's `load_embedded_faces`.
-fn craft_face_installs_coverage(face: &PlyraFont, c: char) -> bool {
+fn plyra_face_installs_coverage(face: &PlyraFont, c: char) -> bool {
     !face.bytes.is_empty() && cjk::font_face_is_readable(face.bytes, 0) && scripts::face_covers(face.bytes, 0, c)
 }
 
-/// The best injected craft face declaring `iso` that really covers `c` in the face
-/// [`craft_insert`] installs.
-fn craft_face_for(embedded: fn(&'static str) -> Vec<&'static PlyraFont>, iso: &'static str, c: char) -> Option<(usize, &'static PlyraFont)> {
+/// The best injected plyra face declaring `iso` that really covers `c` in the face
+/// [`plyra_insert`] installs.
+fn plyra_face_for(embedded: fn(&'static str) -> Vec<&'static PlyraFont>, iso: &'static str, c: char) -> Option<(usize, &'static PlyraFont)> {
     embedded(iso).into_iter().find_map(|face| {
-        let index = craft_index(face)?;
-        craft_face_installs_coverage(face, c).then_some((index, face))
+        let index = plyra_index(face)?;
+        plyra_face_installs_coverage(face, c).then_some((index, face))
     })
 }
 
-/// The injected craft face the migration baseline would have used first: the earliest manifest
-/// face declaring `iso` that really covers `c` in the face [`craft_insert`] installs. (The
+/// The injected plyra face the migration baseline would have used first: the earliest manifest
+/// face declaring `iso` that really covers `c` in the face [`plyra_insert`] installs. (The
 /// baseline appended the whole manifest in order; for Japanese that is Shippori Mincho Regular,
 /// not the UI-first BIZ UDPGothic.)
-fn craft_face_manifest(embedded: fn(&'static str) -> Vec<&'static PlyraFont>, iso: &'static str, c: char) -> Option<(usize, &'static PlyraFont)> {
+fn plyra_face_manifest(embedded: fn(&'static str) -> Vec<&'static PlyraFont>, iso: &'static str, c: char) -> Option<(usize, &'static PlyraFont)> {
     let mut faces = embedded(iso);
     // Stable: faces outside the global table (test doubles) keep their injected order.
-    faces.sort_by_key(|face| craft_index(face).unwrap_or(usize::MAX));
+    faces.sort_by_key(|face| plyra_index(face).unwrap_or(usize::MAX));
     faces.into_iter().find_map(|face| {
-        let index = craft_index(face)?;
-        craft_face_installs_coverage(face, c).then_some((index, face))
+        let index = plyra_index(face)?;
+        plyra_face_installs_coverage(face, c).then_some((index, face))
     })
 }
 
@@ -505,22 +505,22 @@ fn script_iso(script: Script) -> &'static str {
     }
 }
 
-/// The manifest index of a craft face (the name suffix of its `FontInsert`).
-fn craft_index(face: &PlyraFont) -> Option<usize> {
+/// The manifest index of a plyra face (the name suffix of its `FontInsert`).
+fn plyra_index(face: &PlyraFont) -> Option<usize> {
     plyra_fonts::PLYRA_FONTS.iter().position(|candidate| std::ptr::eq(candidate, face))
 }
 
-/// Craft faces declaring `iso`, Regular first, with the Japanese UI face ahead of the other
+/// Plyra faces declaring `iso`, Regular first, with the Japanese UI face ahead of the other
 /// Japanese faces (the explicit-locale choice; a non-CJK/unknown effective locale keeps the
 /// manifest order).
-fn craft_faces(iso: &str) -> Vec<(usize, &'static PlyraFont)> {
+fn plyra_faces(iso: &str) -> Vec<(usize, &'static PlyraFont)> {
     let mut faces: Vec<(usize, &'static PlyraFont)> =
         plyra_fonts::PLYRA_FONTS.iter().enumerate().filter(|(_, f)| !f.bytes.is_empty() && f.scripts.contains(&iso)).collect();
     faces.sort_by_key(|(_, f)| (f.family != plyra_fonts::UI_JAPANESE_FAMILY, f.style != "Regular"));
     faces
 }
 
-/// Baseline and variable-weight tweaks shared by craft and system fallbacks.
+/// Baseline and variable-weight tweaks shared by plyra and system fallbacks.
 fn apply_font_tweaks(data: &mut FontData) {
     let offset = vertical_metrics(data.bytes(), data.index)
         .zip(vertical_metrics(fotodit_text::fonts::INTER_REGULAR.as_slice(), 0))
@@ -541,18 +541,18 @@ fn font_insert(name: String, mut data: FontData, scale: f32) -> FontInsert {
     FontInsert::new(&name, data, families)
 }
 
-/// One craft face as an egui font, with the same baseline/weight tweaks as a lazy fallback and the
+/// One plyra face as an egui font, with the same baseline/weight tweaks as a lazy fallback and the
 /// current UI font-size multiplier. Added to both UI families: a discovered face is appended to
 /// each family that asks for it, and a headless frame may use either. `FontData::from_static`
 /// leaves the face index at its default 0; the coverage helpers above test that same face.
-fn craft_insert(index: usize, face: &'static PlyraFont, scale: f32) -> FontInsert {
+fn plyra_insert(index: usize, face: &'static PlyraFont, scale: f32) -> FontInsert {
     let mut data = FontData::from_static(face.bytes);
     apply_font_tweaks(&mut data);
-    font_insert(format!("craft-font-{index}"), data, scale)
+    font_insert(format!("plyra-font-{index}"), data, scale)
 }
 
-fn craft_provider_id() -> egui::Id {
-    egui::Id::unique("fotodit-craft-font-provider")
+fn plyra_provider_id() -> egui::Id {
+    egui::Id::unique("fotodit-plyra-font-provider")
 }
 
 /// The effective locale for CJK choice: an explicitly translated UI language
@@ -593,7 +593,7 @@ impl Sources {
             scripts: |_| Vec::new(),
             covers: scripts::covering_face,
             embedded: plyra_embedded_iso,
-            // The web build embeds no craft fonts; keep its font stack as it was.
+            // The web build embeds no plyra fonts; keep its font stack as it was.
             eager_plyra_fonts: false,
         }
     }
@@ -658,12 +658,12 @@ impl CjkFallback {
     /// The next font to register for `c` (kind `kind`) that no current font covers: the first
     /// readable file of the first untried script (the character's preferred script, then the
     /// locale order), then the last-resort fonts. For a non-CJK/unknown effective locale the
-    /// craft faces for shared Han and kana follow the manifest's own order (Shippori Mincho
+    /// plyra faces for shared Han and kana follow the manifest's own order (Shippori Mincho
     /// before BIZ UDPGothic), exactly like the migration baseline's family stack; Hangul keeps
     /// the Korean face. `None` when nothing is left or while the preferred script's Fontconfig
     /// lookup is still pending.
     pub fn next_font(&mut self, c: char, kind: CjkChar) -> Option<(String, FontData)> {
-        // The craft manifest lists Shippori Mincho first. A non-CJK effective locale keeps that
+        // The plyra manifest lists Shippori Mincho first. A non-CJK effective locale keeps that
         // baseline choice for Han and kana; an explicit zh-Hans/zh-Hant/ja/ko preference keeps the
         // script's UI-first order.
         let manifest_baseline = cjk::locale_script((self.sources.locale)().as_deref()).is_none();
@@ -754,7 +754,7 @@ impl CjkFallback {
     /// (non-CJK/unknown effective locale): Shippori Mincho Regular before BIZ UDPGothic.
     fn load_embedded_manifest(&mut self, s: CjkScript, c: char) -> Option<(String, FontData)> {
         let mut faces = (self.sources.embedded)(cjk_iso(s));
-        faces.sort_by_key(|face| craft_index(face).unwrap_or(usize::MAX));
+        faces.sort_by_key(|face| plyra_index(face).unwrap_or(usize::MAX));
         self.load_embedded_faces(faces, c)
     }
 
@@ -991,23 +991,23 @@ pub fn install_with(ctx: &egui::Context, sources: Sources) {
     {
         ctx.add_plugin(CjkFontPlugin(fallback));
     }
-    // The provider resolves a craft face for each missing character in the first frame, before the
+    // The provider resolves a plyra face for each missing character in the first frame, before the
     // lazy loader's next-pass system fallback. Without it a headless frame panics on CJK text.
     if sources.eager_plyra_fonts && !plyra_fonts::PLYRA_FONTS.is_empty() {
         let provider = std::sync::Arc::new(PlyraFontProvider::new(&sources, crate::theme::ui_font_scale(ctx)));
         let as_provider: std::sync::Arc<dyn FontProvider> = provider.clone();
-        ctx.data_mut(|d| d.insert_temp(craft_provider_id(), provider));
+        ctx.data_mut(|d| d.insert_temp(plyra_provider_id(), provider));
         ctx.set_font_providers(vec![as_provider]);
     }
 }
 
-/// Keep provider-discovered craft faces in step with Interface > UI Font Size. The size plugin
+/// Keep provider-discovered plyra faces in step with Interface > UI Font Size. The size plugin
 /// calls this after `ctx.set_fonts` with the rescaled stack. A face discovered while the old stack
 /// was still active stays at the old scale for the rest of that pass; recreating `Fonts` for the
 /// next pass drops the discovered faces (they are not part of `FontDefinitions`) and the provider
 /// rediscovers them at its new scale.
-pub(crate) fn set_craft_font_scale(ctx: &egui::Context, scale: f32) {
-    let Some(provider) = ctx.data(|d| d.get_temp::<std::sync::Arc<PlyraFontProvider>>(craft_provider_id())) else { return };
+pub(crate) fn set_plyra_font_scale(ctx: &egui::Context, scale: f32) {
+    let Some(provider) = ctx.data(|d| d.get_temp::<std::sync::Arc<PlyraFontProvider>>(plyra_provider_id())) else { return };
     provider.set_scale(scale);
     let as_provider: std::sync::Arc<dyn FontProvider> = provider;
     ctx.set_font_providers(vec![as_provider]);
