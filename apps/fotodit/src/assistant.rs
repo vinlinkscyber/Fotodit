@@ -6,7 +6,7 @@
 //! values, never pending job receipts.
 
 use fotodit_automation::AutomationError;
-use fotodit_automation::ai::{AiContext, AiEngine, AiError, AiResult, LiveEditSession};
+use fotodit_automation::ai::{AiContext, AiEngine, AiError, AiResult, EditingPlan, IntentCategory, LiveEditSession};
 use fotodit_ui_egui::{AssistantBackend, FotoditApp};
 
 /// Borrowed desktop editing destination: the app's live session through its admitted
@@ -30,6 +30,9 @@ impl LiveEditSession for GuiSession<'_> {
 pub struct GuiAssistant {
     engine: AiEngine,
     context: AiContext,
+    /// The original prompt behind a design proposal awaiting the user's go-ahead: creative
+    /// and multi-step edits are planned and shown first, never silently executed.
+    pending: Option<String>,
 }
 
 impl GuiAssistant {
@@ -44,26 +47,48 @@ impl GuiAssistant {
             .iter()
             .any(|p| config.has_key(*p));
         let engine = if provider_opt_in && has_keys { AiEngine::with_provider_config(config) } else { AiEngine::new() };
-        Self { engine, context: AiContext::new() }
+        Self { engine, context: AiContext::new(), pending: None }
     }
 }
 
 impl AssistantBackend for GuiAssistant {
     fn reply(&mut self, app: &mut FotoditApp, ctx: &egui::Context, prompt: &str) -> Result<String, String> {
         let mut session = GuiSession { app, ctx };
-        match self.engine.process_instruction_in(&mut session, prompt, &mut self.context) {
+        // A proposed plan is waiting: a confirmation executes the original request through the
+        // full loop; anything else replaces the proposal and is planned fresh below.
+        if let Some(original) = self.pending.take() {
+            if is_confirmation(prompt) {
+                return self.run(&mut session, &original);
+            }
+        }
+        // Plan first, without executing: significant edits (new documents, multi-step work,
+        // creative design) are proposed to the user before any command runs.
+        match self.engine.plan_instruction_in(&session, prompt, &self.context) {
+            Ok(plan) if is_significant(&plan) => {
+                self.pending = Some(prompt.to_string());
+                Ok(propose(&plan))
+            }
+            Ok(_) => self.run(&mut session, prompt),
+            Err(AiError::NoDocumentOpen) => Err("Open a document first, or ask me to create one.".to_string()),
+            Err(error) => Err(format!("I couldn't complete that edit: {error}")),
+        }
+    }
+}
+
+impl GuiAssistant {
+    /// Execute a request through the full inspect/plan/execute/evaluate loop, then run one
+    /// bounded refinement pass when execution succeeded but the evaluation found the intent
+    /// unmet. The second pass re-inspects the live document and carries the evaluator's
+    /// findings, and execution rolls back atomically on failure.
+    fn run(&mut self, session: &mut GuiSession<'_>, prompt: &str) -> Result<String, String> {
+        match self.engine.process_instruction_in(session, prompt, &mut self.context) {
             Ok(mut result) => {
-                // Bounded refinement: when execution succeeded but the visual evaluation says the
-                // intent was not met, run one more plan/execute/evaluate pass carrying the
-                // evaluator's findings back as an instruction, and keep the better result.
-                // Execution rolls back atomically on failure, so a failed second pass does not
-                // leave a worse document than the first pass produced.
                 if result.execution.is_success && !result.evaluation.intent_satisfied && !result.evaluation.observations.is_empty() {
                     let follow_up = format!(
                         "The previous edit (\"{prompt}\") is partially done. Without repeating steps that already succeeded, apply only the corrections needed for these unmet points: {}.",
                         result.evaluation.observations.join("; ")
                     );
-                    if let Ok(refined) = self.engine.process_instruction_in(&mut session, &follow_up, &mut self.context)
+                    if let Ok(refined) = self.engine.process_instruction_in(session, &follow_up, &mut self.context)
                         && refined.execution.is_success
                         && (refined.evaluation.intent_satisfied
                             || refined.evaluation.confidence_score > result.evaluation.confidence_score)
@@ -77,6 +102,22 @@ impl AssistantBackend for GuiAssistant {
             Err(error) => Err(format!("I couldn't complete that edit: {error}")),
         }
     }
+}
+
+/// A short affirmative answer to a proposal.
+fn is_confirmation(prompt: &str) -> bool {
+    matches!(prompt.trim().to_ascii_lowercase().trim_end_matches(['.', '!']).as_ref(), "yes" | "y" | "ok" | "okay" | "go" | "go ahead" | "proceed" | "do it" | "send it" | "build it" | "confirm")
+}
+
+/// Edits big enough that the design should be confirmed before anything executes.
+fn is_significant(plan: &EditingPlan) -> bool {
+    plan.creates_document || plan.steps.len() > 1 || plan.category == IntentCategory::GraphicDesign
+}
+
+/// The proposed design in plain language: what will be made and the ordered steps.
+fn propose(plan: &EditingPlan) -> String {
+    let steps = plan.steps.iter().enumerate().map(|(i, s)| format!("{}. {}", i + 1, s.description)).collect::<Vec<_>>().join(" ");
+    format!("Plan: {}. {} Steps: {} Say 'go' and I'll build it.", plan.title, plan.rationale, steps)
 }
 
 /// Human-readable chat reply for a completed run: what was done, and whether the visual
