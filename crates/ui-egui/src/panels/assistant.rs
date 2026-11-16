@@ -73,7 +73,7 @@ fn rounded_gradient(painter: &egui::Painter, rect: egui::Rect, radius: f32) {
     for i in 0..pts.len() {
         mesh.indices.push(center_idx);
         mesh.indices.push(base + i as u32);
-        mesh.indices.push(base + (i + 1) % pts.len() as u32);
+        mesh.indices.push(base + ((i + 1) % pts.len()) as u32);
     }
     painter.add(egui::Shape::mesh(mesh));
 }
@@ -241,12 +241,13 @@ fn tab_label(ui: &mut egui::Ui, state: &mut AssistantState, tab: Tab, label: &st
     let color = if active { egui::Color32::WHITE } else { Tokens::get(ui.ctx()).text_dim };
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 22.0), egui::Sense::click());
     let galley = ui.painter().layout_no_wrap(label.to_string(), egui::FontId::proportional(14.0), color);
-    let text_pos = egui::pos2(rect.center().x - galley.size().x / 2.0, rect.center().y - galley.size().y / 2.0);
+    let text_w = galley.size().x;
+    let text_pos = egui::pos2(rect.center().x - text_w / 2.0, rect.center().y - galley.size().y / 2.0);
     ui.painter().add(egui::Shape::galley(text_pos, galley, color));
     if active {
         let underline = egui::Rect::from_min_size(
-            egui::pos2(rect.center().x - galley.size().x / 2.0 - 4.0, rect.max.y + 3.0),
-            egui::vec2(galley.size().x + 8.0, 3.5),
+            egui::pos2(rect.center().x - text_w / 2.0 - 4.0, rect.max.y + 3.0),
+            egui::vec2(text_w + 8.0, 3.5),
         );
         // Luminous stroke: a soft halo under the solid pill.
         ui.painter().rect_filled(underline.expand2(egui::vec2(3.0, 2.5)), 3.0, egui::Color32::from_rgba_unmultiplied(ACCENT.r(), ACCENT.g(), ACCENT.b(), 70));
