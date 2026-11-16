@@ -109,7 +109,7 @@ fn render_search(ui: &mut egui::Ui, width: f32) {
                 let edit = egui::TextEdit::singleline(&mut query)
                     .hint_text(egui::RichText::new(tl!("Search templates, recent files...")).color(TEXT_SOFT))
                     .desired_width((width - 80.0).max(120.0))
-                    .frame(false);
+                    .frame(egui::Frame::NONE);
                 ui.add(edit);
             });
         });
@@ -345,7 +345,7 @@ fn home_ai_id() -> egui::Id {
 }
 
 /// One AI capability card: icon, title, subtitle; primes the Assistant with the prompt.
-fn ai_card(app: &mut FotoditApp, ui: &mut egui::Ui, icon: &str, title: std::borrow::Cow<'static, str>, subtitle: std::borrow::Cow<'static, str>, prompt: &str) {
+fn ai_card(app: &mut FotoditApp, ui: &mut egui::Ui, icon: &str, title: &str, subtitle: &str, prompt: &str) {
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 54.0), Sense::click());
     let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     let fill = if resp.hovered() { CHIP_BG } else { CARD_BG };
