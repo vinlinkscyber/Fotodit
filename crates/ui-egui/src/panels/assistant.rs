@@ -135,8 +135,8 @@ fn edge_run(painter: &egui::Painter, from: egui::Pos2, to: egui::Pos2, width: f3
 }
 
 /// The enclosure: rounded gradient on a dark navy base, a fine violet rim, small
-/// localized purple (title) and blue (lower-right) light, and a clean electric-blue
-/// illumination that rises along the lower and left edges - glass, not a broad wash.
+/// localized purple (title) light, and a broad soft electric-blue glow pooling along
+/// the bottom and rising at the lower right - glass, not a broad wash.
 fn panel_surface(ui: &egui::Ui, rect: egui::Rect) {
     let painter = ui.painter();
     // Barely-there outer halo: two expanding outlines at very low alpha.
@@ -148,14 +148,14 @@ fn panel_surface(ui: &egui::Ui, rect: egui::Rect) {
     // Purple light pooled tight around the header band (upper left), kept faint so the
     // glass reads navy-blue, never a purple wash.
     radial_pool(painter, egui::pos2(rect.left() + 52.0, rect.top() + 30.0), 110.0, egui::Color32::from_rgb(150, 90, 255), 12);
-    // Blue depth pooled at the lower-right corner, smaller and dimmer than the old wash.
-    radial_pool(painter, egui::pos2(rect.right() - 18.0, rect.bottom() - 44.0), 170.0, egui::Color32::from_rgb(12, 36, 153), 30);
-    // Electric-blue edge illumination, localized at the lower-left like the reference: a
-    // smooth corner glow with continuous runs climbing the left edge and walking the
-    // bottom edge to the right, both easing out - glass, not rings or dashes.
-    radial_pool(painter, egui::pos2(rect.left() + 12.0, rect.bottom() - 12.0), 92.0, ACCENT, 64);
-    edge_run(painter, egui::pos2(rect.left() + 1.5, rect.bottom() - RIM_RADIUS - 6.0), egui::pos2(rect.left() + 1.5, rect.bottom() - RIM_RADIUS - 280.0), 4.0, ACCENT, 112);
-    edge_run(painter, egui::pos2(rect.left() + RIM_RADIUS + 6.0, rect.bottom() - 1.5), egui::pos2(rect.left() + RIM_RADIUS + 280.0, rect.bottom() - 1.5), 4.0, ACCENT, 112);
+    // Broad electric-blue light pooling at the bottom of the enclosure, like the
+    // reference: one wide soft glow centered just past the bottom edge, flanked by a
+    // smaller lift at the lower left and a cool rise up the lower right - a luminous
+    // wash, not edge lines.
+    radial_pool(painter, egui::pos2(rect.left() + rect.width() * 0.47, rect.bottom() + 50.0), 300.0, ACCENT, 150);
+    radial_pool(painter, egui::pos2(rect.left() + 55.0, rect.bottom() - 20.0), 170.0, ACCENT, 75);
+    radial_pool(painter, egui::pos2(rect.right() - 30.0, rect.bottom() - 80.0), 150.0, egui::Color32::from_rgb(30, 90, 255), 70);
+    radial_pool(painter, egui::pos2(rect.right() - 10.0, rect.bottom()), 170.0, ACCENT, 70);
     // Glossy cool sheen along the upper-left rim: glass catching light, very faint.
     edge_run(painter, egui::pos2(rect.left() + RIM_RADIUS + 12.0, rect.top() + 1.0), egui::pos2(rect.left() + rect.width() * 0.55, rect.top() + 1.0), 2.0, egui::Color32::from_rgb(190, 210, 255), 24);
     // Fine violet rim, stroke only, not a luminous perimeter.
