@@ -77,7 +77,12 @@ pub fn panel_footer<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     let mut bar_ui = ui.new_child(egui::UiBuilder::new().max_rect(bar).layout(egui::Layout::right_to_left(egui::Align::Center)));
     // The bar runs on over the body's bottom margin, past where the body's own clip ends: without
     // this its buttons were cut off there, a 26 px hover highlight drawn about 21 px tall.
-    bar_ui.set_clip_rect(bar_ui.clip_rect().union(bar));
+    // The union is capped at the body's own bottom edge: when a squeezed group leaves the footer
+    // allocated past the body (short dock columns), an uncapped union lets the bar paint into the
+    // status bar below (#short-height dock overlap).
+    let mut clip = bar_ui.clip_rect().union(bar);
+    clip.max.y = clip.max.y.min(ui.max_rect().bottom());
+    bar_ui.set_clip_rect(clip);
     bar_ui.spacing_mut().item_spacing.x = 2.0;
     add(&mut bar_ui)
 }
