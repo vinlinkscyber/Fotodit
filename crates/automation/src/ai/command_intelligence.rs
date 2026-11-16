@@ -66,7 +66,7 @@ impl CommandCatalog {
                 id: "type.create".into(),
                 label: "New Type Layer".into(),
                 category: "Type".into(),
-                params_schema: r#"{"x": px, "y": px, "text": str, "font": str?, "sizePt": pt?, "color": "#rrggbb"?}"#.into(),
+                params_schema: r##"{"x": px, "y": px, "text": str, "font": str?, "sizePt": pt?, "color": "#rrggbb"?}"##.into(),
                 description: "Create an editable vector type layer with position, font, size, and color".into(),
             },
             CommandCapability {
@@ -80,21 +80,21 @@ impl CommandCatalog {
                 id: "type.setStyle".into(),
                 label: "Set Type Style".into(),
                 category: "Type".into(),
-                params_schema: r#"{"layer": id?, "font": str?, "sizePt": pt?, "color": "#rrggbb"?}"#.into(),
+                params_schema: r##"{"layer": id?, "font": str?, "sizePt": pt?, "color": "#rrggbb"?}"##.into(),
                 description: "Update typography styling attributes of a type layer".into(),
             },
             CommandCapability {
                 id: "layer.newFillLayer.solidColor".into(),
                 label: "Solid Color…".into(),
                 category: "Layer".into(),
-                params_schema: r#"{"color": "#rrggbb"}"#.into(),
+                params_schema: r##"{"color": "#rrggbb"}"##.into(),
                 description: "Add a non-destructive solid color fill layer".into(),
             },
             CommandCapability {
                 id: "layer.newFillLayer.gradient".into(),
                 label: "Gradient…".into(),
                 category: "Layer".into(),
-                params_schema: r#"{"from": "#rrggbb", "to": "#rrggbb", "angle": deg=90, "style": "linear|radial"="linear"}"#.into(),
+                params_schema: r##"{"from": "#rrggbb", "to": "#rrggbb", "angle": deg=90, "style": "linear|radial"="linear"}"##.into(),
                 description: "Add a non-destructive gradient fill layer".into(),
             },
             CommandCapability {

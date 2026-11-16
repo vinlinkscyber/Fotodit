@@ -36,6 +36,7 @@ schemars = "1"
 getrandom = { workspace = true }
 cap-std = "4"
 clap = { workspace = true }
+log = "0.4"
 
 # Optional native GPU rendering backend
 fotodit-gpu = { workspace = true, optional = true }

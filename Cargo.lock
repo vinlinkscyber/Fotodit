@@ -2567,6 +2567,7 @@ dependencies = [
  "fotodit-raster",
  "fotodit-raw",
  "getrandom 0.3.4",
+ "log",
  "pollster 1.0.1",
  "rmcp",
  "rustix 1.1.5",

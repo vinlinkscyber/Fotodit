@@ -15,7 +15,8 @@
 pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
     icon_png: Some(include_bytes!("../../../assets/app-icon/hicolor/128x128/apps/com.plyra.fotodit.png")),
     accent: Some([0x2f, 0x7b, 0xf5]),
-    ..craft_update::suite::FOTODIT
+    developer: "Plyra",
+    ..craft_update::app::App::new("fotodit", "Fotodit", "Image editing", "vinlinkscyber/Fotodit")
 };
 
 /// Translate a string literal into the current UI language: `tl!("Image Size…")`.

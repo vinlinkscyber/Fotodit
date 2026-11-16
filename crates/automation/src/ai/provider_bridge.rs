@@ -650,7 +650,7 @@ impl AiProviderBridge {
         let system_instruction = "You are Fotodit's AI Editing Planner. Return strict JSON with {title, rationale, steps: [{command, params, description}]}.";
         let user_prompt = format!(
             "User query: '{}'. Document dimensions: {}x{}. Active layers: {}. Plan the edits.",
-            intent.raw_prompt, scene.document_width, scene.document_height, scene.layer_count
+            intent.raw_prompt, scene.width, scene.height, scene.layers.len()
         );
 
         let body = json!({
@@ -698,7 +698,7 @@ impl AiProviderBridge {
 
         let prompt = format!(
             "Generate JSON for editing plan: User intent: '{}', Canvas: {}x{}. Format: {{title, rationale, steps:[{{command, params, description}}]}}",
-            intent.raw_prompt, scene.document_width, scene.document_height
+            intent.raw_prompt, scene.width, scene.height
         );
 
         let auth_header = format!("Bearer {key}");
@@ -748,7 +748,7 @@ impl AiProviderBridge {
             "model": model,
             "messages": [
                 { "role": "system", "content": "Generate JSON: Fotodit editing plan." },
-                { "role": "user", "content": format!("Plan edit for '{}' on {}x{} canvas.", intent.raw_prompt, scene.document_width, scene.document_height) }
+                { "role": "user", "content": format!("Plan edit for '{}' on {}x{} canvas.", intent.raw_prompt, scene.width, scene.height) }
             ],
             "response_format": { "type": "json_object" },
             "temperature": 0.2,
@@ -786,7 +786,7 @@ impl AiProviderBridge {
         let auth_header = format!("Bearer {key}");
         let headers = [("Authorization", auth_header.as_str())];
         let body = json!({
-            "message": format!("JSON plan: '{}' for {}x{} canvas", intent.raw_prompt, scene.document_width, scene.document_height)
+            "message": format!("JSON plan: '{}' for {}x{} canvas", intent.raw_prompt, scene.width, scene.height)
         });
 
         let (status, resp) = self.transport.execute_json("POST", &url, &headers, Some(&body), timeout)?;
