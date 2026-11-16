@@ -185,5 +185,7 @@ pub static ICONS: &[(&str, &[u8])] = &[
     ("wand", include_bytes!("../../../assets/icons/wand.svg")),
     ("wand-sparkles", include_bytes!("../../../assets/icons/wand-sparkles.svg")),
     ("x", include_bytes!("../../../assets/icons/x.svg")),
+    ("paperclip", include_bytes!("../../../assets/icons/paperclip.svg")),
+    ("send", include_bytes!("../../../assets/icons/send.svg")),
     ("zoom-in", include_bytes!("../../../assets/icons/zoom-in.svg")),
 ];

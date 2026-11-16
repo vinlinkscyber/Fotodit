@@ -163,9 +163,13 @@ fn header(ui: &mut egui::Ui, app: Option<&mut FotoditApp>) {
         ui.label(egui::RichText::new(tl!("AI Assistant")).color(egui::Color32::WHITE).strong().size(15.0));
         if let Some(app) = app {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let close = egui::Button::new(egui::RichText::new("×").size(16.0).color(egui::Color32::from_rgb(160, 168, 200)))
-                    .fill(egui::Color32::TRANSPARENT);
-                if ui.add(close).on_hover_text(tl!("Close panel")).clicked() {
+                let (rect, close) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::click());
+                let close = close.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tl!("Close panel"));
+                if close.hovered() {
+                    ui.painter().rect_filled(rect, 6.0, CHIP_BG_HOVER);
+                }
+                crate::icons::paint(ui, rect, "x", 13.0, TEXT_SOFT);
+                if close.clicked() {
                     app.ui.panels.assistant = false;
                 }
             });
@@ -288,10 +292,9 @@ fn input_row(ui: &mut egui::Ui, state: &mut AssistantState) {
         .inner_margin(egui::Margin::symmetric(6, 5))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                let attach = egui::Button::new(egui::RichText::new("+").size(16.0).color(TEXT_SOFT))
-                    .fill(egui::Color32::TRANSPARENT)
-                    .min_size(egui::vec2(26.0, 26.0));
-                ui.add(attach).on_hover_text(tl!("Attach an image (coming soon)"));
+                let (attach_rect, attach) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::click());
+                let attach = attach.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tl!("Attach an image (coming soon)"));
+                crate::icons::paint(ui, attach_rect, "paperclip", 15.0, TEXT_SOFT);
 
                 let width = ui.available_width() - 38.0;
                 let edit = egui::TextEdit::singleline(&mut state.draft)
@@ -301,11 +304,11 @@ fn input_row(ui: &mut egui::Ui, state: &mut AssistantState) {
                 let response = ui.add(edit);
                 let enter = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 let sendable = !state.draft.trim().is_empty();
-                let send_button = egui::Button::new(egui::RichText::new("→").size(15.0).color(egui::Color32::WHITE))
-                    .fill(ACCENT)
-                    .corner_radius(egui::CornerRadius::same(8))
-                    .min_size(egui::vec2(30.0, 26.0));
-                if (ui.add_enabled(sendable, send_button).clicked() || enter) && sendable {
+                let (send_rect, send_click) = ui.allocate_exact_size(egui::vec2(30.0, 26.0), egui::Sense::click());
+                let send_click = send_click.on_hover_cursor(egui::CursorIcon::PointingHand);
+                ui.painter().rect_filled(send_rect, 8.0, if sendable { ACCENT } else { egui::Color32::from_rgb(45, 55, 100) });
+                crate::icons::paint(ui, send_rect, "send", 13.0, egui::Color32::WHITE);
+                if (send_click.clicked() || enter) && sendable {
                     let asked = state.draft.trim().to_string();
                     state.draft.clear();
                     send(state, asked);

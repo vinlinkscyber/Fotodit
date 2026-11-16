@@ -326,11 +326,11 @@ fn render_ai_rail(app: &mut FotoditApp, ui: &mut egui::Ui, width: f32) {
                 let response = ui.add(edit);
                 let enter = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 let sendable = !draft.trim().is_empty();
-                let send = egui::Button::new(egui::RichText::new("→").size(16.0).color(egui::Color32::WHITE))
-                    .fill(ACCENT)
-                    .corner_radius(egui::CornerRadius::same(8))
-                    .min_size(egui::vec2(34.0, 30.0));
-                if (ui.add_enabled(sendable, send).clicked() || enter) && sendable {
+                let (send_rect, send_click) = ui.allocate_exact_size(egui::vec2(34.0, 30.0), Sense::click());
+                let send_click = send_click.on_hover_cursor(egui::CursorIcon::PointingHand);
+                ui.painter().rect_filled(send_rect, 8.0, if sendable { ACCENT } else { CARD_LINE });
+                crate::icons::paint(ui, send_rect, "send", 14.0, egui::Color32::WHITE);
+                if (send_click.clicked() || enter) && sendable {
                     crate::panels::assistant::seed_prompt(ui.ctx(), draft.trim());
                     app.ui.panels.assistant = true;
                     draft.clear();
