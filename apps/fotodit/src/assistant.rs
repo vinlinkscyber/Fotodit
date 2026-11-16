@@ -52,7 +52,27 @@ impl AssistantBackend for GuiAssistant {
     fn reply(&mut self, app: &mut FotoditApp, ctx: &egui::Context, prompt: &str) -> Result<String, String> {
         let mut session = GuiSession { app, ctx };
         match self.engine.process_instruction_in(&mut session, prompt, &mut self.context) {
-            Ok(result) => Ok(summarize(&result)),
+            Ok(mut result) => {
+                // Bounded refinement: when execution succeeded but the visual evaluation says the
+                // intent was not met, run one more plan/execute/evaluate pass carrying the
+                // evaluator's findings back as an instruction, and keep the better result.
+                // Execution rolls back atomically on failure, so a failed second pass does not
+                // leave a worse document than the first pass produced.
+                if result.execution.is_success && !result.evaluation.intent_satisfied && !result.evaluation.observations.is_empty() {
+                    let follow_up = format!(
+                        "The previous edit (\"{prompt}\") is partially done. Without repeating steps that already succeeded, apply only the corrections needed for these unmet points: {}.",
+                        result.evaluation.observations.join("; ")
+                    );
+                    if let Ok(refined) = self.engine.process_instruction_in(&mut session, &follow_up, &mut self.context)
+                        && refined.execution.is_success
+                        && (refined.evaluation.intent_satisfied
+                            || refined.evaluation.confidence_score > result.evaluation.confidence_score)
+                    {
+                        result = refined;
+                    }
+                }
+                Ok(summarize(&result))
+            }
             Err(AiError::NoDocumentOpen) => Err("Open a document first, or ask me to create one.".to_string()),
             Err(error) => Err(format!("I couldn't complete that edit: {error}")),
         }
