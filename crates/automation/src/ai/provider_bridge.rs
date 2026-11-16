@@ -108,6 +108,15 @@ pub struct ProviderConfig {
     pub openrouter_enabled: bool,
 }
 
+/// Compile-time baked-in config value (set from CI secrets at build time via the
+/// build environment). Used as the last fallback after process env and .env files,
+/// so local overrides always win.
+macro_rules! baked_config_var {
+    ($name:literal) => {
+        option_env!($name).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)
+    };
+}
+
 fn get_config_var(key: &str) -> Option<String> {
     if let Ok(val) = std::env::var(key) {
         let trimmed = val.trim();
@@ -140,11 +149,11 @@ impl ProviderConfig {
     /// Create a new configuration populated from environment variables or .env file.
     pub fn from_env() -> Self {
         Self {
-            gemini_api_key: get_config_var("GEMINI_API_KEY"),
+            gemini_api_key: get_config_var("GEMINI_API_KEY").or_else(|| baked_config_var!("GEMINI_API_KEY")),
             openrouter_api_key: get_config_var("OPENROUTER_API_KEY"),
-            cohere_api_key: get_config_var("COHERE_API_KEY"),
-            pollinations_api_key: get_config_var("POLLINATIONS_API_KEY"),
-            lajiwa_api_key: get_config_var("LAJIWA_API_KEY"),
+            cohere_api_key: get_config_var("COHERE_API_KEY").or_else(|| baked_config_var!("COHERE_API_KEY")),
+            pollinations_api_key: get_config_var("POLLINATIONS_API_KEY").or_else(|| baked_config_var!("POLLINATIONS_API_KEY")),
+            lajiwa_api_key: get_config_var("LAJIWA_API_KEY").or_else(|| baked_config_var!("LAJIWA_API_KEY")),
             gemini_model: get_config_var("GEMINI_MODEL").or_else(|| Some("gemini-3.5-flash".into())),
             openrouter_model: get_config_var("OPENROUTER_MODEL").or_else(|| Some("openai/gpt-4.1-mini".into())),
             cohere_model: get_config_var("COHERE_MODEL").or_else(|| Some("command-a-plus-05-2026".into())),

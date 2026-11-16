@@ -23,6 +23,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
+          POLLINATIONS_API_KEY: ${{ secrets.POLLINATIONS_API_KEY }}
+          LAJIWA_API_KEY: ${{ secrets.LAJIWA_API_KEY }}
         run: cargo build --release --locked -p fotodit -p fotodit-cli
       - name: Artifact sizes
         shell: bash
@@ -38,29 +43,10 @@ jobs:
           "$GITHUB_WORKSPACE/target/release/fotodit-cli.exe" info smoke.plyra
           "$GITHUB_WORKSPACE/target/release/fotodit-cli.exe" convert smoke.plyra smoke-back.png
           ls -l smoke.png smoke.plyra smoke-back.png
-      - name: Write runtime env config
-        shell: bash
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
-          POLLINATIONS_API_KEY: ${{ secrets.POLLINATIONS_API_KEY }}
-          LAJIWA_API_KEY: ${{ secrets.LAJIWA_API_KEY }}
-        run: |
-          set -e
-          umask 077
-          {
-            printf 'GEMINI_API_KEY=%s\n' "$GEMINI_API_KEY"
-            printf 'OPENROUTER_ENABLED=0\n'
-            printf 'COHERE_API_KEY=%s\n' "$COHERE_API_KEY"
-            printf 'POLLINATIONS_API_KEY=%s\n' "$POLLINATIONS_API_KEY"
-            printf 'LAJIWA_API_KEY=%s\n' "$LAJIWA_API_KEY"
-          } > target/release/.env
-          awk -F= 'NF>1 && length($2)>0 {n++} END {print n" env entries written"; exit !(n==5)}' target/release/.env
       - uses: actions/upload-artifact@v4
         with:
           name: fotodit-windows-x64
           path: |
             target/release/fotodit.exe
             target/release/fotodit-cli.exe
-            target/release/.env
           retention-days: 14
