@@ -115,8 +115,21 @@ impl DeterministicRulePlanner {
         }
     }
 
-    fn plan_photo_enhancement(&self, _intent: &EditingIntent, _scene: &VisualScene) -> EditingPlan {
+    fn plan_photo_enhancement(&self, intent: &EditingIntent, scene: &VisualScene) -> Result<EditingPlan, AiError> {
+        if intent.target_layer_id.is_some() && intent.target_layer_id != scene.active_layer_id {
+            return Err(AiError::PlanningError("photo enhancement targets the active layer; select the intended layer first".into()));
+        }
         let steps = vec![
+            PlanStep {
+                command: "filter.sharpen.unsharpMask".into(),
+                params: json!({
+                    "layer": scene.active_layer_id,
+                    "amount": 40,
+                    "radius": 1.0,
+                    "threshold": 2
+                }),
+                description: "Unsharp mask clarity sharpening on focal features".into(),
+            },
             PlanStep {
                 command: "layer.newAdjustmentLayer.curves".into(),
                 params: json!({
@@ -132,25 +145,16 @@ impl DeterministicRulePlanner {
                 }),
                 description: "Enhance color vibrance safely protecting skin tones".into(),
             },
-            PlanStep {
-                command: "filter.sharpen.unsharpMask".into(),
-                params: json!({
-                    "amount": 40,
-                    "radius": 1.0,
-                    "threshold": 2
-                }),
-                description: "Unsharp mask clarity sharpening on focal features".into(),
-            },
         ];
 
-        EditingPlan {
+        Ok(EditingPlan {
             title: "Professional Photographic Enhancement & Clarity".into(),
-            rationale: "Applies studio-grade tonal grading via non-destructive Curves, Vibrance adjustment, and gentle unsharp masking.".into(),
+            rationale: "Sharpens the intended active pixel layer first, then adds Curves and Vibrance adjustment layers. Execution requires a composite target without a pixel selection.".into(),
             category: IntentCategory::PhotoEnhancement,
             steps,
             creates_document: false,
             target_size: None,
-        }
+        })
     }
 
     fn plan_graphic_design(&self, intent: &EditingIntent, scene: &VisualScene) -> EditingPlan {
@@ -401,7 +405,7 @@ impl AiPlanner for DeterministicRulePlanner {
         let plan = match intent.category {
             IntentCategory::SubjectIsolation => self.plan_subject_isolation(intent, scene),
             IntentCategory::BackgroundReplacement => self.plan_background_replacement(intent, scene),
-            IntentCategory::PhotoEnhancement => self.plan_photo_enhancement(intent, scene),
+            IntentCategory::PhotoEnhancement => self.plan_photo_enhancement(intent, scene)?,
             IntentCategory::GraphicDesign => self.plan_graphic_design(intent, scene),
             IntentCategory::TypographyRefinement => self.plan_typography_refinement(intent, scene),
             IntentCategory::ColorStyling => self.plan_color_styling(intent, scene),
@@ -411,7 +415,7 @@ impl AiPlanner for DeterministicRulePlanner {
                 if scene.has_text_content() {
                     self.plan_typography_refinement(intent, scene)
                 } else {
-                    self.plan_photo_enhancement(intent, scene)
+                    self.plan_photo_enhancement(intent, scene)?
                 }
             }
         };
@@ -469,6 +473,6 @@ mod tests {
 
         let plan = planner.plan(&intent, &scene, &context).unwrap();
         assert!(plan.steps.len() >= 3);
-        assert_eq!(plan.steps[0].command, "layer.newAdjustmentLayer.curves");
+        assert_eq!(plan.steps[0].command, "filter.sharpen.unsharpMask");
     }
 }
