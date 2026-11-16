@@ -83,6 +83,57 @@ fn rounded_gradient(painter: &egui::Painter, rect: egui::Rect, radius: f32) {
     painter.add(egui::Shape::mesh(mesh));
 }
 
+/// Smooth radial light pool: one gradient mesh (bright center fading to nothing through a
+/// mid ring) - soft glass light, never stacked rings.
+fn radial_pool(painter: &egui::Painter, center: egui::Pos2, radius: f32, color: egui::Color32, alpha: u8) {
+    const SEGMENTS: usize = 32;
+    let rgba = |a: u8| egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), a);
+    let mut mesh = egui::Mesh::default();
+    mesh.colored_vertex(center, rgba(alpha));
+    for ring in 0..2 {
+        let r = if ring == 0 { radius * 0.55 } else { radius };
+        let a = if ring == 0 { alpha / 3 } else { 0 };
+        for i in 0..=SEGMENTS {
+            let angle = i as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
+            mesh.colored_vertex(center + egui::vec2(angle.cos() * r, angle.sin() * r), rgba(a));
+        }
+    }
+    for i in 0..SEGMENTS {
+        let (m0, m1) = (1 + i as u32, 1 + i as u32 + 1);
+        let (o0, o1) = (1 + SEGMENTS as u32 + 1 + i as u32, 1 + SEGMENTS as u32 + 1 + i as u32 + 1);
+        mesh.add_triangle(0, m0, m1);
+        mesh.add_triangle(m0, o0, m1);
+        mesh.add_triangle(m1, o0, o1);
+    }
+    painter.add(egui::Shape::mesh(mesh));
+}
+
+/// Continuous lit edge run: one gradient strip mesh, bright at `from` and easing to clear
+/// at `to` with soft edges - an unbroken glass rim, not dashes.
+fn edge_run(painter: &egui::Painter, from: egui::Pos2, to: egui::Pos2, width: f32, color: egui::Color32, alpha: u8) {
+    const STEPS: usize = 24;
+    let dir = (to - from).normalized();
+    let n = egui::vec2(-dir.y, dir.x) * (width * 0.5);
+    let rgba = |a: u8| egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), a);
+    let mut mesh = egui::Mesh::default();
+    for i in 0..=STEPS {
+        let t = i as f32 / STEPS as f32;
+        let a = (alpha as f32 * (1.0 - t) * (1.0 - t)) as u8;
+        let p = from + (to - from) * t;
+        mesh.colored_vertex(p - n, rgba(0));
+        mesh.colored_vertex(p, rgba(a));
+        mesh.colored_vertex(p + n, rgba(0));
+    }
+    for i in 0..STEPS {
+        for k in 0..2u32 {
+            let (a0, a1) = (i as u32 * 3 + k, (i as u32 + 1) * 3 + k);
+            mesh.add_triangle(a0, a1, a0 + 1);
+            mesh.add_triangle(a0 + 1, a1, a1 + 1);
+        }
+    }
+    painter.add(egui::Shape::mesh(mesh));
+}
+
 /// The enclosure: rounded gradient on a dark navy base, a fine violet rim, small
 /// localized purple (title) and blue (lower-right) light, and a clean electric-blue
 /// illumination that rises along the lower and right edges - glass, not a broad wash.
@@ -96,33 +147,17 @@ fn panel_surface(ui: &egui::Ui, rect: egui::Rect) {
     rounded_gradient(painter, rect, RIM_RADIUS);
     // Purple light pooled tight around the header band (upper left), kept faint so the
     // glass reads navy-blue, never a purple wash.
-    let purple_pool = egui::pos2(rect.left() + 52.0, rect.top() + 30.0);
-    for i in 0..4 {
-        painter.circle_filled(purple_pool, 96.0 - i as f32 * 20.0, egui::Color32::from_rgba_unmultiplied(150, 90, 255, 3));
-    }
+    radial_pool(painter, egui::pos2(rect.left() + 52.0, rect.top() + 30.0), 110.0, egui::Color32::from_rgb(150, 90, 255), 12);
     // Blue depth pooled at the lower-right corner, smaller and dimmer than the old wash.
-    let blue_pool = egui::pos2(rect.right() - 18.0, rect.bottom() - 44.0);
-    for i in 0..6 {
-        painter.circle_filled(blue_pool, 150.0 - i as f32 * 20.0, egui::Color32::from_rgba_unmultiplied(12, 36, 153, 10));
-    }
+    radial_pool(painter, egui::pos2(rect.right() - 18.0, rect.bottom() - 44.0), 170.0, egui::Color32::from_rgb(12, 36, 153), 30);
     // Electric-blue edge illumination, localized at the lower-left like the reference: a
-    // bright corner glow, a run climbing the left edge, and a run walking the bottom edge
-    // to the right, both fading out.
-    let edge = |alpha: u8| egui::Color32::from_rgba_unmultiplied(ACCENT.r(), ACCENT.g(), ACCENT.b(), alpha);
-    let glow = egui::pos2(rect.left() + 12.0, rect.bottom() - 12.0);
-    for i in 0..3 {
-        painter.circle_filled(glow, 34.0 - i as f32 * 10.0, egui::Color32::from_rgba_unmultiplied(ACCENT.r(), ACCENT.g(), ACCENT.b(), 16));
-    }
-    for i in 0..6 {
-        let y = rect.bottom() - RIM_RADIUS - 14.0 - i as f32 * 26.0;
-        let alpha = 96u8.saturating_sub(i * 14);
-        painter.line_segment([egui::pos2(rect.left() + 1.5, y + 22.0), egui::pos2(rect.left() + 1.5, y)], egui::Stroke::new(2.0, edge(alpha)));
-    }
-    for i in 0..6 {
-        let x = rect.left() + RIM_RADIUS + 14.0 + i as f32 * 26.0;
-        let alpha = 96u8.saturating_sub(i * 14);
-        painter.line_segment([egui::pos2(x - 22.0, rect.bottom() - 1.5), egui::pos2(x, rect.bottom() - 1.5)], egui::Stroke::new(2.0, edge(alpha)));
-    }
+    // smooth corner glow with continuous runs climbing the left edge and walking the
+    // bottom edge to the right, both easing out - glass, not rings or dashes.
+    radial_pool(painter, egui::pos2(rect.left() + 12.0, rect.bottom() - 12.0), 46.0, ACCENT, 52);
+    edge_run(painter, egui::pos2(rect.left() + 1.5, rect.bottom() - RIM_RADIUS - 6.0), egui::pos2(rect.left() + 1.5, rect.bottom() - RIM_RADIUS - 168.0), 3.0, ACCENT, 96);
+    edge_run(painter, egui::pos2(rect.left() + RIM_RADIUS + 6.0, rect.bottom() - 1.5), egui::pos2(rect.left() + RIM_RADIUS + 168.0, rect.bottom() - 1.5), 3.0, ACCENT, 96);
+    // Glossy cool sheen along the upper-left rim: glass catching light, very faint.
+    edge_run(painter, egui::pos2(rect.left() + RIM_RADIUS + 12.0, rect.top() + 1.0), egui::pos2(rect.left() + rect.width() * 0.55, rect.top() + 1.0), 2.0, egui::Color32::from_rgb(190, 210, 255), 24);
     // Fine violet rim, stroke only, not a luminous perimeter.
     painter.rect_stroke(rect, RIM_RADIUS, egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(RIM.r(), RIM.g(), RIM.b(), 108)), egui::StrokeKind::Inside);
 }
@@ -470,17 +505,17 @@ fn input_row(ui: &mut egui::Ui, state: &mut AssistantState, app: Option<&mut Fot
             });
         });
     // Violet accent along the composer's upper-left edge, per the reference: one
-    // continuous lit run - top edge, around the corner arc, down the left edge.
+    // continuous lit run - the full top edge, around the corner arc, down the left edge.
     let rect = inner.response.rect;
     let _ = (top, width);
     let r = 16.0_f32;
     let corner = egui::pos2(rect.left() + r, rect.top() + r);
-    let mut run: Vec<egui::Pos2> = vec![egui::pos2(rect.left() + 64.0, rect.top() + 0.5), egui::pos2(corner.x, rect.top() + 0.5)];
+    let mut run: Vec<egui::Pos2> = vec![egui::pos2(rect.right() - r, rect.top() + 0.5), egui::pos2(corner.x, rect.top() + 0.5)];
     for i in 1..5 {
         let a = (-90.0 - 90.0 * i as f32 / 4.0).to_radians();
         run.push(corner + egui::vec2(r * a.cos(), r * a.sin()));
     }
-    run.push(egui::pos2(rect.left() + 0.5, rect.top() + 40.0));
+    run.push(egui::pos2(rect.left() + 0.5, rect.bottom() - r));
     let bloom = egui::Color32::from_rgba_unmultiplied(COMPOSER_EDGE.r(), COMPOSER_EDGE.g(), COMPOSER_EDGE.b(), 46);
     ui.painter().add(egui::Shape::line(run.clone(), egui::Stroke::new(3.5, bloom)));
     ui.painter().add(egui::Shape::line(run, egui::Stroke::new(1.5, COMPOSER_EDGE)));
