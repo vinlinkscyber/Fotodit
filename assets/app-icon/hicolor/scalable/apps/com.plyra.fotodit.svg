@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <clipPath id="tile-clip">
+      <rect width="512" height="512" rx="112" />
+    </clipPath>
+    <linearGradient id="bg-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#181e4b" />
+      <stop offset="100%" stop-color="#2563eb" />
+    </linearGradient>
+    <linearGradient id="blade-a" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="100%" stop-color="#0284c7" />
+    </linearGradient>
+    <linearGradient id="blade-b" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#818cf8" />
+      <stop offset="100%" stop-color="#4f46e5" />
+    </linearGradient>
+    <radialGradient id="lens-center" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ffffff" />
+      <stop offset="60%" stop-color="#93c5fd" />
+      <stop offset="100%" stop-color="#3b82f6" />
+    </radialGradient>
+  </defs>
+  <g clip-path="url(#tile-clip)">
+    <rect width="512" height="512" fill="url(#bg-grad)" />
+    <!-- Outer Lens Ring -->
+    <circle cx="256" cy="256" r="176" fill="none" stroke="#93c5fd" stroke-width="4" opacity="0.6" />
+    <circle cx="256" cy="256" r="164" fill="#0f172a" fill-opacity="0.85" stroke="#3b82f6" stroke-width="6" />
+    <!-- Aperture Blades -->
+    <path d="M 256 100 L 290 200 L 370 125 Z" fill="url(#blade-a)" />
+    <path d="M 370 125 L 330 235 L 420 220 Z" fill="url(#blade-b)" />
+    <path d="M 420 220 L 315 275 L 365 375 Z" fill="url(#blade-a)" />
+    <path d="M 365 375 L 245 290 L 220 410 Z" fill="url(#blade-b)" />
+    <path d="M 220 410 L 195 305 L 105 340 Z" fill="url(#blade-a)" />
+    <path d="M 105 340 L 195 235 L 125 150 Z" fill="url(#blade-b)" />
+    <!-- Lens Center Aperture -->
+    <circle cx="256" cy="256" r="48" fill="url(#lens-center)" />
+    <circle cx="256" cy="256" r="24" fill="#60a5fa" />
+    <!-- Focus Marks -->
+    <line x1="256" y1="52" x2="256" y2="76" stroke="#f8fafc" stroke-width="4" stroke-linecap="round" />
+    <line x1="256" y1="436" x2="256" y2="460" stroke="#f8fafc" stroke-width="4" stroke-linecap="round" />
+    <line x1="52" y1="256" x2="76" y2="256" stroke="#f8fafc" stroke-width="4" stroke-linecap="round" />
+    <line x1="436" y1="256" x2="460" y2="256" stroke="#f8fafc" stroke-width="4" stroke-linecap="round" />
+  </g>
+</svg>
