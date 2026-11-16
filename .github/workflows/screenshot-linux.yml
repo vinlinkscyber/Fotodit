@@ -1,0 +1,48 @@
+name: screenshot-linux
+
+# Captures the GUI on a headless Linux display so the app's look can be reviewed
+# without a local machine. Manual trigger only.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: never
+
+jobs:
+  shot:
+    name: GUI screenshots (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install display and capture tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb imagemagick x11-apps \
+            libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxkbcommon-dev libwayland-dev libx11-xcb-dev libxcursor-dev \
+            libxi-dev libxrandr-dev libasound2-dev libudev-dev libgl1-mesa-dev
+      - name: Build GUI
+        run: cargo build --locked -p fotodit
+      - name: Launch and capture
+        run: |
+          export WGPU_BACKEND=gl
+          xvfb-run -a -s "-screen 0 1600x1000x24" bash -c '
+            ./target/debug/fotodit &
+            APP=$!
+            sleep 30
+            import -window root /tmp/fotodit-1.png
+            sleep 3
+            import -window root /tmp/fotodit-2.png
+            kill $APP || true
+          '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gui-screenshots
+          path: /tmp/fotodit-*.png
+          retention-days: 14
