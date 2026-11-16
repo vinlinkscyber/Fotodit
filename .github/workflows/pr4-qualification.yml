@@ -1,0 +1,50 @@
+name: pr4-qualification
+
+# Temporary CI qualification for PR #4 (automation live-session adapter). Runs the
+# exact bounded offline commands plus the full package suite and a rustfmt check.
+on:
+  push:
+    branches: [ci/qualify-pr-4]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: never
+
+jobs:
+  qualify:
+    name: PR4 qualification (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libasound2-dev libudev-dev
+      - name: PR test file (exact command)
+        run: |
+          set -o pipefail
+          cargo test --offline --locked -p fotodit-automation --test ai_live_session 2>&1 | tee ai-live-session.txt
+      - name: Full automation package suite
+        if: always()
+        run: |
+          set -o pipefail
+          cargo test --locked -p fotodit-automation 2>&1 | tee full-suite.txt
+      - name: rustfmt check on PR files
+        if: always()
+        run: |
+          rustfmt --edition 2024 --check crates/automation/src/ai/live.rs crates/automation/src/ai/mod.rs crates/automation/src/ai/execution.rs crates/automation/src/lib.rs crates/automation/tests/ai_live_session.rs 2>&1 | tee rustfmt.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pr4-qualification-output
+          path: |
+            ai-live-session.txt
+            full-suite.txt
+            rustfmt.txt
