@@ -1,0 +1,389 @@
+//! Subsystem A: Natural Language Intelligence
+//!
+//! Parses natural language instructions, identifies intent categories, extracts entities and
+//! parameters, resolves document targets and context, and maintains conversational continuity.
+
+#![forbid(unsafe_code)]
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+
+use serde::{Deserialize, Serialize};
+
+use super::perception::{VisualElement, VisualScene};
+use super::{AiContext, AiError};
+
+/// High-level editing intent category.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum IntentCategory {
+    /// Comprehensive photo enhancement (tonal curves, vibrance, sharpening, color grade).
+    PhotoEnhancement,
+    /// Isolate foreground subject / remove background non-destructively.
+    SubjectIsolation,
+    /// Replace background color or gradient while preserving subject.
+    BackgroundReplacement,
+    /// Graphic design generation (wedding invitation, promotional poster, advertising banner).
+    GraphicDesign,
+    /// Typography edits, positioning, size changes, font changes, alignment.
+    TypographyRefinement,
+    /// Global color scheme harmonization, color lookup, duotone or black & white.
+    ColorStyling,
+    /// Spatial repositioning, alignment, canvas dimensions, cropping.
+    LayoutAdjustment,
+    /// Explicit filter or adjustment request (blur, noise, exposure).
+    DirectFilterOrAdjustment,
+    /// Custom multi-step or general editing intent.
+    GeneralEditing,
+}
+
+/// Parsed natural language intent with structured entities and parameters.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct EditingIntent {
+    /// Original instruction verbatim.
+    pub raw_prompt: String,
+    /// Identified primary category.
+    pub category: IntentCategory,
+    /// Specific design or visual archetype if requested.
+    pub archetype: Option<String>,
+    /// Targeted layer name or identifier if resolved.
+    pub target_layer: Option<String>,
+    /// Target layer ID if identified from document scene.
+    pub target_layer_id: Option<u64>,
+    /// Extracted color (hex format, e.g. `#1e293b`).
+    pub extracted_color: Option<String>,
+    /// Extracted numeric value (e.g. font size, adjustment amount, percentage).
+    pub numeric_value: Option<f64>,
+    /// Directional vector for movement/alignment (`[dx, dy]`).
+    pub direction: Option<[i32; 2]>,
+    /// Desired stylistic tone (e.g. "professional", "elegant", "premium", "minimalist").
+    pub stylistic_tone: Option<String>,
+    /// Extracted text content to set or add.
+    pub text_content: Option<String>,
+}
+
+/// Natural Language Intelligence engine.
+#[derive(Clone, Debug, Default)]
+pub struct NaturalLanguageEngine;
+
+impl NaturalLanguageEngine {
+    /// Create new natural language engine.
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// Parse an ordinary English prompt into a structured `EditingIntent`.
+    pub fn parse_intent(
+        &self,
+        prompt: &str,
+        scene: &VisualScene,
+        context: &AiContext,
+    ) -> Result<EditingIntent, AiError> {
+        let p_lower = prompt.trim().to_lowercase();
+        if p_lower.is_empty() {
+            return Err(AiError::IntentError("empty editing prompt".into()));
+        }
+
+        let tone = self.extract_tone(&p_lower);
+        let extracted_color = self.extract_color(&p_lower);
+        let numeric_value = self.extract_numeric(&p_lower);
+        let direction = self.extract_direction(&p_lower);
+        let archetype = self.extract_archetype(&p_lower);
+
+        // Classify intent category based on keyword semantics and document context
+        let category = if p_lower.contains("remove") && (p_lower.contains("background") || p_lower.contains("bg")) {
+            IntentCategory::SubjectIsolation
+        } else if (p_lower.contains("change") || p_lower.contains("replace") || p_lower.contains("set"))
+            && (p_lower.contains("background") || p_lower.contains("bg"))
+        {
+            IntentCategory::BackgroundReplacement
+        } else if p_lower.contains("invitation") || p_lower.contains("poster") || p_lower.contains("banner") || p_lower.contains("advertisement") || p_lower.contains("advertising") {
+            IntentCategory::GraphicDesign
+        } else if p_lower.contains("typography")
+            || p_lower.contains("heading")
+            || p_lower.contains("headline")
+            || p_lower.contains("font")
+            || p_lower.contains("text")
+            || p_lower.contains("title")
+        {
+            IntentCategory::TypographyRefinement
+        } else if p_lower.contains("professional")
+            || p_lower.contains("retouch")
+            || p_lower.contains("enhance")
+            || p_lower.contains("lighting")
+            || p_lower.contains("portrait")
+            || p_lower.contains("clarity")
+        {
+            IntentCategory::PhotoEnhancement
+        } else if p_lower.contains("color scheme")
+            || p_lower.contains("palette")
+            || p_lower.contains("black and white")
+            || p_lower.contains("black & white")
+            || p_lower.contains("warm tone")
+            || p_lower.contains("cool tone")
+        {
+            IntentCategory::ColorStyling
+        } else if p_lower.contains("align") || p_lower.contains("center") || p_lower.contains("move") || p_lower.contains("distribute") {
+            IntentCategory::LayoutAdjustment
+        } else if p_lower.contains("blur") || p_lower.contains("sharpen") || p_lower.contains("brightness") || p_lower.contains("contrast") {
+            IntentCategory::DirectFilterOrAdjustment
+        } else {
+            IntentCategory::GeneralEditing
+        };
+
+        // Resolve target layer using scene analysis and context
+        let (target_layer, target_layer_id) = self.resolve_target_layer(&p_lower, scene, context);
+
+        // Extract any explicit text string if user is specifying text
+        let text_content = self.extract_quoted_text(prompt);
+
+        Ok(EditingIntent {
+            raw_prompt: prompt.to_string(),
+            category,
+            archetype,
+            target_layer,
+            target_layer_id,
+            extracted_color,
+            numeric_value,
+            direction,
+            stylistic_tone: tone,
+            text_content,
+        })
+    }
+
+    fn extract_tone(&self, text: &str) -> Option<String> {
+        let tones = ["professional", "elegant", "premium", "luxury", "minimalist", "modern", "vintage", "bold", "dramatic", "clean"];
+        for tone in tones {
+            if text.contains(tone) {
+                return Some(tone.to_string());
+            }
+        }
+        None
+    }
+
+    fn extract_archetype(&self, text: &str) -> Option<String> {
+        if text.contains("wedding invitation") || text.contains("invitation") {
+            Some("wedding_invitation".into())
+        } else if text.contains("poster") {
+            Some("promotional_poster".into())
+        } else if text.contains("advertising") || text.contains("advertisement") || text.contains("product") {
+            Some("product_advertising".into())
+        } else if text.contains("social banner") || text.contains("banner") {
+            Some("social_banner".into())
+        } else {
+            None
+        }
+    }
+
+    fn extract_color(&self, text: &str) -> Option<String> {
+        // Hex colors
+        if let Some(pos) = text.find('#') {
+            let hex_slice = &text[pos..];
+            let end = hex_slice.find(|c: char| !c.is_ascii_hexdigit() && c != '#').unwrap_or(hex_slice.len());
+            let hex_str = &hex_slice[..end];
+            if hex_str.len() == 7 || hex_str.len() == 4 {
+                return Some(hex_str.to_string());
+            }
+        }
+
+        // Common named colors mapped to hex
+        let named_colors: &[(&str, &str)] = &[
+            ("navy blue", "#0f172a"),
+            ("navy", "#1e293b"),
+            ("royal blue", "#1d4ed8"),
+            ("sky blue", "#38bdf8"),
+            ("blue", "#2563eb"),
+            ("gold", "#d97706"),
+            ("golden", "#f59e0b"),
+            ("sage green", "#84a98c"),
+            ("sage", "#94a3b8"),
+            ("emerald", "#059669"),
+            ("green", "#16a34a"),
+            ("blush pink", "#fbcfe8"),
+            ("rose", "#f43f5e"),
+            ("pink", "#ec4899"),
+            ("cream", "#fef3c7"),
+            ("champagne", "#fde68a"),
+            ("white", "#ffffff"),
+            ("pure white", "#ffffff"),
+            ("black", "#000000"),
+            ("dark slate", "#0f172a"),
+            ("gray", "#64748b"),
+            ("charcoal", "#334155"),
+            ("coral", "#fb7185"),
+            ("teal", "#0d9488"),
+        ];
+
+        for (name, hex) in named_colors {
+            if text.contains(name) {
+                return Some((*hex).to_string());
+            }
+        }
+
+        None
+    }
+
+    fn extract_numeric(&self, text: &str) -> Option<f64> {
+        let words = text.split_whitespace();
+        for word in words {
+            let clean = word.trim_matches(|c: char| !c.is_ascii_digit() && c != '.' && c != '-');
+            if let Ok(val) = clean.parse::<f64>() {
+                return Some(val);
+            }
+        }
+        None
+    }
+
+    fn extract_direction(&self, text: &str) -> Option<[i32; 2]> {
+        if text.contains("upwards") || text.contains("up") || text.contains("higher") {
+            Some([0, -40])
+        } else if text.contains("downwards") || text.contains("down") || text.contains("lower") {
+            Some([0, 40])
+        } else if text.contains("left") {
+            Some([-40, 0])
+        } else if text.contains("right") {
+            Some([40, 0])
+        } else if text.contains("center") || text.contains("centered") {
+            Some([0, 0])
+        } else {
+            None
+        }
+    }
+
+    fn extract_quoted_text(&self, text: &str) -> Option<String> {
+        if let Some(start) = text.find('"') {
+            if let Some(end) = text[start + 1..].find('"') {
+                return Some(text[start + 1..start + 1 + end].to_string());
+            }
+        }
+        if let Some(start) = text.find('\'') {
+            if let Some(end) = text[start + 1..].find('\'') {
+                return Some(text[start + 1..start + 1 + end].to_string());
+            }
+        }
+        None
+    }
+
+    fn resolve_target_layer(
+        &self,
+        prompt: &str,
+        scene: &VisualScene,
+        context: &AiContext,
+    ) -> (Option<String>, Option<u64>) {
+        // 1. Heading / Title reference
+        if prompt.contains("heading") || prompt.contains("headline") || prompt.contains("title") {
+            if let Some(top_text) = scene.find_primary_heading() {
+                return (Some(top_text.name.clone()), Some(top_text.id));
+            }
+        }
+
+        // 2. Background reference
+        if prompt.contains("background") || prompt.contains("bg") {
+            if let Some(bg) = scene.find_background_layer() {
+                return (Some(bg.name.clone()), Some(bg.id));
+            }
+        }
+
+        // 3. Match by explicit layer name
+        for layer in &scene.layers {
+            if prompt.contains(&layer.name.to_lowercase()) {
+                return (Some(layer.name.clone()), Some(layer.id));
+            }
+        }
+
+        // 4. Anaphoric / Contextual ("it", "the text", "this")
+        if (prompt.contains(" it ") || prompt.contains("its ") || prompt.contains("this"))
+            && let Some(active) = &context.active_target
+        {
+            if let Some(layer) = scene.layers.iter().find(|l| l.name == *active) {
+                return (Some(layer.name.clone()), Some(layer.id));
+            }
+        }
+
+        // 5. Fallback to active layer in scene
+        if let Some(active_id) = scene.active_layer_id {
+            if let Some(layer) = scene.layers.iter().find(|l| l.id == active_id) {
+                return (Some(layer.name.clone()), Some(layer.id));
+            }
+        }
+
+        (None, None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_remove_background_intent() {
+        let engine = NaturalLanguageEngine::new();
+        let scene = VisualScene::default();
+        let context = AiContext::new();
+
+        let intent = engine
+            .parse_intent("Remove the background without damaging the subject", &scene, &context)
+            .unwrap();
+        assert_eq!(intent.category, IntentCategory::SubjectIsolation);
+    }
+
+    #[test]
+    fn parse_professional_enhancement_intent() {
+        let engine = NaturalLanguageEngine::new();
+        let scene = VisualScene::default();
+        let context = AiContext::new();
+
+        let intent = engine.parse_intent("Make this photograph look professional", &scene, &context).unwrap();
+        assert_eq!(intent.category, IntentCategory::PhotoEnhancement);
+        assert_eq!(intent.stylistic_tone, Some("professional".into()));
+    }
+
+    #[test]
+    fn parse_wedding_invitation_intent() {
+        let engine = NaturalLanguageEngine::new();
+        let scene = VisualScene::default();
+        let context = AiContext::new();
+
+        let intent = engine.parse_intent("Create an elegant wedding invitation", &scene, &context).unwrap();
+        assert_eq!(intent.category, IntentCategory::GraphicDesign);
+        assert_eq!(intent.archetype, Some("wedding_invitation".into()));
+        assert_eq!(intent.stylistic_tone, Some("elegant".into()));
+    }
+
+    #[test]
+    fn parse_heading_move_and_resize() {
+        let engine = NaturalLanguageEngine::new();
+        let mut scene = VisualScene::default();
+        scene.layers.push(VisualElement {
+            id: 10,
+            name: "Main Heading".into(),
+            kind: "Type".into(),
+            text_content: Some("Summer Sale".into()),
+            font_size_pt: Some(24.0),
+            bounds: [50, 100, 300, 40],
+            is_visible: true,
+            has_mask: false,
+        });
+
+        let context = AiContext::new();
+        let intent = engine
+            .parse_intent("Move the heading upwards and increase its size to 36", &scene, &context)
+            .unwrap();
+
+        assert_eq!(intent.category, IntentCategory::TypographyRefinement);
+        assert_eq!(intent.target_layer_id, Some(10));
+        assert_eq!(intent.direction, Some([0, -40]));
+        assert_eq!(intent.numeric_value, Some(36.0));
+    }
+
+    #[test]
+    fn parse_change_background_color_preserving_person() {
+        let engine = NaturalLanguageEngine::new();
+        let scene = VisualScene::default();
+        let context = AiContext::new();
+
+        let intent = engine
+            .parse_intent("Change the background colour to navy blue but preserve the person", &scene, &context)
+            .unwrap();
+
+        assert_eq!(intent.category, IntentCategory::BackgroundReplacement);
+        assert_eq!(intent.extracted_color, Some("#0f172a".into()));
+    }
+}
