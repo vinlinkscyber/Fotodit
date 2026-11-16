@@ -16,6 +16,7 @@ fn layer(id: u64, name: &str) -> VisualElement {
         bounds: [0, 0, 1200, 800],
         is_visible: true,
         has_mask: false,
+        confidence: 1.0,
     }
 }
 

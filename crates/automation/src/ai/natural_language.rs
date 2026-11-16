@@ -360,6 +360,7 @@ mod tests {
             bounds: [50, 100, 300, 40],
             is_visible: true,
             has_mask: false,
+            confidence: 1.0,
         });
 
         let context = AiContext::new();

@@ -201,6 +201,7 @@ mod tests {
             bounds: [0, 0, 800, 600],
             is_visible: true,
             has_mask: true,
+            confidence: 1.0,
         });
 
         let execution = ExecutionResult {
