@@ -1,7 +1,7 @@
 name: screenshot-linux
 
 # Captures the GUI on a headless Linux display so the app's look can be reviewed
-# without a local machine. Manual trigger only. Re-run for panel styling.
+# without a local machine. Manual trigger only. Re-run for panel fidelity pass.
 on:
   workflow_dispatch:
   push:
