@@ -14,6 +14,21 @@ pub fn dock_area(app: &mut FotoditApp, ui: &mut egui::Ui) {
     if app.ui.panels.rail && !t.pro {
         rail(app, ui, &t);
     }
+    // The AI Assistant is a fixed rail at the start edge (left in LTR), tall within the
+    // workspace, per the approved reference design. Reopen it from the Window menu.
+    if app.ui.panels.assistant {
+        crate::direction::start_panel("assistant_rail")
+            .resizable(true)
+            .default_size(336.0)
+            .size_range(280.0..=520.0)
+            .frame(egui::Frame::NONE)
+            .show(ui, |ui| {
+                let r = ui.max_rect();
+                let x = if crate::direction::is_rtl() { r.left() - 6.0 } else { r.right() + 6.0 };
+                ui.painter().line_segment([pos2(x, r.top() - 8.0), pos2(x, r.bottom() + 8.0)], Stroke::new(1.0, t.separator));
+                super::assistant::assistant_rail(app, ui);
+            });
+    }
     egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| crate::panel_docking::show(app, ui));
     crate::dock::persist(app, ui.ctx());
     crate::color_panel_ui::persist(app);

@@ -170,7 +170,14 @@ fn legacy_layout(app: &FotoditApp, all: bool) -> Layout<String> {
     let pro = app.ui.theme.is_pro();
     let mut groups = Vec::new();
     let mut floating = Vec::new();
-    for group in app.ui.dock.order().into_iter().filter(|g| all || g.shown(&app.ui.panels)) {
+    for group in app
+        .ui
+        .dock
+        .order()
+        .into_iter()
+        // The Assistant is the start-edge rail (see panels::dock::dock_area), never a dock group.
+        .filter(|g| *g != Group::Assistant && (all || g.shown(&app.ui.panels)))
+    {
         let labels = group.tabs(pro);
         let visible = if all { group.tabs(pro).iter().copied().enumerate().collect() } else { app.ui.dock.visible_tabs(group, pro) };
         let panels: Vec<String> = visible.iter().filter_map(|(_, label)| normalize(label).map(str::to_owned)).collect();

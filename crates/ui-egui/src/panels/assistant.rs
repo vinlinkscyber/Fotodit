@@ -152,59 +152,21 @@ pub(crate) fn seed_prompt(ctx: &egui::Context, prompt: &str) {
     });
 }
 
-/// Demo mode (FOTODIT_ASSISTANT_DEMO=1, used by the screenshot workflow): show the panel
-/// full-height on the left, as in the reference design, so the layout is reviewable as
-/// it will feel in use.
-fn demo_enabled() -> bool {
-    std::env::var_os("FOTODIT_ASSISTANT_DEMO").is_some()
-}
-
-fn seed_demo(state: &mut AssistantState) {
-    if state.transcript.is_empty() {
-        state.transcript.push(Exchange {
-            user: "make it brighter and remove the background".into(),
-            assistant: "Done - exposure lifted a touch and the subject is isolated on transparency. Say \"undo\" if that's not what you meant.".into(),
-        });
-        state.transcript.push(Exchange {
-            user: "actually make it a bit warmer too".into(),
-            assistant: "Warmth nudged up on the same edit. Anything else?".into(),
-        });
-    }
-}
-
-pub(crate) fn assistant_panel(app: &mut FotoditApp, ui: &mut egui::Ui) {
-    let demo = demo_enabled();
+/// The assistant rail at the workspace's start edge (see panels::dock::dock_area): the
+/// real installed presentation of the reference design.
+pub(crate) fn assistant_rail(app: &mut FotoditApp, ui: &mut egui::Ui) {
     let mut state = ui.ctx().data_mut(|d| d.get_temp::<AssistantState>(state_id()).unwrap_or_default());
-    if demo {
-        seed_demo(&mut state);
-    }
-
     panel_chrome(ui, &mut state, Some(app));
+    ui.ctx().data_mut(|d| d.insert_temp(state_id(), state));
+}
 
-    ui.ctx().data_mut(|d| d.insert_temp(state_id(), state.clone()));
-
-    if demo {
-        // The demo overlay shows the empty state (greeting + pills) full-height on the
-        // left, like the reference design; the docked panel keeps the seeded transcript
-        // so one capture reviews both layouts.
-        let demo_id = egui::Id::new("assistant-demo-state");
-        let mut demo_state = ui.ctx().data_mut(|d| d.get_temp::<AssistantState>(demo_id).unwrap_or_default());
-        let screen = ui.ctx().screen_rect();
-        let rect = egui::Rect::from_min_size(
-            egui::pos2(screen.left() + 42.0, screen.top() + 30.0),
-            egui::vec2(336.0, (screen.height() - 66.0).max(200.0)),
-        );
-        egui::Area::new(egui::Id::new("assistant-demo-area"))
-            .order(egui::Order::Foreground)
-            .fixed_pos(rect.min)
-            .show(ui.ctx(), |ui| {
-                ui.set_min_size(rect.size());
-                ui.set_max_size(rect.size());
-                panel_chrome(ui, &mut demo_state, None);
-            });
-        ui.ctx().data_mut(|d| d.insert_temp(demo_id, demo_state));
-        ui.ctx().data_mut(|d| d.insert_temp(state_id(), state));
-    }
+/// Legacy dock hook: the panel moved to the start-edge rail. A workspace saved with an
+/// Assistant tab keeps it valid but sees this note; Window > Assistant shows the rail.
+pub(crate) fn assistant_panel(app: &mut FotoditApp, ui: &mut egui::Ui) {
+    let _ = app;
+    ui.centered_and_justified(|ui| {
+        ui.label(egui::RichText::new(tl!("The Assistant now opens as a rail on the left. Use Window > Assistant.")).color(TEXT_SOFT));
+    });
 }
 
 /// Panel surface + header + tabs, with the active tab's body inside. In the dock, `app`
