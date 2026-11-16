@@ -95,7 +95,7 @@ pub const SHELL_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("edit.search", "Search…", &["Edit"], Some("Cmd+F")),
     ("help.discord", "Discord", &["Help"], None),
     ("help.website", "Website", &["Help"], None),
-    ("help.artcraftWebsite", "Website", &["Help"], None),
+    ("help.plyraWebsite", "Website", &["Help"], None),
     ("help.github", "GitHub", &["Help"], None),
     ("help.reportIssue", "Report an Issue…", &["Help"], None),
     ("help.systemInfo", "System Info…", &["Help"], None),

@@ -560,7 +560,7 @@
 	Fotodit on GitHub	Fotodit GitHubissa
 	Report an Issue…	Ilmoita ongelmasta…
 	Plyra Website	Plyra-verkkosivusto
-	Join the Plyra Discord…	Liity ArtCraftin Discordiin…
+	Join the Plyra Discord…	Liity Plyran Discordiin…
 	System Info…	Järjestelmän tiedot…
 
 # Tools and options bar
@@ -3976,8 +3976,8 @@ curves	Smooth	Tasoita
 	Iris Blur	Iiris-sumennus
 	Ivy	Muratti
 	Jag	Rosoisuus
-	Join the Plyra Discord	Liity ArtCraftin Discordiin
-	Join the Plyra Discord ({url})	Liity ArtCraftin Discordiin ({url})
+	Join the Plyra Discord	Liity Plyran Discordiin
+	Join the Plyra Discord ({url})	Liity Plyran Discordiin ({url})
 	Keeps the current texture when switching presets.	Säilyttää nykyisen tekstuurin esiasetusta vaihdettaessa.
 	Kernel	Ydin
 	Kerning: Metrics, Optical or a value in 1/1000 em (Alt+←/→ at the caret)	Parivälistys: metriikka, optinen tai arvo 1/1000 em (Alt+←/→ kohdistimessa)

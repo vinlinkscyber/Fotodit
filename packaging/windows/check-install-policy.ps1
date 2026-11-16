@@ -55,16 +55,16 @@ try {
     if ($properties['UpgradeCode'].Trim('{}') -ne $policy.upgradeCode) { throw 'Launcher upgrade identity changed.' }
     $dirs = @{}
     foreach ($row in (Read-Rows $database 'SELECT `Directory`, `Directory_Parent`, `DefaultDir` FROM `Directory`' 3)) { $dirs[$row[0]] = @($row[1],$row[2]) }
-    if ($dirs['INSTALLFOLDER'][0] -ne 'CraftSuiteFolder' -or $dirs['CraftSuiteFolder'][1] -ne 'Plyra' -or
-        $dirs['CraftSuiteFolder'][0] -ne 'LocalProgramsFolder' -or $dirs['LocalProgramsFolder'][0] -ne 'LocalAppDataFolder') {
+    if ($dirs['INSTALLFOLDER'][0] -ne 'PlyraSuiteFolder' -or $dirs['PlyraSuiteFolder'][1] -ne 'Plyra' -or
+        $dirs['PlyraSuiteFolder'][0] -ne 'LocalProgramsFolder' -or $dirs['LocalProgramsFolder'][0] -ne 'LocalAppDataFolder') {
       throw 'Launcher new-install folder must be under the per-user Plyra suite root.'
     }
     foreach ($explicit in @('', 'F:\Chosen exact launcher')) {
       Set-SessionProperty $session 'PREVIOUSINSTALLFOLDER' 'E:\Existing exact launcher'
       Set-SessionProperty $session 'INSTALLFOLDER' $explicit
-      $row = @(Read-Rows $database 'SELECT `Condition` FROM `InstallUISequence` WHERE `Action` = ''CraftRestoreLauncherFolder''' 1)[0]
+      $row = @(Read-Rows $database 'SELECT `Condition` FROM `InstallUISequence` WHERE `Action` = ''PlyraRestoreLauncherFolder''' 1)[0]
       if ($session.EvaluateCondition($row[0]) -eq 1) {
-        if ($session.DoAction('CraftRestoreLauncherFolder') -ne 1) { throw 'Launcher restore action failed.' }
+        if ($session.DoAction('PlyraRestoreLauncherFolder') -ne 1) { throw 'Launcher restore action failed.' }
       }
       $expected = if ($explicit) { $explicit } else { 'E:\Existing exact launcher' }
       if ((Get-SessionProperty $session 'INSTALLFOLDER') -ne $expected) { throw 'Launcher custom or existing path was lost.' }
@@ -87,15 +87,15 @@ try {
   foreach ($row in (Read-Rows $database 'SELECT `Directory`, `Directory_Parent`, `DefaultDir` FROM `Directory`' 3)) {
     $directories[$row[0]] = @($row[1], $row[2])
   }
-  if ($directories['INSTALLFOLDER'][0] -ne 'CraftSuiteFolder' -or
-      $directories['CraftSuiteFolder'][1] -ne 'Plyra') { throw 'Expected the app under the Plyra folder.' }
-  $programs = $directories['CraftSuiteFolder'][0]
+  if ($directories['INSTALLFOLDER'][0] -ne 'PlyraSuiteFolder' -or
+      $directories['PlyraSuiteFolder'][1] -ne 'Plyra') { throw 'Expected the app under the Plyra folder.' }
+  $programs = $directories['PlyraSuiteFolder'][0]
   if ($programs -eq 'ProgramFiles6432Folder') { $programs = $directories[$programs][0] }
   if ($programs -notin 'ProgramFilesFolder', 'ProgramFiles64Folder') {
     throw 'Use Windows Installer native folder redirection, not a hard-coded profile path.'
   }
   $guards = @(Read-Rows $database 'SELECT `Condition`, `Description` FROM `LaunchCondition`' 2 |
-    Where-Object { $_[0] -match 'CRAFT_(USER|MACHINE)_DIR' })
+    Where-Object { $_[0] -match 'PLYRA_(USER|MACHINE)_DIR' })
   if ($guards.Count -ne 2) { throw 'Expected both duplicate-installation guards.' }
   $cases = 0
   foreach ($scope in @('', '2', '1')) {
@@ -104,8 +104,8 @@ try {
         foreach ($installed in @('', '1')) {
           Set-SessionProperty $session 'ALLUSERS' $scope
           Set-SessionProperty $session 'Installed' $installed
-          Set-SessionProperty $session 'CRAFT_USER_DIR' $user
-          Set-SessionProperty $session 'CRAFT_MACHINE_DIR' $machine
+          Set-SessionProperty $session 'PLYRA_USER_DIR' $user
+          Set-SessionProperty $session 'PLYRA_MACHINE_DIR' $machine
           $allowed = $true
           foreach ($guard in $guards) {
             $value = $session.EvaluateCondition($guard[0])
@@ -125,9 +125,9 @@ try {
     foreach ($explicit in @('', 'F:\Chosen exact app')) {
       Set-SessionProperty $session 'ALLUSERS' $scope
       Set-SessionProperty $session 'INSTALLFOLDER' $explicit
-      Set-SessionProperty $session 'CRAFT_USER_DIR' 'D:\Existing user app'
-      Set-SessionProperty $session 'CRAFT_MACHINE_DIR' 'E:\Existing machine app'
-      $action = if ($scope -eq '1') { 'CraftRestoreMachineFolder' } else { 'CraftRestoreUserFolder' }
+      Set-SessionProperty $session 'PLYRA_USER_DIR' 'D:\Existing user app'
+      Set-SessionProperty $session 'PLYRA_MACHINE_DIR' 'E:\Existing machine app'
+      $action = if ($scope -eq '1') { 'PlyraRestoreMachineFolder' } else { 'PlyraRestoreUserFolder' }
       # Evaluate the compiled condition, so the test exercises it instead of calling the action directly.
       $restore = @(Read-Rows $database ('SELECT `Condition` FROM `InstallExecuteSequence` WHERE `Action` = ''{0}''' -f $action) 1)[0]
       $selected = $session.EvaluateCondition($restore[0]) -eq 1
@@ -139,22 +139,22 @@ try {
   }
   $ui = @{}
   foreach ($row in (Read-Rows $database 'SELECT `Action`, `Sequence` FROM `InstallUISequence`' 2)) { $ui[$row[0]] = [int]$row[1] }
-  if (-not ($ui['AppSearch'] -lt $ui['CraftPreferMachineScope'] -and
-      $ui['CraftPreferMachineScope'] -lt $ui['CraftScopeDlg'] -and
-      $ui['CraftScopeDlg'] -lt $ui['FindRelatedProducts'] -and
+  if (-not ($ui['AppSearch'] -lt $ui['PlyraPreferMachineScope'] -and
+      $ui['PlyraPreferMachineScope'] -lt $ui['PlyraScopeDlg'] -and
+      $ui['PlyraScopeDlg'] -lt $ui['FindRelatedProducts'] -and
       $ui['FindRelatedProducts'] -lt $ui['LaunchConditions'] -and
-      $ui['CraftScopeDlg'] -lt $ui['CraftRestoreUserFolder'] -and $ui['CraftRestoreUserFolder'] -lt $ui['CostInitialize'] -and
-      $ui['CraftScopeDlg'] -lt $ui['CraftRestoreMachineFolder'] -and $ui['CraftRestoreMachineFolder'] -lt $ui['CostInitialize'])) {
+      $ui['PlyraScopeDlg'] -lt $ui['PlyraRestoreUserFolder'] -and $ui['PlyraRestoreUserFolder'] -lt $ui['CostInitialize'] -and
+      $ui['PlyraScopeDlg'] -lt $ui['PlyraRestoreMachineFolder'] -and $ui['PlyraRestoreMachineFolder'] -lt $ui['CostInitialize'])) {
     throw 'Scope must be chosen after AppSearch and before FindRelatedProducts, launch checks and costing.'
   }
   # Windows Installer resolves Program Files for the context it started in, before the wizard's scope choice.
   # The wizard therefore sets the new-install folder itself, and only in the wizard.
-  $defaults = @(Read-Rows $database 'SELECT `Action`, `Sequence`, `Condition` FROM `InstallUISequence`' 3 | Where-Object { $_[0] -like 'CraftDefault*' })
+  $defaults = @(Read-Rows $database 'SELECT `Action`, `Sequence`, `Condition` FROM `InstallUISequence`' 3 | Where-Object { $_[0] -like 'PlyraDefault*' })
   if ($defaults.Count -lt 2) { throw 'The wizard must set the new-install folder after the scope page; Program Files is resolved before the choice.' }
   foreach ($row in $defaults) {
-    if (-not ($ui['CraftScopeDlg'] -lt [int]$row[1] -and [int]$row[1] -lt $ui['CostInitialize'])) { throw "$($row[0]) must run after the scope page and before costing." }
+    if (-not ($ui['PlyraScopeDlg'] -lt [int]$row[1] -and [int]$row[1] -lt $ui['CostInitialize'])) { throw "$($row[0]) must run after the scope page and before costing." }
   }
-  if (@(Read-Rows $database 'SELECT `Action` FROM `InstallExecuteSequence`' 1 | Where-Object { $_[0] -like 'CraftDefault*' }).Count) {
+  if (@(Read-Rows $database 'SELECT `Action` FROM `InstallExecuteSequence`' 1 | Where-Object { $_[0] -like 'PlyraDefault*' }).Count) {
     throw 'Silent installs must not use the wizard-only default folder actions.'
   }
   # The machine default comes from the environment of the package architecture, not from a folder name.
@@ -166,8 +166,8 @@ try {
   foreach ($scope in @('1', '')) {
     Set-SessionProperty $session 'ALLUSERS' $scope
     Set-SessionProperty $session 'INSTALLFOLDER' ''
-    Set-SessionProperty $session 'CRAFT_MACHINE_DIR' ''
-    Set-SessionProperty $session 'CRAFT_USER_DIR' ''
+    Set-SessionProperty $session 'PLYRA_MACHINE_DIR' ''
+    Set-SessionProperty $session 'PLYRA_USER_DIR' ''
     foreach ($row in @($defaults | Sort-Object { [int]$_[1] })) {
       if ($session.EvaluateCondition($row[2]) -eq 1 -and $session.DoAction($row[0]) -ne 1) { throw "$($row[0]) failed." }
     }
@@ -178,7 +178,7 @@ try {
   # Replay the wizard's compiled folder actions in sequence order, as the full UI runs them. A remembered
   # folder must win over the new-install default, and a folder the user typed must survive both.
   $uiFolderActions = @(Read-Rows $database 'SELECT `Action`, `Sequence`, `Condition` FROM `InstallUISequence`' 3 |
-    Where-Object { $_[0] -match '^Craft(Restore|Default)' } | Sort-Object { [int]$_[1] })
+    Where-Object { $_[0] -match '^Plyra(Restore|Default)' } | Sort-Object { [int]$_[1] })
   $userDefault = (Join-Path $env:LOCALAPPDATA "Programs\Plyra\$($policy.name)") + '\'
   foreach ($case in @(
       @('1', 'D:\Remembered user app', 'E:\Remembered machine app', '', 'E:\Remembered machine app'),
@@ -188,8 +188,8 @@ try {
       @('1', 'D:\Remembered user app', 'E:\Remembered machine app', 'F:\Chosen exact app', 'F:\Chosen exact app'))) {
     Set-SessionProperty $session 'Installed' ''
     Set-SessionProperty $session 'ALLUSERS' $case[0]
-    Set-SessionProperty $session 'CRAFT_USER_DIR' $case[1]
-    Set-SessionProperty $session 'CRAFT_MACHINE_DIR' $case[2]
+    Set-SessionProperty $session 'PLYRA_USER_DIR' $case[1]
+    Set-SessionProperty $session 'PLYRA_MACHINE_DIR' $case[2]
     Set-SessionProperty $session 'INSTALLFOLDER' $case[3]
     foreach ($row in $uiFolderActions) {
       if ($session.EvaluateCondition($row[2]) -eq 1 -and $session.DoAction($row[0]) -ne 1) { throw "$($row[0]) failed." }
@@ -199,12 +199,12 @@ try {
   }
   $execute = @{}
   foreach ($row in (Read-Rows $database 'SELECT `Action`, `Sequence` FROM `InstallExecuteSequence`' 2)) { $execute[$row[0]] = [int]$row[1] }
-  foreach ($action in @('CraftRestoreUserFolder','CraftRestoreMachineFolder')) {
+  foreach ($action in @('PlyraRestoreUserFolder','PlyraRestoreMachineFolder')) {
     if (-not ($execute['AppSearch'] -lt $execute[$action] -and $execute[$action] -lt $execute['CostInitialize'])) {
       throw 'Silent updates must restore the folder before directory costing.'
     }
   }
-  foreach ($resolver in @('CraftUFromLegacyExe','CraftMFromLegacyExe')) {
+  foreach ($resolver in @('PlyraUFromLegacyExe','PlyraMFromLegacyExe')) {
     if (-not ($execute['AppSearch'] -lt $execute[$resolver] -and $execute[$resolver] -lt $execute['LaunchConditions'])) {
       throw 'Both legacy folder resolvers must run after AppSearch and before the launch checks.'
     }
@@ -230,10 +230,10 @@ try {
     @{ name = 'legacy exe folder is last';     dir = '';        folder = '';           path = '';         exeFolder = 'D:\Exe\'; exe = 'D:\Exe\app.exe'; existing = '';            expected = 'D:\Exe\' },
     @{ name = 'legacy folder needs the exe';   dir = '';        folder = '';           path = '';         exeFolder = 'D:\Exe\'; exe = '';               existing = '';            expected = '' },
     @{ name = 'a preset folder is kept';       dir = 'D:\Dir\'; folder = 'D:\Folder\'; path = 'D:\Path\'; exeFolder = 'D:\Exe\'; exe = 'D:\Exe\app.exe'; existing = 'P:\Preset\'; expected = 'P:\Preset\' })
-  foreach ($scopeSpec in @(@('U', '1', 'CRAFT_USER_DIR'), @('M', '2', 'CRAFT_MACHINE_DIR'))) {
+  foreach ($scopeSpec in @(@('U', '1', 'PLYRA_USER_DIR'), @('M', '2', 'PLYRA_MACHINE_DIR'))) {
     $letter = $scopeSpec[0]; $target = $scopeSpec[2]
     foreach ($item in $searchContract) {
-      $property = "CRAFT_${letter}_$($item[0])"
+      $property = "PLYRA_${letter}_$($item[0])"
       $locator = if ($appSearch.ContainsKey($property)) { $locators[$appSearch[$property]] } else { $null }
       $keyOk = $null -ne $locator -and $(if ($item[1] -eq 'exact') { $locator[2] -eq $item[2] } else { $locator[2] -match $item[2] })
       if (-not $keyOk -or $locator[1] -ne $scopeSpec[1] -or $locator[3] -ne $item[3] -or ([int]$locator[4] -band 3) -ne [int]$item[4]) {
@@ -241,18 +241,18 @@ try {
       }
     }
     $chain = @(Read-Rows $database 'SELECT `Action`, `Sequence`, `Condition` FROM `InstallExecuteSequence`' 3 |
-      Where-Object { $_[0] -match "^Craft${letter}From" } | Sort-Object { [int]$_[1] })
+      Where-Object { $_[0] -match "^Plyra${letter}From" } | Sort-Object { [int]$_[1] })
     $order = @($chain | ForEach-Object { $_[0] }) -join ','
-    if ($order -ne "Craft${letter}FromDIR,Craft${letter}FromFOLDER,Craft${letter}FromPATH,Craft${letter}FromLegacyExe") {
+    if ($order -ne "Plyra${letter}FromDIR,Plyra${letter}FromFOLDER,Plyra${letter}FromPATH,Plyra${letter}FromLegacyExe") {
       throw "Remembered-folder resolvers for scope $letter run in the wrong order: $order"
     }
     foreach ($case in $resolverCases) {
       Set-SessionProperty $session $target $case.existing
-      Set-SessionProperty $session "CRAFT_${letter}_DIR" $case.dir
-      Set-SessionProperty $session "CRAFT_${letter}_FOLDER" $case.folder
-      Set-SessionProperty $session "CRAFT_${letter}_PATH" $case.path
-      Set-SessionProperty $session "CRAFT_${letter}_EXEFOLDER" $case.exeFolder
-      Set-SessionProperty $session "CRAFT_${letter}_EXE" $case.exe
+      Set-SessionProperty $session "PLYRA_${letter}_DIR" $case.dir
+      Set-SessionProperty $session "PLYRA_${letter}_FOLDER" $case.folder
+      Set-SessionProperty $session "PLYRA_${letter}_PATH" $case.path
+      Set-SessionProperty $session "PLYRA_${letter}_EXEFOLDER" $case.exeFolder
+      Set-SessionProperty $session "PLYRA_${letter}_EXE" $case.exe
       foreach ($row in $chain) {
         if ($session.EvaluateCondition($row[2]) -eq 1 -and $session.DoAction($row[0]) -ne 1) { throw "$($row[0]) failed." }
       }
@@ -261,20 +261,20 @@ try {
     }
   }
   # Switching the first-page choice must reset BOTH properties, including a back-and-forth change.
-  $events = @(Read-Rows $database 'SELECT `Event`, `Argument`, `Condition`, `Ordering` FROM `ControlEvent` WHERE `Dialog_` = ''CraftScopeDlg'' AND `Control_` = ''Next'' ORDER BY `Ordering`' 4)
+  $events = @(Read-Rows $database 'SELECT `Event`, `Argument`, `Condition`, `Ordering` FROM `ControlEvent` WHERE `Dialog_` = ''PlyraScopeDlg'' AND `Control_` = ''Next'' ORDER BY `Ordering`' 4)
   # Model the full-UI upgrade entry with an existing machine-wide copy. Run
   # the actual preference action, then the compiled Next events before discovery.
   Set-SessionProperty $session 'ALLUSERS' '2'
-  Set-SessionProperty $session 'CRAFT_SCOPE' 'user'
-  Set-SessionProperty $session 'CRAFT_USER_DIR' ''
-  Set-SessionProperty $session 'CRAFT_MACHINE_DIR' 'E:\Existing machine app'
-  $preference = @(Read-Rows $database 'SELECT `Condition` FROM `InstallUISequence` WHERE `Action` = ''CraftPreferMachineScope''' 1)[0]
-  if ($session.EvaluateCondition($preference[0]) -ne 1 -or $session.DoAction('CraftPreferMachineScope') -ne 1 -or
-      (Get-SessionProperty $session 'CRAFT_SCOPE') -ne 'machine') {
+  Set-SessionProperty $session 'PLYRA_SCOPE' 'user'
+  Set-SessionProperty $session 'PLYRA_USER_DIR' ''
+  Set-SessionProperty $session 'PLYRA_MACHINE_DIR' 'E:\Existing machine app'
+  $preference = @(Read-Rows $database 'SELECT `Condition` FROM `InstallUISequence` WHERE `Action` = ''PlyraPreferMachineScope''' 1)[0]
+  if ($session.EvaluateCondition($preference[0]) -ne 1 -or $session.DoAction('PlyraPreferMachineScope') -ne 1 -or
+      (Get-SessionProperty $session 'PLYRA_SCOPE') -ne 'machine') {
     throw 'Full-UI machine upgrades must initially select the existing machine context.'
   }
   foreach ($choice in @('machine','user','machine','user')) {
-    Set-SessionProperty $session 'CRAFT_SCOPE' $choice
+    Set-SessionProperty $session 'PLYRA_SCOPE' $choice
     foreach ($event in $events) {
       if ($event[0] -notmatch '^\[([^\]]+)\]$') { continue }
       $property = $Matches[1]
@@ -290,16 +290,16 @@ try {
     }
   }
   $actions = @(Read-Rows $database 'SELECT `Action`, `Source`, `Target`, `Type` FROM `CustomAction`' 4)
-  $savedOptions = @($actions | Where-Object { $_[0] -match '^CraftLoadOption[0-9]+M$' })
+  $savedOptions = @($actions | Where-Object { $_[0] -match '^PlyraLoadOption[0-9]+M$' })
   foreach ($option in $savedOptions) {
     if ([int]$option[3] -ne 51) { throw 'Saved-option test may run only property-setting actions.' }
     $number = [regex]::Match($option[0], '[0-9]+').Value
     foreach ($scope in @('2','1')) {
       Set-SessionProperty $session 'ALLUSERS' $scope
-      Set-SessionProperty $session "CRAFT_OPTION_${number}_M" 'saved-machine-choice'
-      Set-SessionProperty $session "CRAFT_OPTION_${number}_U" 'saved-user-choice'
+      Set-SessionProperty $session "PLYRA_OPTION_${number}_M" 'saved-machine-choice'
+      Set-SessionProperty $session "PLYRA_OPTION_${number}_U" 'saved-user-choice'
       Set-SessionProperty $session $option[1] ''
-      $action = "CraftLoadOption$number" + $(if ($scope -eq '1') { 'M' } else { 'U' })
+      $action = "PlyraLoadOption$number" + $(if ($scope -eq '1') { 'M' } else { 'U' })
       if ($session.DoAction($action) -ne 1) { throw 'Saved-option property action failed.' }
       $expected = if ($scope -eq '1') { 'saved-machine-choice' } else { 'saved-user-choice' }
       if ((Get-SessionProperty $session $option[1]) -ne $expected) { throw 'Saved installer choices leaked across contexts.' }

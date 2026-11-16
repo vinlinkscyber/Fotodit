@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use crate::FotoditApp;
 
 pub const DISCORD: &str = "";
-pub const ARTCRAFT_WEBSITE: &str = "";
+pub const PLYRA_WEBSITE: &str = "";
 pub const APP_PAGE: &str = "";
 pub const TUTORIALS: &str = "";
 pub const GITHUB: &str = "";
@@ -79,7 +79,7 @@ mod tests {
             [
                 "help.discord",
                 "help.website",
-                "help.artcraftWebsite",
+                "help.plyraWebsite",
                 "help.github",
                 "help.reportIssue",
                 "help.checkForUpdates",

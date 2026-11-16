@@ -17,7 +17,7 @@
     <Property Id="ARPPRODUCTICON" Value="FotoditIcon.exe" />
 
     <StandardDirectory Id="ProgramFiles6432Folder">
-      <Directory Id="CraftSuiteFolder" Name="Plyra">
+      <Directory Id="PlyraSuiteFolder" Name="Plyra">
         <Directory Id="INSTALLFOLDER" Name="Fotodit" />
       </Directory>
     </StandardDirectory>
