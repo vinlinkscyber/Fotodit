@@ -31,8 +31,14 @@ jobs:
         run: |
           set -o pipefail
           cargo test --locked -p fotodit-automation 2>&1 | tee test-output.txt
+      - name: Run executed pipeline example with printed output
+        run: |
+          set -o pipefail
+          cargo test --locked -p fotodit-automation --test ai_executed_example -- --nocapture 2>&1 | tee executed-example.txt
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: automation-test-output
-          path: test-output.txt
+          path: |
+            test-output.txt
+            executed-example.txt
