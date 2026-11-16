@@ -18,8 +18,8 @@ It is a native app written in Rust that draws the canvas on your graphics card, 
 
 ## Part of the Craft App Suite
 
-Fotodit is one of the Crafting Apps from the Plyra team, next to VectorCraft, FilmCraft and the other Craft apps. You can install and update them from [Plyra Launcher](https://getPlyra.com/docs/craft-launcher).
+Fotodit is one of the Plyra Apps from the Plyra team, next to VectorCraft, FilmCraft and the other Craft apps. You can install and update them from Plyra Launcher.
 
 ## Get help
 
-Ask in [Discord]() or open an issue in the [issue tracker](https://github.com/plyra/Fotodit/issues). In Fotodit, **Help › Report an Issue…** opens the same issue tracker.
+Ask in Discord or open an issue in the [issue tracker](https://github.com/plyra/Fotodit/issues). In Fotodit, **Help › Report an Issue…** opens the same issue tracker.

@@ -1,8 +1,8 @@
 //! Fonts a host serves next to the app, fetched on demand (the web build: no system fonts, and
 //! the wasm has no room for more embedded ones, see `build.rs`).
 //!
-//! The host lists them in `fonts/manifest.txt` next to `index.html`, in craft-fonts' manifest
-//! format (`family | style | file | …`, the file relative to the site root), so a craft-fonts
+//! The host lists them in `fonts/manifest.txt` next to `index.html`, in plyra-fonts' manifest
+//! format (`family | style | file | …`, the file relative to the site root), so a plyra-fonts
 //! checkout's `fonts/` folder works as it is and any other font needs one line. This module is
 //! the part that doesn't depend on the platform: reading the manifest, the catalog of families
 //! the host can serve, and the queue of families to fetch (picked in a font menu, or needed by a
@@ -33,7 +33,7 @@ pub struct ServedFont {
     pub integrity: Option<String>,
 }
 
-/// Reads a manifest in craft-fonts' format: one font file per line, fields separated by ` | `
+/// Reads a manifest in plyra-fonts' format: one font file per line, fields separated by ` | `
 /// (`family | style | file | scripts | licence | licence file | sha256 | source`); `#` comments
 /// and blank lines are ignored. Only family and file are needed here, so a line needs at least
 /// `family | style | file`. Returns the fonts and, for each line that was skipped, why.
@@ -320,8 +320,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reads_craft_fonts_manifest_lines() {
-        let text = "# Font manifest for the Crafting Apps.\n\
+    fn reads_plyra_fonts_manifest_lines() {
+        let text = "# Font manifest for the Plyra Apps.\n\
             \n\
             BIZ UDPGothic | Regular | fonts/biz-ud-pgothic/BIZUDPGothic-Regular.ttf | Jpan,Latn | OFL-1.1 | fonts/biz-ud-pgothic/OFL.txt | 258d | https://example.org\n\
             Open Sans | Regular | fonts/open-sans/OpenSans[wdth,wght].ttf\n";

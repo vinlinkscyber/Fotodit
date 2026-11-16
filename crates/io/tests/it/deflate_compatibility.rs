@@ -61,7 +61,7 @@ fn check_png(bytes: &[u8], image: &Image) {
 
 /// New zlib-rs streams and legacy-miniz streams preserve the same document samples.
 #[test]
-fn png_psd_and_pcraft_decode_identically() {
+fn png_psd_and_plyra_decode_identically() {
     for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
         let doc = document(depth, Size::new(257, 131));
         let pixels = doc.layers[0].surface().unwrap().read_region(doc.bounds());

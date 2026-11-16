@@ -16,7 +16,7 @@ mod tests {
     use crate::manifest::FORMAT_VERSION;
     use serde_json::{Value, json};
 
-    /// Upgrade `v` in place to `target` using `steps`, with craft-pcraft-format's runner.
+    /// Upgrade `v` in place to `target` using `steps`, with the shared format crate's runner.
     fn migrate_with(v: &mut Value, steps: &[Step], target: u32) -> Result<u32> {
         craft_pcraft_format::migrate(v, steps, target)
     }

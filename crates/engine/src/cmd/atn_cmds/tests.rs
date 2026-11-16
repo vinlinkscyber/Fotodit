@@ -4208,7 +4208,7 @@ fn gallery_effect_steps_save_back_as_the_event_they_were_recorded_as() {
     let played = s.execute("actions.play", json!({"action": "A"})).unwrap();
     assert_eq!(played["ran"], 3, "{played}");
     // The remembered event is for Save Actions only: playback strips it, so the journal (Last
-    // Filter) and the smart filters (`.pcraft` saves) never carry it.
+    // Filter) and the smart filters (`.plyra` saves) never carry it.
     let gallery: Vec<&Value> = s.journal.iter().filter(|(id, _)| id.starts_with("filter.gallery.")).map(|(_, p)| p).collect();
     assert_eq!(gallery.len(), 3, "{:?}", s.journal);
     assert!(gallery.iter().all(|p| p.get("_atnEvent").is_none()), "{gallery:?}");

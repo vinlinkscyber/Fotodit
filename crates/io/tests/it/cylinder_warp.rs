@@ -31,7 +31,7 @@ fn document(transform: Affine, perspective: Option<[f64; 9]>) -> (Document, Warp
     source.layers.push(Layer::new("art", LayerContent::Raster(pixels.clone())));
     let bytes = fotodit_format::save_to_bytes(&source, &Default::default()).unwrap();
     let warp = Warp::cylinder(&VALUES, [0.0, 0.0, 100.0, 100.0]).unwrap();
-    let mut sm = SmartObject::new(SmartSource::Embedded { file_name: "label.pcraft".into(), bytes: Arc::new(bytes) }, transform, None);
+    let mut sm = SmartObject::new(SmartSource::Embedded { file_name: "label.plyra".into(), bytes: Arc::new(bytes) }, transform, None);
     sm.warp = Some(warp.clone());
     sm.perspective = perspective;
     sm.cache = Some(render(&sm));

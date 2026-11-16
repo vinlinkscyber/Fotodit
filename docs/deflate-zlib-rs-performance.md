@@ -1,10 +1,10 @@
 # Deflate backend comparison
 
-Replace the workspace flate2 Rust backend with zlib-rs and runtime CPU detection. Tiles in .pcraft remain Zstandard; deflate changes its PNG previews.
+Replace the workspace flate2 Rust backend with zlib-rs and runtime CPU detection. Tiles in .plyra remain Zstandard; deflate changes its PNG previews.
 
 Size, import-speed and dependency tradeoffs remain maintainer decisions.
 Some PSD ZIP files grow by up to 0.71%. The macOS 16-bit city PSD import is about 6% slower in confirmation.
-The small web-layout PNG grows by 598 bytes (+1.40%). One .pcraft preview adds 25 bytes.
+The small web-layout PNG grows by 598 bytes (+1.40%). One .plyra preview adds 25 bytes.
 Real photo PNGs become smaller and encode faster. The default and best levels are unchanged; callers that
 used level 1 (PDF export and print, brush tips, PNG Fast) now use level 3, because zlib-rs level 1 writes
 static Huffman blocks only (13-32% bigger on photos). Level 3 is never bigger than miniz's level 1 on the
@@ -23,7 +23,7 @@ Small differences are not automatically established improvements or regressions.
 
 The full-resolution CC0 Pixls photographs are P1000475.RW2 (24 MP foliage centre crop, no resampling) and IMG_4059.CR2 (12 MP city), each converted to U8/U16/F32 with the ProPhoto RGB profile. F32 derives from 16-bit development, not HDR capture. MIT psd-tools masks.psd supplies a 640 x 1394 web layout with 22 imported layers and three masks; mask-index.psd supplies a 1000 x 867 illustrated card with a mask. The sources and hashes are pinned by the existing corpus. These are the available authored layered files, not a large layered-photo corpus. No generated noise, repeating ramps, enlarged charts or duplicated photo layers are used.
 
-The shared harness times in-memory operations. Input loading, image conversion, thumbnail rendering, hashes and equivalence checks are outside timers. Every save uses a fresh PcraftWriter and a real rendered thumbnail. Common reads use main-encoded files; own-output reads are separate. PSD exports use ZIP merged images at U8/U16, Raw merged images at F32, and normal RLE layer channels at U8/U16 / ZIP prediction at F32. Results do not measure filesystem throughput or browser performance.
+The shared harness times in-memory operations. Input loading, image conversion, thumbnail rendering, hashes and equivalence checks are outside timers. Every save uses a fresh PlyraWriter and a real rendered thumbnail. Common reads use main-encoded files; own-output reads are separate. PSD exports use ZIP merged images at U8/U16, Raw merged images at F32, and normal RLE layer channels at U8/U16 / ZIP prediction at F32. Results do not measure filesystem throughput or browser performance.
 
 | Document | Operation | Main ms | Branch ms | Time change | Paired 95% interval | Main / branch bytes |
 |---|---|---:|---:|---:|---:|---:|
@@ -72,7 +72,7 @@ The shared harness times in-memory operations. Input loading, image conversion, 
 | layout-mask-index | psd-export | 19.135 | 12.721 | -33.5% | -34.0..-31.5% | 411,435 / 411,594 |
 | layout-mask-index | psd-import | 3.362 | 2.721 | -19.1% | -21.3..-11.2% | 411,435 / 411,435 |
 
-Every PNG encode decodes to identical source pixels, each PSD operation produces the same decoded layer/mask samples as main, and complete .pcraft documents compare equal at every depth. Compressed bytes may differ. The committed compatibility test independently inflates PNG IDAT and PSD ZIP/ZIP-prediction data using old miniz_oxide and checks .pcraft tiles plus thumbnails.
+Every PNG encode decodes to identical source pixels, each PSD operation produces the same decoded layer/mask samples as main, and complete .plyra documents compare equal at every depth. Compressed bytes may differ. The committed compatibility test independently inflates PNG IDAT and PSD ZIP/ZIP-prediction data using old miniz_oxide and checks .plyra tiles plus thumbnails.
 
 ## Allocation and validation changes
 

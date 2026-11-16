@@ -33,11 +33,11 @@ fn identity(app: &FotoditApp) -> (String, Option<String>, u64, u64) {
 #[test]
 fn save_settings_share_only_the_open_documents_native_cache() {
     let mut app = app();
-    let first = app.save_settings().io_options().pcraft_cache.unwrap();
-    assert_eq!(first, app.session.active().unwrap().pcraft_cache);
-    assert_eq!(first, app.save_settings().io_options().pcraft_cache.unwrap());
+    let first = app.save_settings().io_options().plyra_cache.unwrap();
+    assert_eq!(first, app.session.active().unwrap().plyra_cache);
+    assert_eq!(first, app.save_settings().io_options().plyra_cache.unwrap());
     app.run("file.new", json!({"width": 2, "height": 2})).unwrap();
-    assert_ne!(first, app.save_settings().io_options().pcraft_cache.unwrap());
+    assert_ne!(first, app.save_settings().io_options().plyra_cache.unwrap());
 }
 
 #[test]
@@ -248,25 +248,25 @@ fn maximize_compatibility_preference_reaches_the_exporter() {
     }
 }
 
-/// Preferences › File Handling › Save Full-Size Composite in .pcraft Files reaches the exporter
+/// Preferences › File Handling › Save Full-Size Composite in .plyra Files reaches the exporter
 /// of Save As, Save and automation saves, and is off by default.
 #[test]
 fn full_composite_preference_reaches_the_exporter() {
     let seen = Rc::new(RefCell::new(Vec::new()));
     let mut app = app();
-    assert!(!app.save_settings().pcraft_full_composite, "off by default");
+    assert!(!app.save_settings().plyra_full_composite, "off by default");
     let log = seen.clone();
     app.services.export = Some(Box::new(move |_, _, settings: &ExportSettings| {
-        log.borrow_mut().push(settings.io_options().pcraft_full_composite);
+        log.borrow_mut().push(settings.io_options().plyra_full_composite);
         Ok((b"out".to_vec(), Vec::new()))
     }));
     let ctx = egui::Context::default();
     for value in [true, false] {
-        app.run("prefs.set", json!({"path": "fileHandling.pcraftFullComposite", "value": value})).unwrap();
+        app.run("prefs.set", json!({"path": "fileHandling.plyraFullComposite", "value": value})).unwrap();
         seen.borrow_mut().clear();
-        menus::invoke(&mut app, &ctx, "file.saveAs", json!({"path": format!("{value}.pcraft")})).unwrap();
+        menus::invoke(&mut app, &ctx, "file.saveAs", json!({"path": format!("{value}.plyra")})).unwrap();
         menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
-        app.save_automation(Some(format!("{value} agent.pcraft"))).unwrap();
+        app.save_automation(Some(format!("{value} agent.plyra"))).unwrap();
         assert_eq!(*seen.borrow(), [value; 3], "{value}");
     }
 }

@@ -30,7 +30,7 @@ fn three(dir: &std::path::Path) -> (Session, [u64; 3]) {
         painted_layer(&mut s, 0.25 * (i + 1) as f32);
         *slot = s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap()["layer"].as_u64().unwrap();
         if i < 2 {
-            let path = dir.join(format!("linked{i}.pcraft"));
+            let path = dir.join(format!("linked{i}.plyra"));
             s.execute("layer.smartObjects.convertToLinked", json!({"path": path.to_str().unwrap()})).unwrap();
         }
     }
@@ -83,7 +83,7 @@ fn embed_all_linked_embeds_both_linked_objects_in_one_undoable_step() {
     assert!(is_linked(&s, ids[0]) && is_linked(&s, ids[1]) && !is_linked(&s, ids[2]));
     assert!(s.is_enabled("layer.smartObjects.embedAllLinked"));
     let before = s.active().unwrap().history.entries().len();
-    let files: Vec<Vec<u8>> = (0..2).map(|i| fotodit_format::read_file(&dir.join(format!("linked{i}.pcraft"))).unwrap()).collect();
+    let files: Vec<Vec<u8>> = (0..2).map(|i| fotodit_format::read_file(&dir.join(format!("linked{i}.plyra"))).unwrap()).collect();
     assert_ne!(files[0], files[1], "the fixtures differ");
     let third = embedded(&s, ids[2]);
 
@@ -92,7 +92,7 @@ fn embed_all_linked_embeds_both_linked_objects_in_one_undoable_step() {
     assert!(ids.iter().all(|&id| !is_linked(&s, id)));
     for (i, file) in files.iter().enumerate() {
         let (name, bytes) = embedded(&s, ids[i]);
-        assert_eq!(name, format!("linked{i}.pcraft"), "object {i} keeps its own file name");
+        assert_eq!(name, format!("linked{i}.plyra"), "object {i} keeps its own file name");
         assert_eq!(&bytes, file, "object {i} carries its own linked file's bytes");
     }
     assert_eq!(embedded(&s, ids[2]), third, "the already embedded object is untouched");
@@ -125,10 +125,10 @@ fn embed_all_linked_with_no_linked_object_is_an_error_not_a_panic() {
 fn embed_all_linked_refuses_the_whole_step_when_a_linked_file_is_missing() {
     let dir = temp_dir("missing");
     let (mut s, ids) = three(&dir);
-    std::fs::remove_file(dir.join("linked1.pcraft")).unwrap();
+    std::fs::remove_file(dir.join("linked1.plyra")).unwrap();
     let before = s.active().unwrap().history.entries().len();
     let err = s.execute("layer.smartObjects.embedAllLinked", json!({})).unwrap_err().to_string();
-    assert!(err.contains("linked1.pcraft"), "the error names the missing file: {err}");
+    assert!(err.contains("linked1.plyra"), "the error names the missing file: {err}");
     assert!(is_linked(&s, ids[0]) && is_linked(&s, ids[1]), "nothing was embedded");
     assert_eq!(s.active().unwrap().history.entries().len(), before);
     std::fs::remove_dir_all(&dir).ok();

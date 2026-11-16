@@ -76,9 +76,9 @@ Every binary reports its version, the commit and the build date: `fotodit --vers
 `FOTODIT_BUILD_DATE`, and `crates/engine/src/build_info.rs` reads them at compile time. A plain
 `cargo build` doesn't set them and reports `0.2.0 (dev build)`.
 
-Every desktop build job (macOS, Windows, Linux, FreeBSD) also checks out [craft-fonts](https://github.com/plyra/craft-fonts)
-at the `craft-fonts-ref` commit in `.github/workflows/release.yml` and builds with `CRAFT_FONTS_DIR` and
-`CRAFT_FONTS_REQUIRED=1`, so desktop releases embed its Japanese fonts (the web build embeds none: see
+Every desktop build job (macOS, Windows, Linux, FreeBSD) also checks out plyra-fonts
+at the `craft-fonts-ref` commit in `.github/workflows/release.yml` and builds with `PLYRA_FONTS_DIR` and
+`PLYRA_FONTS_REQUIRED=1`, so desktop releases embed its Japanese fonts (the web build embeds none: see
 `docs/development.md` › Fonts) and fail rather than ship without them. The packages carry each font's licence as
 `OFL-<family>.txt` (`copy_font_licences` in `packaging/env.sh`; the portable zip on Windows;
 `Contents/Resources/Licenses` in the macOS app). Bump the pin deliberately, together with the one
@@ -91,7 +91,7 @@ in `ci.yml`. Build option: `docs/development.md` › Fonts.
 
 - `Info.plist` is generated from `Info.plist.in`. The bundle id is `ai.storyteller.fotodit`.
   The plist sets `LSMinimumSystemVersion` 11.0, `NSHighResolutionCapable`, and document types:
-  `.pcraft` (Owner), plus PSD/PSB and the image formats Fotodit reads (Alternate, so it never
+  `.plyra` (Owner), plus PSD/PSB and the image formats Fotodit reads (Alternate, so it never
   takes over Preview's defaults). The icon is `assets/app-icon/fotodit.icns`.
 - **Signing** goes inside-out with the hardened runtime and a secure timestamp. The executable
   is signed first, then the bundle. There's no `--deep` on the final signature. The
@@ -160,7 +160,7 @@ goes in `CARGO_TARGET_<TRIPLE>_RUSTFLAGS`, so host build scripts aren't affected
   wizard's "Everyone on this computer" option, or `msiexec ... ALLUSERS=1`, installs per-machine into
   `Program Files\Plyra\Fotodit` (`Program Files (x86)` for the 32-bit build). It installs an advertised Start Menu shortcut associated with the
   `FotoditExe` file component. Fotodit
-  becomes the default app for `.pcraft` and is listed under "Open with" for PSD/PSB and image
+  becomes the default app for `.plyra` and is listed under "Open with" for PSD/PSB and image
   files (in a per-user install those registrations and the `InstallDir` record live under
   HKCU instead of HKLM; the package's registry roots follow the context automatically). It also
   registers App Paths (Win+R `fotodit`). An install updates the copy registered in its own
@@ -213,7 +213,7 @@ Locally on Windows: `dotnet tool install -g wix --version 5.0.2`,
 
 `packaging/linux/package.sh` stages one FHS tree and makes every format from it. The tree
 holds both binaries, `ai.storyteller.fotodit.desktop`, hicolor icons from 16 px to 512 px
-plus a scalable SVG, AppStream metainfo, a shared-mime-info file for `.pcraft`, `.psb` and
+plus a scalable SVG, AppStream metainfo, a shared-mime-info file for `.plyra`, `.psb` and
 `.qoi`, and `fotodit-cli`'s man pages and bash, zsh and fish completions. The
 `man-and-completions` example, built with the binaries, writes those; a cross build runs it
 through `EMULATOR` and leaves them out without one. The zsh completion is in

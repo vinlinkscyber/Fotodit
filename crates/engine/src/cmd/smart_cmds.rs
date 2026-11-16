@@ -16,11 +16,11 @@
 //! The placed stage and the result after each filter are cached too (`stack_cache`), so a
 //! re-render starts from the deepest stage it shares with an earlier one.
 //!
-//! Converting a layer embeds it as an in-memory `.pcraft` bundle of a nested document (exactly
+//! Converting a layer embeds it as an in-memory `.plyra` bundle of a nested document (exactly
 //! lossless, layered, any depth/model). PSD placed layers keep their source in the preserved
 //! global `lnk2` block (found by uuid), and keep Photoshop's rendering until something changes,
 //! so an unedited PSD still round-trips byte for byte. PSD export (`fotodit_io::smart_map`)
-//! writes every smart object back as one: its source embedded in `lnk2` (a `.pcraft` source as a
+//! writes every smart object back as one: its source embedded in `lnk2` (a `.plyra` source as a
 //! PSB), its smart filters in `filterFX` and its filter mask in `FEid`.
 
 use std::sync::{Arc, Mutex};
@@ -63,12 +63,12 @@ fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
 
 // ---------- source encoding / decoding ----------
 
-/// Encodes a document as embedded smart-object contents: an in-memory `.pcraft` bundle.
+/// Encodes a document as embedded smart-object contents: an in-memory `.plyra` bundle.
 pub fn encode_source(doc: &Document) -> Result<Vec<u8>> {
     fotodit_format::save_to_bytes(doc, &Default::default()).map_err(|e| other(format!("can't encode smart object contents: {e}")))
 }
 
-/// Decodes smart-object contents (a `.pcraft` bundle, PSD/PSB, or any flat image format).
+/// Decodes smart-object contents (a `.plyra` bundle, PSD/PSB, or any flat image format).
 pub fn decode_source(file_name: &str, bytes: &[u8]) -> Result<Document> {
     if fotodit_io::svg::is_svg(bytes) {
         return fotodit_io::svg::import_svg_bounded_images(file_name, bytes, 24_000_000)

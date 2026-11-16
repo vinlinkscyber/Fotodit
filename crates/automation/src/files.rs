@@ -1,10 +1,10 @@
 //! File I/O shared by the MCP server and the CLI: open/save any supported
-//! format, with `.pcraft` (ZIP or directory bundle) handled natively.
+//! format, with `.plyra` (ZIP or directory bundle) handled natively.
 
 use std::path::Path;
 
 use fotodit_doc::Document;
-use fotodit_format::{PcraftWriter, SaveOptions};
+use fotodit_format::{PlyraWriter, SaveOptions};
 use fotodit_io::{BandRenderer, ExportOptions};
 
 use crate::AutomationError;
@@ -31,7 +31,7 @@ pub fn open_bytes_with_options(name: &str, bytes: &[u8], opts: &fotodit_io::Impo
     Ok(Opened { document: r.document, warnings: r.warnings, source_read_only: r.source_read_only })
 }
 
-/// Open a document from disk. Directory bundles and `.pcraft` ZIPs load
+/// Open a document from disk. Directory bundles and `.plyra` ZIPs load
 /// natively; everything else goes through `fotodit-io` (PSD, PNG, …).
 pub fn open(path: &Path) -> Result<Opened, AutomationError> {
     open_with_options(path, &fotodit_io::ImportOptions::default())
@@ -61,22 +61,22 @@ pub fn open_with_options(path: &Path, opts: &fotodit_io::ImportOptions) -> Resul
     }
 }
 
-/// Previews for a `.pcraft` bundle.
+/// Previews for a `.plyra` bundle.
 pub fn previews(doc: &Document) -> SaveOptions {
     SaveOptions { thumbnail: Some(fotodit_compose::thumbnail(doc, 256)), composite: Some(fotodit_compose::thumbnail(doc, 1024)), ..Default::default() }
 }
 
 /// [`previews`], plus the full-size composite when `opts` asks for it and it can be rendered
-/// ([`ExportOptions::pcraft_full_composite`]). Fails when a scratch tile of `doc` could not be
+/// ([`ExportOptions::plyra_full_composite`]). Fails when a scratch tile of `doc` could not be
 /// read while they were rendered: the previews may then hold placeholder pixels, and the
 /// bundle's own scratch checks only cover reads made after it starts.
 fn native_options(doc: &Document, opts: &ExportOptions) -> Result<SaveOptions, AutomationError> {
     doc.scratch_health().map_err(AutomationError::Io)?;
     let generation = fotodit_raster::spill::read_error_generation();
     let mut out = previews(doc);
-    if opts.pcraft_full_composite {
-        out.full_composite = fotodit_io::pcraft_full_composite(doc);
-        out.full_composite_icc = out.full_composite.as_ref().map(|_| fotodit_io::pcraft_full_composite_icc(doc));
+    if opts.plyra_full_composite {
+        out.full_composite = fotodit_io::plyra_full_composite(doc);
+        out.full_composite_icc = out.full_composite.as_ref().map(|_| fotodit_io::plyra_full_composite_icc(doc));
     }
     fotodit_raster::spill::check_since(generation).map_err(AutomationError::Io)?;
     doc.scratch_health().map_err(AutomationError::Io)?;
@@ -96,13 +96,13 @@ fn named_for_output(doc: &Document, path: &str) -> Document {
 
 /// Save or export `doc` to `path`, choosing the format from the extension
 /// (or `format_override`, an extension such as `"png"`). `writer` makes
-/// repeated `.pcraft` saves incremental. Returns warnings about lost data.
+/// repeated `.plyra` saves incremental. Returns warnings about lost data.
 pub fn save(
     doc: &Document,
     path: &Path,
     format_override: Option<&str>,
     opts: &ExportOptions,
-    writer: Option<&mut PcraftWriter>,
+    writer: Option<&mut PlyraWriter>,
 ) -> Result<Vec<String>, AutomationError> {
     save_with_renderer(doc, path, format_override, opts, writer, None)
 }
@@ -113,7 +113,7 @@ pub fn save_with_renderer(
     path: &Path,
     format_override: Option<&str>,
     opts: &ExportOptions,
-    writer: Option<&mut PcraftWriter>,
+    writer: Option<&mut PlyraWriter>,
     mut renderer: Option<&mut dyn BandRenderer>,
 ) -> Result<Vec<String>, AutomationError> {
     let mut kept = Vec::new();
@@ -137,7 +137,7 @@ pub fn save_with_renderer_keeping(
     path: &Path,
     format_override: Option<&str>,
     opts: &ExportOptions,
-    writer: Option<&mut PcraftWriter>,
+    writer: Option<&mut PlyraWriter>,
     renderer: Option<&mut dyn BandRenderer>,
     kept: &mut Vec<String>,
 ) -> Result<Vec<String>, AutomationError> {
@@ -147,12 +147,12 @@ pub fn save_with_renderer_keeping(
         .ok_or_else(|| AutomationError::BadRequest(format!("cannot tell the format of `{}`; pass a format", path.display())))?;
     if ext == fotodit_format::EXTENSION {
         let named = named_for_output(doc, &path.to_string_lossy());
-        let mut local = PcraftWriter::new();
+        let mut local = PlyraWriter::new();
         let w = writer.unwrap_or(&mut local);
         w.save_path(&named, path, &native_options(&named, opts)?)?;
         let mut warnings = Vec::new();
         if let Some(r) = renderer {
-            warnings.push("native .pcraft format uses CPU compositor for previews".into());
+            warnings.push("native .plyra format uses CPU compositor for previews".into());
             warnings.extend(r.drain_diagnostics());
         }
         return Ok(warnings);
@@ -174,7 +174,7 @@ pub fn save_with_renderer_keeping(
 }
 
 /// Encode a document for a capability-scoped write. Unlike [`save`], this
-/// never obtains ambient filesystem authority and emits `.pcraft` as a ZIP.
+/// never obtains ambient filesystem authority and emits `.plyra` as a ZIP.
 pub fn save_bytes(doc: &Document, name: &str, format_override: Option<&str>, opts: &ExportOptions) -> Result<(Vec<u8>, Vec<String>), AutomationError> {
     save_bytes_with_renderer(doc, name, format_override, opts, None)
 }
@@ -198,7 +198,7 @@ pub fn save_bytes_with_renderer(
         let bytes = fotodit_format::save_to_bytes(&named, &native_options(&named, opts)?)?;
         let mut warnings = Vec::new();
         if let Some(r) = renderer {
-            warnings.push("native .pcraft format uses CPU compositor for previews".into());
+            warnings.push("native .plyra format uses CPU compositor for previews".into());
             warnings.extend(r.drain_diagnostics());
         }
         return Ok((bytes, warnings));

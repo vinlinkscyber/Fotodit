@@ -63,10 +63,10 @@ mod ora;
 mod palette_map;
 pub use ora::losses as ora_losses;
 pub mod pattern_map;
-mod pcraft_cache;
+mod plyra_cache;
 pub mod pdf;
 mod pdn;
-pub use pcraft_cache::PcraftExportCache;
+pub use plyra_cache::PlyraExportCache;
 pub mod pixels;
 pub mod psd_budget;
 mod psd_export;
@@ -155,9 +155,9 @@ pub enum IoError {
     /// The requested conversion is not possible.
     #[error("unsupported: {0}")]
     Unsupported(String),
-    /// Native `.pcraft` bundle failure.
-    #[error("pcraft: {0}")]
-    Pcraft(#[from] fotodit_format::FormatError),
+    /// Native `.plyra` bundle failure.
+    #[error("plyra: {0}")]
+    Plyra(#[from] fotodit_format::FormatError),
     /// Camera raw decode failure.
     #[error("{0}")]
     Raw(#[from] fotodit_raw::RawError),
@@ -274,7 +274,7 @@ pub(crate) fn unequal_resolution_warning(x: f64, y: f64) -> Option<String> {
 }
 
 /// Warnings about a loaded document's layers that render without their stored effect, for
-/// sources that carry no import warnings of their own (a crafted `.pcraft`): a Color Lookup
+/// sources that carry no import warnings of their own (a crafted `.plyra`): a Color Lookup
 /// whose table can't be applied silently renders as the identity instead (#1763).
 pub fn open_warnings(doc: &Document) -> Vec<String> {
     let mut out = Vec::new();
@@ -373,7 +373,7 @@ impl From<ExportResult> for EncodedExport {
 }
 
 /// Which part of the document's XMP packet and free-form text a flat export embeds.
-/// PSD/PSB always keep XMP; `.pcraft` keeps both. Save As and conversions keep the whole packet, as
+/// PSD/PSB always keep XMP; `.plyra` keeps both. Save As and conversions keep the whole packet, as
 /// Photoshop's Save As does; Export As starts at `None`, because the packet lists the text of
 /// every type layer and one id per placed document (#647).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -408,7 +408,7 @@ pub struct ExportOptions {
     /// Batch saves. Other encoder losses retain their existing policies and warnings.
     pub preserve_alpha: bool,
     /// Which part of the document's XMP packet and free-form text a flat export embeds.
-    /// PSD/PSB always keep XMP; `.pcraft` keeps both. Everything by default, as Save As does;
+    /// PSD/PSB always keep XMP; `.plyra` keeps both. Everything by default, as Save As does;
     /// Export As offers None.
     pub xmp: XmpEmbed,
     /// Targa: bits per pixel of an RGB file. `None` writes 32 when the document has an alpha
@@ -425,15 +425,15 @@ pub struct ExportOptions {
     /// TIFF embed are resolved against ([`doc_path::resolve`]).
     pub document_path: Option<std::path::PathBuf>,
     /// Reuse one cache per open document for native saves; other formats ignore it.
-    pub pcraft_cache: Option<PcraftExportCache>,
+    pub plyra_cache: Option<PlyraExportCache>,
     /// PSD/PSB and layered TIFF: read and embed the files linked smart objects name (see
     /// [`PsdExportOptions::read_linked_files`]). On by default; automation turns it off.
     pub read_linked_files: bool,
-    /// `.pcraft`: request the flattened document at its canvas size as `composite/full.png`
-    /// (Preferences › File Handling › Save Full-Size Composite in .pcraft Files). The save may
+    /// `.plyra`: request the flattened document at its canvas size as `composite/full.png`
+    /// (Preferences › File Handling › Save Full-Size Composite in .plyra Files). The save may
     /// omit it; check the manifest's `full_composite` member ([`fotodit_format::read_full_composite`]
     /// reads it). Off by default.
-    pub pcraft_full_composite: bool,
+    pub plyra_full_composite: bool,
 }
 
 impl Default for ExportOptions {
@@ -449,9 +449,9 @@ impl Default for ExportOptions {
             image_previews: true,
             psd_maximize_compatibility: true,
             document_path: None,
-            pcraft_cache: None,
+            plyra_cache: None,
             read_linked_files: true,
-            pcraft_full_composite: false,
+            plyra_full_composite: false,
         }
     }
 }
@@ -513,7 +513,7 @@ pub enum ImportPreflight {
     /// A flat raster decoded into one image, bounded by
     /// [`ImportOptions::flat_max_pixel_bytes`].
     Flat,
-    /// Affinity, OpenRaster, Krita, XCF, PDN, SVG, camera raw and `.pcraft` files: this build has
+    /// Affinity, OpenRaster, Krita, XCF, PDN, SVG, camera raw and `.plyra` files: this build has
     /// no header-only estimate of their pixel memory before decoding.
     Unbounded,
 }
@@ -522,7 +522,7 @@ pub enum ImportPreflight {
 ///
 /// The order matches [`import_stages`]; keep the two in step.
 pub fn import_preflight(name: &str, bytes: &[u8]) -> ImportPreflight {
-    if has_extension(name, fotodit_format::EXTENSION) || fotodit_format::is_pcraft(bytes) {
+    if has_extension(name, fotodit_format::EXTENSION) || has_extension(name, fotodit_format::LEGACY_EXTENSION) || fotodit_format::is_plyra(bytes) {
         return ImportPreflight::Unbounded;
     }
     if is_psd(bytes) {
@@ -909,7 +909,7 @@ pub fn import_file(name: &str, path: &std::path::Path, opts: &ImportOptions, ctl
 /// The importer a file goes to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Route {
-    Pcraft,
+    Plyra,
     Psd,
     Affinity,
     Ora,
@@ -928,8 +928,8 @@ pub(crate) enum Route {
 /// Which importer takes the file `name` holding `bytes`. The checks run in this order.
 pub(crate) fn route(name: &str, bytes: &[u8]) -> Route {
     // A declared native extension must reach its loader so malformed bundles retain format errors.
-    if has_extension(name, fotodit_format::EXTENSION) || fotodit_format::is_pcraft(bytes) {
-        return Route::Pcraft;
+    if has_extension(name, fotodit_format::EXTENSION) || has_extension(name, fotodit_format::LEGACY_EXTENSION) || fotodit_format::is_plyra(bytes) {
+        return Route::Plyra;
     }
     // Magic first: an Affinity file renamed .psd is still Affinity (#5258 corpus
     // preview_never_saves_back_to_its_native_or_renamed_source).
@@ -976,7 +976,7 @@ pub(crate) fn route(name: &str, bytes: &[u8]) -> Route {
 /// flag alongside the ordinary best-effort import result.
 fn import_stages(name: &str, bytes: &[u8], ctl: &fotodit_raster::Interrupt, opts: &ImportOptions, damaged: &mut bool) -> Result<ImportResult, IoError> {
     match route(name, bytes) {
-        Route::Pcraft => {
+        Route::Plyra => {
             let document = fotodit_format::load_from_bytes(bytes)?;
             Ok(ImportResult { warnings: open_warnings(&document), document, source_read_only: false, preview_only: false })
         }
@@ -1014,9 +1014,9 @@ fn has_extension(name: &str, expected: &str) -> bool {
 }
 
 /// The document as it is written to `name` (a file name, path or bare extension): a copy whose
-/// name is that file's own, so a `.pcraft` manifest reports the file it lives in — the name the
+/// name is that file's own, so a `.plyra` manifest reports the file it lives in — the name the
 /// session adopts on the save that wrote it, and the name every other format gives the document
-/// when it is opened (#3312). A bare extension ("pcraft") names no file and changes nothing.
+/// when it is opened (#3312). A bare extension ("plyra") names no file and changes nothing.
 pub fn named_for_file<'a>(doc: &'a Document, name: &str) -> std::borrow::Cow<'a, Document> {
     let file = name.contains(['/', '\\', '.']).then(|| name.rsplit(['/', '\\']).next().unwrap_or(name));
     match file {
@@ -1111,14 +1111,14 @@ pub(crate) fn with_span<R>(ctl: &fotodit_raster::Interrupt, lo: f32, hi: f32, f:
     f(&fotodit_raster::Interrupt::new(&cancelled, &progress))
 }
 
-/// Where a .pcraft save's progress stands once its thumbnail, then its 1024 px composite preview,
-/// then its full-size composite when [`ExportOptions::pcraft_full_composite`] asks for one, are
+/// Where a .plyra save's progress stands once its thumbnail, then its 1024 px composite preview,
+/// then its full-size composite when [`ExportOptions::plyra_full_composite`] asks for one, are
 /// rendered (the bundle itself is written after them).
-const PCRAFT_THUMBNAIL_DONE: f32 = 0.15;
-const PCRAFT_PREVIEWS_DONE: f32 = 0.4;
-const PCRAFT_FULL_COMPOSITE_DONE: f32 = 0.6;
+const PLYRA_THUMBNAIL_DONE: f32 = 0.15;
+const PLYRA_PREVIEWS_DONE: f32 = 0.4;
+const PLYRA_FULL_COMPOSITE_DONE: f32 = 0.6;
 /// Bounds the optional full-size RGBA8 composite to 256 MiB before PNG and ZIP encoding.
-const PCRAFT_FULL_COMPOSITE_PIXELS: u64 = 1 << 26;
+const PLYRA_FULL_COMPOSITE_PIXELS: u64 = 1 << 26;
 /// The share of a PSD/PSB export spent converting the document (layers, then the composite)
 /// before its bytes are assembled: about 2.7 s of 3.0 s for a 24 MP, 5-layer RGB/8 document.
 const PSD_MODEL_DONE: f32 = 0.9;
@@ -1132,17 +1132,17 @@ fn export_stages_with_renderer(
 ) -> Result<EncodedExport, IoError> {
     let ext = extension(name_or_ext);
     if ext == "pdn" {
-        return Err(IoError::Unsupported("PDN is import-only; save as .pcraft to preserve all layers and blend modes".into()));
+        return Err(IoError::Unsupported("PDN is import-only; save as .plyra to preserve all layers and blend modes".into()));
     }
     if affinity::EXTENSIONS.contains(&ext.as_str()) {
-        return Err(IoError::Unsupported("Affinity export is not implemented; save a new PSD, PNG or .pcraft copy".into()));
+        return Err(IoError::Unsupported("Affinity export is not implemented; save a new PSD, PNG or .plyra copy".into()));
     }
     if kra::EXTENSIONS.contains(&ext.as_str()) {
-        return Err(IoError::Unsupported("Krita files are import-only; save as .ora to open the layers in Krita, or .pcraft to keep everything".into()));
+        return Err(IoError::Unsupported("Krita files are import-only; save as .ora to open the layers in Krita, or .plyra to keep everything".into()));
     }
     if ext == "xcf" {
         return Err(IoError::Unsupported(
-            "XCF is GIMP's own format and Fotodit only opens it; save as .pcraft to keep the layers, or export a flat image".into(),
+            "XCF is GIMP's own format and Fotodit only opens it; save as .plyra to keep the layers, or export a flat image".into(),
         ));
     }
     if ext == "ora" {
@@ -1165,19 +1165,19 @@ fn export_stages_with_renderer(
         let doc = named_for_file(doc, name_or_ext);
         let thumbnail = Some(fotodit_compose::thumbnail(doc.as_ref(), 256));
         ctl.check().map_err(|_| IoError::Cancelled)?;
-        ctl.progress(PCRAFT_THUMBNAIL_DONE);
+        ctl.progress(PLYRA_THUMBNAIL_DONE);
         let composite = Some(fotodit_compose::thumbnail(doc.as_ref(), 1024));
         ctl.check().map_err(|_| IoError::Cancelled)?;
-        ctl.progress(PCRAFT_PREVIEWS_DONE);
+        ctl.progress(PLYRA_PREVIEWS_DONE);
         let mut full_composite = None;
-        if opts.pcraft_full_composite {
-            full_composite = with_span(ctl, PCRAFT_PREVIEWS_DONE, PCRAFT_FULL_COMPOSITE_DONE, |ctl| pcraft_full_composite_with(doc.as_ref(), ctl))?;
+        if opts.plyra_full_composite {
+            full_composite = with_span(ctl, PLYRA_PREVIEWS_DONE, PLYRA_FULL_COMPOSITE_DONE, |ctl| plyra_full_composite_with(doc.as_ref(), ctl))?;
             ctl.check().map_err(|_| IoError::Cancelled)?;
-            ctl.progress(PCRAFT_FULL_COMPOSITE_DONE);
+            ctl.progress(PLYRA_FULL_COMPOSITE_DONE);
         }
-        let full_composite_icc = full_composite.as_ref().map(|_| pcraft_full_composite_icc(doc.as_ref()));
+        let full_composite_icc = full_composite.as_ref().map(|_| plyra_full_composite_icc(doc.as_ref()));
         let previews = fotodit_format::SaveOptions { thumbnail, composite, full_composite, full_composite_icc };
-        let bytes = match &opts.pcraft_cache {
+        let bytes = match &opts.plyra_cache {
             Some(cache) => cache.encode(doc.as_ref(), &previews)?,
             None => fotodit_format::save_to_bytes(doc.as_ref(), &previews)?,
         };
@@ -1232,17 +1232,17 @@ fn export_stages_with_renderer(
     flat::export_flat_with_renderer(doc, format, opts, ctl, renderer).map(EncodedExport::from)
 }
 
-/// The flattened document at its canvas size, in 8-bit RGBA like a `.pcraft` file's two previews,
+/// The flattened document at its canvas size, in 8-bit RGBA like a `.plyra` file's two previews,
 /// for the bundle's `composite/full.png`. `None` for a canvas past
 /// 2^26 pixels, or when its pixels cannot be allocated.
-pub fn pcraft_full_composite(doc: &Document) -> Option<fotodit_raster::Rgba8Image> {
-    pcraft_full_composite_with(doc, &fotodit_raster::Interrupt::NONE).ok().flatten()
+pub fn plyra_full_composite(doc: &Document) -> Option<fotodit_raster::Rgba8Image> {
+    plyra_full_composite_with(doc, &fotodit_raster::Interrupt::NONE).ok().flatten()
 }
 
-/// The ICC profile of [`pcraft_full_composite`]'s pixels: an RGB document's own profile as stored,
+/// The ICC profile of [`plyra_full_composite`]'s pixels: an RGB document's own profile as stored,
 /// a gray document's gray profile as RGB, and sRGB for CMYK, Lab and documents without a usable
 /// profile ([`psd_thumbnail::composite_profile`]).
-pub fn pcraft_full_composite_icc(doc: &Document) -> Vec<u8> {
+pub fn plyra_full_composite_icc(doc: &Document) -> Vec<u8> {
     let own = doc.icc_profile.as_ref().filter(|bytes| {
         doc.mode == fotodit_color::ColorMode::Rgb && fotodit_cms::Profile::parse(bytes).is_ok_and(|p| p.color_space == fotodit_cms::ColorSpace::Rgb)
     });
@@ -1252,11 +1252,11 @@ pub fn pcraft_full_composite_icc(doc: &Document) -> Vec<u8> {
     }
 }
 
-/// [`pcraft_full_composite`] rendered in bands: `ctl` gets the fraction of rows done, and a
+/// [`plyra_full_composite`] rendered in bands: `ctl` gets the fraction of rows done, and a
 /// cancelled render fails with [`IoError::Cancelled`].
-fn pcraft_full_composite_with(doc: &Document, ctl: &fotodit_raster::Interrupt) -> Result<Option<fotodit_raster::Rgba8Image>, IoError> {
+fn plyra_full_composite_with(doc: &Document, ctl: &fotodit_raster::Interrupt) -> Result<Option<fotodit_raster::Rgba8Image>, IoError> {
     let canvas = doc.bounds();
-    if canvas.is_empty() || u64::from(canvas.width()) * u64::from(canvas.height()) > PCRAFT_FULL_COMPOSITE_PIXELS {
+    if canvas.is_empty() || u64::from(canvas.width()) * u64::from(canvas.height()) > PLYRA_FULL_COMPOSITE_PIXELS {
         return Ok(None);
     }
     let Ok(len) = usize::try_from(u64::from(canvas.width()) * u64::from(canvas.height()) * 4) else { return Ok(None) };
@@ -1378,7 +1378,7 @@ mod tests {
         assert_eq!(import_preflight("x.tif", b"II*\0"), ImportPreflight::Tiff);
         assert_eq!(import_preflight("x.ora", b"PK\x03\x04"), ImportPreflight::Unbounded);
         assert_eq!(import_preflight("x.svg", b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>"), ImportPreflight::Unbounded);
-        assert_eq!(import_preflight("x.pcraft", b"PCF1"), ImportPreflight::Unbounded);
+        assert_eq!(import_preflight("x.plyra", b"PCF1"), ImportPreflight::Unbounded);
         assert_eq!(import_preflight("x.afphoto", b"Affinity"), ImportPreflight::Unbounded);
         // A Photoshop extension whose bytes are a readable flat image follows the image.
         assert_eq!(import_preflight("misnamed.psd", png), ImportPreflight::Flat);

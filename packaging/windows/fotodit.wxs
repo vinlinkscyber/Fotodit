@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
-  <?ifndef HasCraftFontLicences ?>
-  <?define HasCraftFontLicences=0 ?>
+  <?ifndef HasPlyraFontLicences ?>
+  <?define HasPlyraFontLicences=0 ?>
   <?endif?>
   <Package Name="Fotodit" Manufacturer="Plyra" Version="$(var.Version)" UpgradeCode="D9660F32-2D0A-4ABE-B73D-17BE25F1542C" Scope="perUserOrMachine" Compressed="yes" Language="1033">
     <SummaryInformation Description="Fotodit image editor" Manufacturer="Plyra" />
@@ -26,8 +26,8 @@
     <!-- An upgrade installs where the user put the previous version (written by FotoditApp). -->
 
     <Feature Id="Main" Title="Fotodit" Level="1">
-      <?if $(var.HasCraftFontLicences) = 1 ?>
-      <ComponentGroupRef Id="CraftFontLicences" />
+      <?if $(var.HasPlyraFontLicences) = 1 ?>
+      <ComponentGroupRef Id="PlyraFontLicences" />
       <?endif?>
       <ComponentGroupRef Id="FotoditFiles" />
     </Feature>
@@ -58,8 +58,8 @@
   </Package>
 
   <Fragment>
-    <?if $(var.HasCraftFontLicences) = 1 ?>
-    <ComponentGroup Id="CraftFontLicences" Directory="INSTALLFOLDER">
+    <?if $(var.HasPlyraFontLicences) = 1 ?>
+    <ComponentGroup Id="PlyraFontLicences" Directory="INSTALLFOLDER">
       <Files Include="$(var.DocsDir)\**" />
     </ComponentGroup>
     <?endif?>
@@ -69,9 +69,9 @@
           <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="Fotodit" Description="Fotodit image editor" WorkingDirectory="INSTALLFOLDER" Advertise="yes" Icon="FotoditIcon.exe" IconIndex="0" />
         </File>
 
-        <!-- .pcraft: Fotodit's own format; Fotodit is its default app. -->
+        <!-- .plyra: Fotodit's own format; Fotodit is its default app. -->
         <ProgId Id="Fotodit.Document" Description="Fotodit Document" Icon="FotoditExe" IconIndex="0">
-          <Extension Id="pcraft" ContentType="application/x-fotodit">
+          <Extension Id="plyra" ContentType="application/x-fotodit">
             <Verb Id="open" Command="Open" TargetFile="FotoditExe" Argument="&quot;%1&quot;" />
           </Extension>
         </ProgId>
@@ -104,7 +104,7 @@
         <!-- "Open with" app list and the Run dialog (Win+R "fotodit"). -->
         <RegistryValue Root="HKMU" Key="Software\Classes\Applications\fotodit.exe" Name="FriendlyAppName" Value="Fotodit" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\Applications\fotodit.exe\shell\open\command" Value="&quot;[#FotoditExe]&quot; &quot;%1&quot;" Type="string" />
-        <RegistryValue Root="HKMU" Key="Software\Classes\Applications\fotodit.exe\SupportedTypes" Name=".pcraft" Value="" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\Applications\fotodit.exe\SupportedTypes" Name=".plyra" Value="" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\Applications\fotodit.exe\SupportedTypes" Name=".psd" Value="" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\Applications\fotodit.exe\SupportedTypes" Name=".psb" Value="" Type="string" />
         <RegistryValue Root="HKMU" Key="Software\Classes\Applications\fotodit.exe\SupportedTypes" Name=".pdn" Value="" Type="string" />

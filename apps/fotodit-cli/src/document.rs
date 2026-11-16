@@ -179,7 +179,7 @@ mod missing_font_warning_tests {
         let family = "DefinitelyMissingFotoditTypeface1251";
         let folder = std::env::temp_dir().join(format!("fotodit-cli-font-warnings-{}", std::process::id()));
         std::fs::create_dir_all(&folder).unwrap();
-        let native = folder.join("missing.pcraft");
+        let native = folder.join("missing.plyra");
         let png = folder.join("missing.png");
         let native_str = native.to_string_lossy().to_string();
         let png_str = png.to_string_lossy().to_string();
@@ -230,7 +230,7 @@ mod missing_font_warning_tests {
         let folder = std::env::temp_dir().join(format!("fotodit-cli-ora-{}", std::process::id()));
         std::fs::create_dir_all(&folder).unwrap();
         let path = |name: &str| folder.join(name).to_string_lossy().to_string();
-        let (native, ora, png) = (path("layers.pcraft"), path("layers.ora"), path("back.png"));
+        let (native, ora, png) = (path("layers.plyra"), path("layers.ora"), path("back.png"));
         let Invoke { code, stderr, .. } = invoke(&["run", "--new", r#"{"width":16,"height":12}"#, "--cmd", "layer.new.layer", "--out", &native]);
         assert_eq!(code, 0, "{stderr}");
         let Invoke { code, stderr, .. } = invoke(&["convert", &native, &ora]);
@@ -254,7 +254,7 @@ mod missing_font_warning_tests {
     fn no_type_layers_do_not_produce_missing_font_warnings() {
         let folder = std::env::temp_dir().join(format!("fotodit-cli-no-font-warning-{}", std::process::id()));
         std::fs::create_dir_all(&folder).unwrap();
-        let native = folder.join("blank.pcraft");
+        let native = folder.join("blank.plyra");
         let png = folder.join("blank.png");
         let native_str = native.to_string_lossy().to_string();
         let png_str = png.to_string_lossy().to_string();

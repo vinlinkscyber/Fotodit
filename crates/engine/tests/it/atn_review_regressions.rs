@@ -227,16 +227,16 @@ fn calculations_targeted_gray_matches_explicit_gray() {
 #[test]
 fn named_batch_resolves_recorded_layer_targets() {
     let dir = tempfile::tempdir().unwrap();
-    let input = dir.path().join("layers.pcraft");
+    let input = dir.path().join("layers.plyra");
     let mut source = session("rgb");
     source.execute("layer.new.layer", json!({"name":"Target"})).unwrap();
     source.execute("layer.new.layer", json!({"name":"Active"})).unwrap();
     std::fs::write(&input, fotodit_format::save_to_bytes(&source.active().unwrap().doc, &Default::default()).unwrap()).unwrap();
     let mut s = Session::new();
     s.actions.list.push(Action::new("Hide", vec![("layer.setProps".into(), json!({"visible":false,"_actionLayer":{"name":"Target","ordinal":0}}))]));
-    let result = s.execute("file.automate.batch", json!({"input":[input],"output":dir.path().join("out"),"format":"pcraft","action":"Hide"})).unwrap();
+    let result = s.execute("file.automate.batch", json!({"input":[input],"output":dir.path().join("out"),"format":"plyra","action":"Hide"})).unwrap();
     assert_eq!(result["files"].as_array().unwrap().len(), 1, "{result}");
-    let saved = fotodit_io::import("saved.pcraft", &std::fs::read(dir.path().join("out/layers.pcraft")).unwrap()).unwrap().document;
+    let saved = fotodit_io::import("saved.plyra", &std::fs::read(dir.path().join("out/layers.plyra")).unwrap()).unwrap().document;
     assert!(!saved.walk().iter().find(|(_, _, l)| l.name == "Target").unwrap().2.visible);
     assert!(saved.walk().iter().find(|(_, _, l)| l.name == "Active").unwrap().2.visible);
 }

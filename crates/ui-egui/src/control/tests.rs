@@ -1644,16 +1644,16 @@ fn automation_confirming_a_file_writing_dialog_is_judged_as_its_file_command() {
 }
 
 #[test]
-fn app_open_opens_a_directory_pcraft_and_falls_back_for_the_zip_form() {
+fn app_open_opens_a_directory_plyra_and_falls_back_for_the_zip_form() {
     use fotodit_doc::Document;
     use serde_json::json;
     let services = crate::Services {
-        automation_open_pcraft: Some(Box::new(|path: &str| {
-            if path == "native.pcraft" {
+        automation_open_plyra: Some(Box::new(|path: &str| {
+            if path == "native.plyra" {
                 let name = path.rsplit('/').next().unwrap_or(path).to_string();
                 let doc = Document::new("Native", fotodit_doc::Size::new(16, 12), fotodit_doc::ColorMode::Rgb, fotodit_doc::SampleType::U8);
                 Ok(Some((name, doc)))
-            } else if path == "zipped.pcraft" {
+            } else if path == "zipped.plyra" {
                 Ok(None) // a regular file: the bytes path reads the zip form
             } else {
                 Err(format!("corrupt bundle: {path}"))
@@ -1663,7 +1663,7 @@ fn app_open_opens_a_directory_pcraft_and_falls_back_for_the_zip_form() {
             Ok((Document::new(name, fotodit_doc::Size::new(4, 4), fotodit_doc::ColorMode::Rgb, fotodit_doc::SampleType::U8), Vec::new()))
         })),
         automation_read: Some(Box::new(|path: &str| {
-            if path == "zipped.pcraft" {
+            if path == "zipped.plyra" {
                 Ok((path.rsplit('/').next().unwrap_or(path).to_string(), b"zip-bytes".to_vec()))
             } else {
                 Err(format!("no such path: {path}"))
@@ -1674,21 +1674,21 @@ fn app_open_opens_a_directory_pcraft_and_falls_back_for_the_zip_form() {
     let mut app = FotoditApp::new(fotodit_engine::Session::new(), services);
     let ctx = egui::Context::default();
 
-    let r = call(&mut app, &ctx, "app.open", json!({"path": "native.pcraft"}));
-    assert_eq!(r["result"], json!({"path": "native.pcraft", "name": "native.pcraft", "warnings": []}), "{r}");
+    let r = call(&mut app, &ctx, "app.open", json!({"path": "native.plyra"}));
+    assert_eq!(r["result"], json!({"path": "native.plyra", "name": "native.plyra", "warnings": []}), "{r}");
     assert_eq!(app.session.active().unwrap().doc.name, "Native");
-    assert_eq!(app.ui.recent_files, vec!["native.pcraft".to_string()], "the open is recorded in recent files");
+    assert_eq!(app.ui.recent_files, vec!["native.plyra".to_string()], "the open is recorded in recent files");
     assert_eq!(app.session.active().unwrap().path, None, "no save-back target: the automation writer replaces files, never directories");
     let r = call(&mut app, &ctx, "app.save", json!({}));
     assert!(r["error"].as_str().unwrap().contains("pass `path`"), "an in-place save is refused up front: {r}");
 
-    // The single-file form takes the bytes path through the same `.pcraft` extension.
-    let r = call(&mut app, &ctx, "app.open", json!({"path": "zipped.pcraft"}));
-    assert_eq!(r["result"]["name"], "zipped.pcraft", "{r}");
-    assert_eq!(app.session.active().unwrap().doc.name, "zipped.pcraft", "the import served the zip form");
+    // The single-file form takes the bytes path through the same `.plyra` extension.
+    let r = call(&mut app, &ctx, "app.open", json!({"path": "zipped.plyra"}));
+    assert_eq!(r["result"]["name"], "zipped.plyra", "{r}");
+    assert_eq!(app.session.active().unwrap().doc.name, "zipped.plyra", "the import served the zip form");
 
     // A real opener error propagates instead of being masked by the fallback.
-    let r = call(&mut app, &ctx, "app.open", json!({"path": "gone.pcraft"}));
+    let r = call(&mut app, &ctx, "app.open", json!({"path": "gone.plyra"}));
     assert!(r["error"].as_str().unwrap().contains("corrupt bundle"), "{r}");
 }
 
@@ -1855,7 +1855,7 @@ fn control_edits_nested_embedded_smart_objects_and_converts_an_explicit_target()
     app.session
         .edit("Nested fixture", |doc, _| {
             let LayerContent::Smart(sm) = &mut doc.layer_mut(smart).unwrap().content else { panic!("smart fixture") };
-            sm.source = SmartSource::Embedded { file_name: "product.pcraft".into(), bytes: Arc::new(nested) };
+            sm.source = SmartSource::Embedded { file_name: "product.plyra".into(), bytes: Arc::new(nested) };
             Ok(())
         })
         .unwrap();
@@ -1893,11 +1893,11 @@ fn control_edits_nested_embedded_smart_objects_and_converts_an_explicit_target()
         Ok(())
     }));
     app.services.write = Some(Box::new(|_, _| Err("ambient writer used".into())));
-    let r = call(&mut app, &ctx, "app.save", json!({"path": "out/template.pcraft"}));
+    let r = call(&mut app, &ctx, "app.save", json!({"path": "out/template.plyra"}));
     assert_eq!(r["ok"], true, "{r}");
     let written = written.borrow();
     assert_eq!(written.len(), 1);
-    assert_eq!(written[0].0, "out/template.pcraft");
+    assert_eq!(written[0].0, "out/template.plyra");
     let saved = fotodit_engine::smart_cmds::decode_source(&written[0].0, &written[0].1).unwrap();
     assert_eq!(fotodit_compose::flatten(&saved).px[0], [0.0, 0.0, 1.0, 1.0]);
 }
@@ -1908,7 +1908,7 @@ fn control_refuses_linked_smart_objects_in_commands_and_actions_but_local_editin
     use std::sync::Arc;
 
     let (mut app, ctx, smart) = smart_control_app();
-    let path = std::env::temp_dir().join(format!("pc-control-smart-linked-{}.pcraft", std::process::id()));
+    let path = std::env::temp_dir().join(format!("pc-control-smart-linked-{}.plyra", std::process::id()));
     let st = app.session.active().unwrap();
     let LayerContent::Smart(sm) = &st.doc.layer(smart).unwrap().content else { panic!("smart fixture") };
     let SmartSource::Embedded { bytes, .. } = &sm.source else { panic!("embedded fixture") };

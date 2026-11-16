@@ -100,7 +100,7 @@ the two distinct I pairs. Executed on Windows x64 with Rust 1.99.1/MSVC:
 On 2026-11-05 the six Azerbaijani regressions, 40 i18n unit checks, formatting, Clippy,
 layering, wasm and snapshot build passed. Editor/preferences CPU captures were visually
 inspected. The complete i18n subset had 61 passed and eight CJK/Arabic missing-glyph failures
-without the optional craft-fonts input. The full UI unit/integration processes exited
+without the optional plyra-fonts input. The full UI unit/integration processes exited
 `0xc0000005` (`STATUS_ACCESS_VIOLATION`) even with one test thread. These are historical
 results, not a successful full-suite validation of the current revision. Native-speaker
 review remains pending. CPU captures do not establish hardware-GPU or native window/input acceptance.

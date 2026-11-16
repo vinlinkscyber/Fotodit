@@ -224,7 +224,7 @@ fn gpu_zoom_animation_reuses_the_document_composite() {
     h.step();
     let id = h.state().session.documents()[0].doc.id;
     assert!(h.state().canvases[&(id, crate::canvas::GPU_OUTPUT)].on_gpu);
-    let directory = std::env::var_os("CRAFT_UI_ZOOM_FIXTURES").map(std::path::PathBuf::from);
+    let directory = std::env::var_os("PLYRA_UI_ZOOM_FIXTURES").map(std::path::PathBuf::from);
     if let Some(directory) = &directory {
         std::fs::create_dir_all(directory).unwrap();
     }

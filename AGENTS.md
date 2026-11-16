@@ -22,13 +22,13 @@ These apply in every Craft repository. A later rule may be stricter, not weaker.
 <!-- craft-house-rules:start rust source=dde09ea31e2e457f5b4653a6e76f7cdf55944bdf sha256=387e0ccb4b49e567f60951d7d6fff7305054c89f43ad812b9993dc7c38528013 -->
 ## Rust Craft repositories
 
-These apply to native Craft apps and to shared Rust libraries. Select them by repository type. A repository that merely contains some Rust does not take this block. Rules later in a repository's file may be stricter, but not weaker. The source is `standards/house-rules-rust.md` in [plyra/craft-contrib](https://github.com/plyra/craft-contrib).
+These apply to native Craft apps and to shared Rust libraries. Select them by repository type. A repository that merely contains some Rust does not take this block. Rules later in a repository's file may be stricter, but not weaker. The source is `standards/house-rules-rust.md` in plyra/craft-contrib.
 
 1. **Never crash.** Non-test code does not panic and has no `unsafe`, except where the repository file names an exception. Return errors, treat input as hostile, and bound recursion and allocations. New production crate roots copy the `deny` attribute from an existing crate: `clippy::unwrap_used`, `clippy::expect_used`, `clippy::panic`, `clippy::unimplemented`, `clippy::todo`, `clippy::unreachable`. Every crash fix comes with a test that panicked before the fix.
 2. **Clean room.** Learn from observed behaviour and public specifications. Do not copy another product's code, assets, strings or artwork. Check a dependency's licence before adding it.
-3. **Assets and fonts.** Every asset is original or suitably licensed, and is recorded in `ATTRIBUTION.md` in the same change. Font files live in [plyra/craft-fonts](https://github.com/plyra/craft-fonts), not in the app repository.
+3. **Assets and fonts.** Every asset is original or suitably licensed, and is recorded in `ATTRIBUTION.md` in the same change. Font files live in plyra/plyra-fonts, not in the app repository.
 4. **Rust only for native Craft apps.** No handwritten JavaScript or TypeScript, and no Tauri, Electron or webview shell, in those apps. Shared tooling follows its documented technical scope and maintainer-approved exceptions. Craft PR Review's existing Tauri and TypeScript UI is one such exception. It does not relax this rule for native apps. Preserve any existing web build.
-5. **Time goes through `chrono`.** Do not hand-roll calendar conversion. For dates beyond what `chrono` can represent, follow [standards/time.md](https://github.com/plyra/craft-contrib/blob/main/standards/time.md).
+5. **Time goes through `chrono`.** Do not hand-roll calendar conversion. For dates beyond what `chrono` can represent, follow standards/time.md.
 6. **Contributor credits.** Add or edit only your own person's entry in `contributors/people.toml`, and only after asking them. Never guess a name or hand-edit `contributors.json`.
 
 ## Licence allowlist
@@ -53,7 +53,7 @@ Dependencies and assets use SPDX identifiers. An expression is allowed when ever
 
 # AGENTS.md: guide for AI agents and contributors
 
-Fotodit is an open-source, native, Photoshop-comparable image editor written in **Rust only** (no JavaScript or TypeScript). **No Tauri, Electron or webview shells:** the desktop app is native egui/eframe on wgpu, and the web build is the same Rust compiled to WebAssembly (trunk + wasm-bindgen). Never add Tauri (or any webview/JS UI framework) as a dependency, build step or packaging target. The product name is always written **Fotodit** (`{Function}Craft` in PascalCase, like its siblings Plyra, ArtCraftX, DesignCraft, VectorCraft, EffectCraft, FilmCraft, LightCraft, PdfCraft) in user-facing text: UI, window titles, About, installers, release names, docs prose. Machine names stay lowercase: crates (`fotodit-*`), binaries, file names, ids (`ai.storyteller.fotodit`). Shared Rust components live in [plyra/craft-libs](https://github.com/plyra/craft-libs) and are pinned by immutable git revision. UI libraries stay at L6. The goal is 1:1 Photoshop parity (same menus, shortcuts, behaviour and file fidelity) with better performance, and every feature drivable by agents. Read this file first, then `docs/`.
+Fotodit is an open-source, native, Photoshop-comparable image editor written in **Rust only** (no JavaScript or TypeScript). **No Tauri, Electron or webview shells:** the desktop app is native egui/eframe on wgpu, and the web build is the same Rust compiled to WebAssembly (trunk + wasm-bindgen). Never add Tauri (or any webview/JS UI framework) as a dependency, build step or packaging target. The product name is always written **Fotodit** (`{Function}Craft` in PascalCase, like its siblings Plyra, ArtCraftX, DesignCraft, VectorCraft, EffectCraft, FilmCraft, LightCraft, PdfCraft) in user-facing text: UI, window titles, About, installers, release names, docs prose. Machine names stay lowercase: crates (`fotodit-*`), binaries, file names, ids (`ai.storyteller.fotodit`). Shared Rust components live in plyra/craft-libs and are pinned by immutable git revision. UI libraries stay at L6. The goal is 1:1 Photoshop parity (same menus, shortcuts, behaviour and file fidelity) with better performance, and every feature drivable by agents. Read this file first, then `docs/`.
 
 ## 1. Orientation (5 minutes)
 
@@ -83,7 +83,7 @@ crates/
   tablet                     L0 standalone pen tablet input (macOS AppKit, X11 XInput2, Windows barrel button); the one isolated unsafe crate
   doc                        L1 document model (layers, masks, adjustments, effects, smart objects: pure data)
   ops paint algo text vector L2 history, brush engine, imaging algorithms, type engine, paths/shapes
-  compose gpu format         L3 CPU compositor (the oracle), wgpu compositor, .pcraft native format
+  compose gpu format         L3 CPU compositor (the oracle), wgpu compositor, .plyra native format
   io plugins                 L4 document <-> PSD / flat formats; sandboxed WebAssembly plug-ins
   engine                     L5 Session + command registry (every action is a command)
   ui-egui automation         L6 egui shell (thin: all actions go through the engine); MCP server
@@ -115,7 +115,7 @@ People trust Fotodit with their work, and a crash loses it. A malformed file, a 
 
 1. **Everything is a command.** New user-visible behaviour = a command in the engine (`crates/engine/src/*_cmds.rs`, registered in `commands.rs`) with id, label, menu path, shortcut, params doc, `enabled` and `run`, plus tests. The UI, CLI, control channel and MCP all dispatch commands by id. Use the **exact id from `crates/ui-egui/src/menu_catalog.rs`** and the menu item goes live automatically. Only pure view/window state (zoom, panels, screen mode) belongs to the shell (`menus.rs` `UI_COMMANDS`).
 2. **No format or colour assumptions.** Bit depth (8/16/32f) and colour model (RGB/Gray/CMYK/Lab…) are runtime data. Never introduce a `u8`-only pixel path in public APIs. Never assume sRGB: colour conversions go through `fotodit-cms` (`Transform`, `transform::cached`). Test at several depths.
-3. **Clean-room.** We studied Photoshop and other proprietary editors for *behaviour and look only*. Never copy their code, shaders, profiles or assets. Implement from public specs (Adobe PSD spec, ICC, ISO 32000 blend modes, papers) and observation. Third-party assets must be permissively licensed, keep their license file next to them, and get a row in `ATTRIBUTION.md` (path, title, author, source, license) in the same change; so do original assets. The Plyra logos in `docs/brand/` are not open source (`docs/brand/LICENSE-brand.txt`). **Never commit font files:** fonts live in [plyra/craft-fonts](https://github.com/plyra/craft-fonts). Fotodit uses it through the optional build input `CRAFT_FONTS_DIR=<craft-fonts checkout>` (read by `crates/text/build.rs`, exposed as `fotodit_text::CRAFT_FONTS`; empty without it, and everything must still work). Build with it: `CRAFT_FONTS_DIR="$PWD/../craft-fonts" cargo build`; details in `docs/development.md` › Fonts.
+3. **Clean-room.** We studied Photoshop and other proprietary editors for *behaviour and look only*. Never copy their code, shaders, profiles or assets. Implement from public specs (Adobe PSD spec, ICC, ISO 32000 blend modes, papers) and observation. Third-party assets must be permissively licensed, keep their license file next to them, and get a row in `ATTRIBUTION.md` (path, title, author, source, license) in the same change; so do original assets. The Plyra logos in `docs/brand/` are not open source (`docs/brand/LICENSE-brand.txt`). **Never commit font files:** fonts live in plyra/plyra-fonts. Fotodit uses it through the optional build input `PLYRA_FONTS_DIR=<plyra-fonts checkout>` (read by `crates/text/build.rs`, exposed as `fotodit_text::PLYRA_FONTS`; empty without it, and everything must still work). Build with it: `PLYRA_FONTS_DIR="$PWD/../plyra-fonts" cargo build`; details in `docs/development.md` › Fonts.
 4. **Tests are the gate.** Every change comes with tests. Format crates use round-trip, synthetic-generator, oracle and fuzz tests. Keep the PSD corpus results and the parity floor (`crates/ui-egui/src/parity.rs`) from regressing.
 5. **The UI is thin and data-driven.** UI state lives in `ui-egui/src/state.rs` (serde), so the control channel can read and drive it. Colours and radii come from `theme::Tokens`, never hard-coded.
 6. **Verify UI changes visually.** Render offscreen with `cargo run -p fotodit-ui-egui --example snapshot` (no window, no focus stealing), or launch with `--control` and take `ui.screenshot`. Look at the PNG. Demo images must be public-domain art, never personal photos. When fetching assets, never put a person's name, email or other personal details in requests (User-Agent, headers, URLs); use a generic `Fotodit-dev` User-Agent.
@@ -188,7 +188,7 @@ Then append a terse entry to `log/devlog.md` (what landed, numbers, what's still
 ## 8. Keeping the native format complete
 
 `fotodit-format` deliberately fails to compile when a `fotodit-doc` struct gains a field, so
-nothing is silently dropped from `.pcraft` saves. When you add a doc field, add it to
+nothing is silently dropped from `.plyra` saves. When you add a doc field, add it to
 `crates/format/src/manifest.rs` and `convert.rs` with `#[serde(default)]` so older files still load.
 If the field has a PSD equivalent, map it in `crates/io` too, and keep unknown PSD blocks verbatim.
 
@@ -208,6 +208,6 @@ If the field has a PSD equivalent, map it in `crates/io` too, and keep unknown P
   GitHub profiles). Never hand-edit `contributors.json`.
 
 ## CI workflows
-- Workflows in `.github/workflows/` call the shared workflows in [`plyra/craft-common-actions`](https://github.com/plyra/craft-common-actions) at `@main`, with their inputs and secrets. No other jobs: if no shared workflow does what's needed, it doesn't go here.
+- Workflows in `.github/workflows/` call the shared workflows in `plyra/craft-common-actions` at `@main`, with their inputs and secrets. No other jobs: if no shared workflow does what's needed, it doesn't go here.
 - Don't add or change CI in a feature or fix PR. If the existing workflows can't build or test a change, link an existing craft-common-actions issue or PR, or open a new issue, or a PR only for a small fix that is safe for every app and does not increase CI time.
 - Some workflow files here still run their own jobs. Don't add to them. Moving a job into craft-common-actions is its own task, never part of another PR, and the job stays here until a shared workflow runs it.

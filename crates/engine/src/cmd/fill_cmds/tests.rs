@@ -216,7 +216,7 @@ fn bad_params_are_errors() {
 }
 
 /// A session whose canvas is `size` and whose selection is the given (sparse) rectangles, as
-/// a loaded `.pcraft` can declare (#963): the canvas size is not capped on load and the
+/// a loaded `.plyra` can declare (#963): the canvas size is not capped on load and the
 /// selection tiles can lie far apart. Nothing here allocates more than a few tiles.
 fn huge_selection(size: (u32, u32), rects: &[Rect]) -> Session {
     let mut s = session();

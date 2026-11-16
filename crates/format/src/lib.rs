@@ -1,6 +1,6 @@
 //! # fotodit-format
 //!
-//! The native, lossless `.pcraft` document bundle (architecture §9).
+//! The native, lossless `.plyra` document bundle (architecture §9).
 //!
 //! ```text
 //! manifest.json            versioned document tree (see [`manifest`])
@@ -13,7 +13,7 @@
 //! ```
 //!
 //! A bundle is either a ZIP archive (STORE entries) or a directory with the
-//! same layout. Saving is incremental: [`PcraftWriter`] remembers what it
+//! same layout. Saving is incremental: [`PlyraWriter`] remembers what it
 //! already compressed/wrote, so only new tiles are encoded. Directory saves
 //! verify existing content-addressed objects once per writer and folder,
 //! rechecking files whose size or modification time changes; they replace
@@ -48,22 +48,24 @@ pub use autosave::{Autosaver, RecoveryEntry, discard_recovery, list_recovery, re
 pub use convert::MAX_GROUP_DEPTH;
 pub use manifest::{FORMAT_VERSION, Manifest};
 pub use read::{read_file, read_file_limited};
-pub use store::{ByteSource, DEFAULT_REVERIFY_BUDGET, PcraftWriter, SaveStats, read_entry};
+pub use store::{ByteSource, DEFAULT_REVERIFY_BUDGET, PlyraWriter, SaveStats, read_entry};
 
 /// File extension of the native format.
-pub use craft_pcraft_format::EXTENSION;
+pub const EXTENSION: &str = "plyra";
+/// The extension native saves carried before the rename; still accepted on open.
+pub const LEGACY_EXTENSION: &str = "pcraft";
 
 #[derive(Debug, thiserror::Error)]
 pub enum FormatError {
-    #[error("corrupt .pcraft bundle: {0}")]
+    #[error("corrupt .plyra bundle: {0}")]
     Corrupt(String),
-    #[error("unsupported .pcraft feature: {0}")]
+    #[error("unsupported .plyra feature: {0}")]
     Unsupported(String),
     #[error("bundle written by a newer version (format {found}, this build reads up to {supported})")]
     TooNew { found: u32, supported: u32 },
     #[error("limit exceeded: {0}")]
     LimitExceeded(String),
-    #[error("`{path}` is NaN or infinite, which a .pcraft manifest cannot hold; reset that value and save again")]
+    #[error("`{path}` is NaN or infinite, which a .plyra manifest cannot hold; reset that value and save again")]
     NonFinite { path: String },
     #[error("I/O: {0}")]
     Io(#[from] std::io::Error),
@@ -99,7 +101,7 @@ pub type Result<T> = std::result::Result<T, FormatError>;
 pub struct SaveOptions {
     pub thumbnail: Option<Rgba8Image>,
     pub composite: Option<Rgba8Image>,
-    /// The flattened document at its canvas size, for other apps that read `.pcraft` files. A ZIP
+    /// The flattened document at its canvas size, for other apps that read `.plyra` files. A ZIP
     /// save leaves it out when it would take the archive past 4 GiB or 65,535 entries, and every
     /// save leaves it out when it cannot be encoded.
     pub full_composite: Option<Rgba8Image>,
@@ -171,7 +173,7 @@ impl Default for LoadOptions {
 /// `true` when ZIP bytes contain a `manifest.json` entry.
 ///
 /// Bundles written here place the manifest first; re-zipped bundles may reorder entries.
-pub fn is_pcraft(bytes: &[u8]) -> bool {
+pub fn is_plyra(bytes: &[u8]) -> bool {
     if !bytes.starts_with(b"PK\x03\x04") {
         return false;
     }
@@ -184,10 +186,10 @@ pub fn is_pcraft(bytes: &[u8]) -> bool {
     zip::ZipReader::new(bytes).is_ok_and(|archive| archive.find("manifest.json").is_some())
 }
 
-/// Save to an in-memory ZIP bundle (one-shot; use [`PcraftWriter`] for
+/// Save to an in-memory ZIP bundle (one-shot; use [`PlyraWriter`] for
 /// incremental saves).
 pub fn save_to_bytes(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>> {
-    PcraftWriter::new().save_zip(doc, opts).map(|(b, _)| b)
+    PlyraWriter::new().save_zip(doc, opts).map(|(b, _)| b)
 }
 
 /// Load a ZIP bundle from memory.

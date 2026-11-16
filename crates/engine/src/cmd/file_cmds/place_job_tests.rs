@@ -247,14 +247,14 @@ fn a_canvas_too_large_to_flatten_is_refused_as_before() {
     let bytes = fotodit_format::save_to_bytes(&huge, &Default::default()).unwrap();
     let mut s = session(100, 100, 8);
     let before = steps(&s);
-    match place_bytes(&mut s, "huge.pcraft", bytes.clone(), None, &json!({})) {
+    match place_bytes(&mut s, "huge.plyra", bytes.clone(), None, &json!({})) {
         Err(EngineError::BadParams { cmd, msg }) => {
             assert_eq!(cmd, "file.placeEmbedded");
             assert_eq!(msg, "the document's 40000×30000 canvas is too large to flatten");
         }
         other => panic!("{other:?}"),
     }
-    let id = job(s.start_place_bytes("huge.pcraft", bytes, None, json!({})).unwrap());
+    let id = job(s.start_place_bytes("huge.plyra", bytes, None, json!({})).unwrap());
     let e = wait_event(&mut s, id);
     let JobOutcome::Failed(err) = &e.outcome else { panic!("{e:?}") };
     assert!(err.contains("40000×30000 canvas is too large to flatten"), "{err}");
@@ -578,7 +578,7 @@ fn the_flatten_size_error_names_the_place_command() {
     let mut s = session(100, 100, 8);
     s.set_cooperative_jobs(true);
     s.set_job_step_budget(Duration::ZERO);
-    let id = job(s.start_place_bytes("huge.pcraft", bytes, Some("huge.pcraft".into()), json!({})).unwrap());
+    let id = job(s.start_place_bytes("huge.plyra", bytes, Some("huge.plyra".into()), json!({})).unwrap());
     let (e, _) = poll_to_end(&mut s, id);
     let JobOutcome::Failed(err) = &e.outcome else { panic!("{e:?}") };
     assert!(err.contains("file.placeLinked"), "{err}");

@@ -5,7 +5,7 @@ order: 10
 verified: 0.8.2
 ---
 
-The easiest way is the [Fotodit page on getPlyra.com](https://getPlyra.com/apps/Fotodit). You can also install it with [Plyra Launcher](https://getPlyra.com/docs/craft-launcher/guides/install-and-update-apps), which lists Fotodit. For a specific build or file format, take it from the [latest release](https://github.com/plyra/Fotodit/releases/latest) on GitHub. In the file names below, `<version>` stands for the version number, for example `0.8.2`.
+The easiest way is the [Fotodit page on getPlyra.com](https://getPlyra.com/apps/Fotodit). You can also install it with Plyra Launcher, which lists Fotodit. For a specific build or file format, take it from the [latest release](https://github.com/plyra/Fotodit/releases/latest) on GitHub. In the file names below, `<version>` stands for the version number, for example `0.8.2`.
 
 ## Windows
 

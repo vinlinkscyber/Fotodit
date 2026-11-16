@@ -26,8 +26,8 @@ fn real_pdn_layers_and_native_saves() {
     for path in &paths {
         let doc = fotodit_io::import(&path.to_string_lossy(), &std::fs::read(path).unwrap()).unwrap_or_else(|e| panic!("{}: {e}", path.display())).document;
         let flat = fotodit_compose::flatten(&doc);
-        let native = fotodit_io::export(&doc, "copy.pcraft", &Default::default()).unwrap();
-        let back = fotodit_io::import("copy.pcraft", &native.bytes).unwrap().document;
+        let native = fotodit_io::export(&doc, "copy.plyra", &Default::default()).unwrap();
+        let back = fotodit_io::import("copy.plyra", &native.bytes).unwrap().document;
         assert_eq!(doc.layers, back.layers, "{}", path.display());
         assert_eq!(flat.px, fotodit_compose::flatten(&back).px);
         let png = path.with_extension("png");

@@ -188,7 +188,7 @@ static KEPT_LOCKS: std::sync::Mutex<Vec<std::fs::File>> = std::sync::Mutex::new(
 /// The move itself, under the migration lock. First, what a process that ended mid-move left is
 /// tidied: originals it set aside are put back, copies it staged are removed. An empty `legacy`
 /// is then just removed. Otherwise the whole folder moves if `dir` doesn't exist yet; when both
-/// exist, each autosave (`<key>.pcraft` bundle and `<key>.json` sidecar, see
+/// exist, each autosave (`<key>.plyra` bundle and `<key>.json` sidecar, see
 /// `fotodit_format::autosave`) moves as a whole, bundle first, unless `dir` already has either
 /// part, and one that stays is left in `legacy` untouched. Every move is a [`move_path`].
 fn adopt_locked(legacy: &Path, dir: &Path) -> PathBuf {
@@ -242,9 +242,9 @@ fn adopt_locked(legacy: &Path, dir: &Path) -> PathBuf {
 fn move_entries(from: &Path, to: &Path) {
     let Ok(entries) = std::fs::read_dir(from) else { return };
     let names: Vec<String> = entries.flatten().filter_map(|e| e.file_name().to_str().map(str::to_owned)).collect();
-    let keys: std::collections::BTreeSet<&str> = names.iter().filter_map(|n| n.strip_suffix(".pcraft").or_else(|| n.strip_suffix(".json"))).collect();
+    let keys: std::collections::BTreeSet<&str> = names.iter().filter_map(|n| n.strip_suffix(".plyra").or_else(|| n.strip_suffix(".pcraft")).or_else(|| n.strip_suffix(".json"))).collect();
     for key in keys {
-        let parts = [format!("{key}.pcraft"), format!("{key}.json")];
+        let parts = [format!("{key}.plyra"), format!("{key}.json")];
         if parts.iter().any(|p| std::fs::symlink_metadata(to.join(p)).is_ok()) {
             continue;
         }

@@ -98,11 +98,11 @@ $Docs = Join-Path $Stage 'font-licences'
 New-Item -ItemType Directory -Force -Path $Docs | Out-Null
 # The existing MSI document group also carries notices for bundled egui font inputs.
 Get-Item -LiteralPath (Join-Path $Root 'NOTICE'), (Join-Path $Root 'ATTRIBUTION.md') -ErrorAction SilentlyContinue | Copy-Item -Destination $Docs
-$HasCraftFontLicences = 1
-if ($env:CRAFT_FONTS_DIR) {
-  foreach ($ofl in Get-ChildItem -Path (Join-Path $env:CRAFT_FONTS_DIR 'fonts\*\OFL.txt') -File -ErrorAction SilentlyContinue) {
+$HasPlyraFontLicences = 1
+if ($env:PLYRA_FONTS_DIR) {
+  foreach ($ofl in Get-ChildItem -Path (Join-Path $env:PLYRA_FONTS_DIR 'fonts\*\OFL.txt') -File -ErrorAction SilentlyContinue) {
     Copy-Item -LiteralPath $ofl.FullName -Destination (Join-Path $Docs "OFL-$($ofl.Directory.Name).txt")
-    $HasCraftFontLicences = 1
+    $HasPlyraFontLicences = 1
   }
 }
 # ---- end font notices for the MSI --------------------------------------------------------------
@@ -153,7 +153,7 @@ Invoke-Native 'wix build' {
     -culture en-US -loc (Join-Path $PSScriptRoot 'fotodit.en-us.wxl') `
     -d "Version=$MsiVersion" -d "DisplayVersion=$Version" -d "BinDir=$Stage" -d "IconPath=$(Join-Path $Root 'assets\app-icon\fotodit.ico')" `
     -d "BannerBmp=$Banner" -d "DialogBmp=$Dialog" `
-    -d "DocsDir=$Docs" -d "HasCraftFontLicences=$HasCraftFontLicences" `
+    -d "DocsDir=$Docs" -d "HasPlyraFontLicences=$HasPlyraFontLicences" `
     -o $Msi
 }
 Invoke-Native 'MSI shortcut icon validation (ICE50)' {
@@ -175,10 +175,10 @@ foreach ($f in 'README.md', 'LICENSE', 'LICENSE-MIT', 'LICENSE-APACHE', 'NOTICE'
   $p = Join-Path $Root $f
   if (Test-Path $p) { Copy-Item $p $Portable }
 }
-# Builds made with craft-fonts (CRAFT_FONTS_DIR, all official releases) embed its OFL-1.1 fonts:
+# Builds made with plyra-fonts (PLYRA_FONTS_DIR, all official releases) embed its OFL-1.1 fonts:
 # ship each font's licence as OFL-<family-dir>.txt.
-if ($env:CRAFT_FONTS_DIR) {
-  Get-ChildItem -Path (Join-Path $env:CRAFT_FONTS_DIR 'fonts') -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+if ($env:PLYRA_FONTS_DIR) {
+  Get-ChildItem -Path (Join-Path $env:PLYRA_FONTS_DIR 'fonts') -Directory -ErrorAction SilentlyContinue | ForEach-Object {
     $lic = Join-Path $_.FullName 'OFL.txt'
     if (Test-Path $lic) { Copy-Item $lic (Join-Path $Portable "OFL-$($_.Name).txt") }
   }

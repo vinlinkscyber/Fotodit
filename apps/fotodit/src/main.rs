@@ -160,7 +160,7 @@ fn native_options(custom_titlebar: bool) -> eframe::NativeOptions {
             .with_titlebar_shown(false)
             .with_title_shown(false),
         centered: true,
-        // Fotodit owns its fallback fonts (`cjk_fonts`, craft-fonts): eframe's system-font
+        // Fotodit owns its fallback fonts (`cjk_fonts`, plyra-fonts): eframe's system-font
         // provider would compete with it and make glyph choice machine-dependent (#8512).
         system_font_fallback: false,
         // eframe saves native window geometry and egui panel/window sizes on exit.

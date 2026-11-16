@@ -62,7 +62,7 @@ fn ordinary_layered_svg_contents_replace_and_convert_to_layers() {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 1920, "height": 1080})).unwrap();
     crate::file_cmds::place_bytes(&mut s, "Layout.svg", svg.clone().into_bytes(), None, &json!({"smartObject": true})).unwrap();
-    let dir = std::env::temp_dir().join(format!("pcraft-svg-layout-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("plyra-svg-layout-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("Layout 2.svg");
     std::fs::write(&path, svg.replace("#336699", "#993366")).unwrap();
@@ -156,7 +156,7 @@ fn svg_smart_render_cache_tracks_destination_profile_and_transform() {
         assert!((warped.pixel(10, 8)[0] - corrected.pixel(3, 3)[0]).abs() < 0.01, "warp must keep corrected colours");
         linear.layers = vec![Layer::new("Saved SVG", LayerContent::Smart(smart.clone()))];
         let saved = encode_source(&linear).unwrap();
-        let reopened = decode_source("saved.pcraft", &saved).unwrap();
+        let reopened = decode_source("saved.plyra", &saved).unwrap();
         let LayerContent::Smart(restored) = &reopened.layers[0].content else { panic!("smart object lost on save") };
         assert_eq!(restored.source, smart.source);
         assert_eq!(restored.transform, smart.transform);

@@ -1,7 +1,7 @@
 //! Layer › Video Layers (and Rasterize › Video). A video layer holds a stack of frames; the
 //! layer's displayed raster content is the frame at the timeline playhead, kept in sync by [`sync`]
 //! after any edit or navigation. Paint, fills and filters edit that displayed content, so [`store`]
-//! writes it back into the playhead's frame before anything re-syncs. Headless and scriptable. Frame persistence in `.pcraft` is a
+//! writes it back into the playhead's frame before anything re-syncs. Headless and scriptable. Frame persistence in `.plyra` is a
 //! follow-up; a saved document keeps the current frame as the layer's content.
 
 use fotodit_doc::{Document, Layer, LayerContent, Timeline, VideoData};
@@ -363,7 +363,7 @@ fn load_frames(path: &str, fmt: fotodit_color::PixelFormat, opts: &fotodit_io::I
     let is_img = |f: &std::path::Path| {
         matches!(
             f.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref(),
-            Some("png" | "jpg" | "jpeg" | "tif" | "tiff" | "webp" | "bmp" | "gif" | "tga" | "exr" | "pcraft" | "psd")
+            Some("png" | "jpg" | "jpeg" | "tif" | "tiff" | "webp" | "bmp" | "gif" | "tga" | "exr" | "plyra" | "pcraft" | "psd")
         )
     };
     let files: Vec<std::path::PathBuf> = if p.is_dir() {

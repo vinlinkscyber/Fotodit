@@ -113,9 +113,9 @@ pub struct ExportSettings {
     /// PSD/PSB: write the real merged image (Preferences › File Handling › Maximize PSD and PSB
     /// File Compatibility; see [`FotoditApp::save_settings`]).
     pub psd_maximize_compatibility: bool,
-    /// `.pcraft`: also write the full-size composite (Preferences › File Handling › Save Full-Size
-    /// Composite in .pcraft Files; see [`FotoditApp::save_settings`]). Off by default.
-    pub pcraft_full_composite: bool,
+    /// `.plyra`: also write the full-size composite (Preferences › File Handling › Save Full-Size
+    /// Composite in .plyra Files; see [`FotoditApp::save_settings`]). Off by default.
+    pub plyra_full_composite: bool,
     /// Embed the document's ICC profile when the format supports it. On for Save As and, unless
     /// Export As turns it off, for export.
     pub embed_icc: bool,
@@ -126,7 +126,7 @@ pub struct ExportSettings {
     /// resolved against ([`fotodit_io::ExportOptions::document_path`]).
     pub document_path: Option<std::path::PathBuf>,
     /// Native save cache owned by the open document; exports without one remain one-shot.
-    pub pcraft_cache: Option<fotodit_io::PcraftExportCache>,
+    pub plyra_cache: Option<fotodit_io::PlyraExportCache>,
     /// Read and embed the files linked smart objects name ([`fotodit_io::ExportOptions::read_linked_files`]).
     /// Off for automation saves, which are granted only their target.
     pub read_linked_files: bool,
@@ -149,11 +149,11 @@ impl Default for ExportSettings {
             dds: fotodit_io::DdsOptions::default(),
             image_previews: true,
             psd_maximize_compatibility: true,
-            pcraft_full_composite: false,
+            plyra_full_composite: false,
             embed_icc: true,
             embed_metadata: true,
             document_path: None,
-            pcraft_cache: None,
+            plyra_cache: None,
             read_linked_files: true,
         }
     }
@@ -184,9 +184,9 @@ impl ExportSettings {
         opts.encode.dds = self.dds;
         opts.image_previews = self.image_previews;
         opts.psd_maximize_compatibility = self.psd_maximize_compatibility;
-        opts.pcraft_full_composite = self.pcraft_full_composite;
+        opts.plyra_full_composite = self.plyra_full_composite;
         opts.document_path = self.document_path.clone();
-        opts.pcraft_cache = self.pcraft_cache.clone();
+        opts.plyra_cache = self.plyra_cache.clone();
         opts.read_linked_files = self.read_linked_files;
         opts
     }
@@ -261,10 +261,10 @@ pub type AutomationReadFn = Box<dyn FnMut(&str) -> Result<(String, Vec<u8>), Str
 /// Write bytes through the desktop control session's authorized write root.
 pub type AutomationWriteFn = Box<dyn FnMut(&str, &[u8]) -> Result<(), String>>;
 
-/// Load a directory-form `.pcraft` through the authorized read root, returning its display
+/// Load a directory-form `.plyra` through the authorized read root, returning its display
 /// name (the file name) and the loaded document. `Ok(None)` marks a regular file: the
 /// caller falls back to the bytes path for the zip form.
-pub type AutomationOpenPcraftFn = Box<dyn FnMut(&str) -> Result<Option<(String, Document)>, String>>;
+pub type AutomationOpenPlyraFn = Box<dyn FnMut(&str) -> Result<Option<(String, Document)>, String>>;
 
 /// Reject engine commands which still perform ambient filesystem I/O.
 pub type AutomationCommandFn = Box<dyn Fn(&str, &Value) -> Result<(), String>>;
@@ -447,7 +447,7 @@ pub struct Services {
     /// using `file_dialog` and `write` with the user's authority.
     pub automation_read: Option<AutomationReadFn>,
     pub automation_write: Option<AutomationWriteFn>,
-    pub automation_open_pcraft: Option<AutomationOpenPcraftFn>,
+    pub automation_open_plyra: Option<AutomationOpenPlyraFn>,
     pub automation_command: Option<AutomationCommandFn>,
     /// Same policy as [`Self::automation_command`], as a function pointer the engine calls for
     /// each step of `actions.play`. Installed on the session only while a control request or

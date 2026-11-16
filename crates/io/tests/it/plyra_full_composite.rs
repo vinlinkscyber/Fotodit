@@ -1,4 +1,4 @@
-//! With [`ExportOptions::pcraft_full_composite`] on, a `.pcraft` save writes the flattened
+//! With [`ExportOptions::plyra_full_composite`] on, a `.plyra` save writes the flattened
 //! document at its canvas size as `composite/full.png`, next to the 256 px thumbnail and the
 //! 1024 px preview, so other apps can read the whole image without decoding tiles. Off (the
 //! default), the save writes the bundle it wrote before the option existed.
@@ -28,7 +28,7 @@ fn doc(w: u32, h: u32, depth: SampleType) -> Document {
 }
 
 fn on() -> ExportOptions {
-    ExportOptions { pcraft_full_composite: true, ..Default::default() }
+    ExportOptions { plyra_full_composite: true, ..Default::default() }
 }
 
 /// The bundle's member named by the manifest's `full_composite`, decoded: size and RGBA8 pixels.
@@ -47,12 +47,12 @@ fn flattened(doc: &Document) -> Vec<u8> {
 fn a_default_save_writes_the_bundle_without_the_full_composite() {
     for depth in SampleType::ALL {
         let d = doc(1500, 700, depth);
-        let bytes = export(&d, "a.pcraft", &ExportOptions::default()).expect("export").bytes;
+        let bytes = export(&d, "a.plyra", &ExportOptions::default()).expect("export").bytes;
         assert_eq!(fotodit_format::read_full_composite(&bytes).expect("manifest"), None, "{depth:?}");
         assert!(ZipReader::new(&bytes).expect("zip").find("composite/full.png").is_none(), "{depth:?}");
         // The bytes a save wrote before the option: the bundle with its two previews alone.
         let mut named = d.clone();
-        named.name = "a.pcraft".into();
+        named.name = "a.plyra".into();
         let previews = fotodit_format::SaveOptions {
             thumbnail: Some(fotodit_compose::thumbnail(&named, 256)),
             composite: Some(fotodit_compose::thumbnail(&named, 1024)),
@@ -63,16 +63,16 @@ fn a_default_save_writes_the_bundle_without_the_full_composite() {
 }
 
 #[test]
-fn a_pcraft_save_writes_the_flattened_document_at_its_canvas_size() {
+fn a_plyra_save_writes_the_flattened_document_at_its_canvas_size() {
     for depth in SampleType::ALL {
         let d = doc(300, 200, depth);
-        let bytes = export(&d, "a.pcraft", &on()).expect("export").bytes;
+        let bytes = export(&d, "a.plyra", &on()).expect("export").bytes;
         let (size, pixels) = full_composite(&bytes);
         assert_eq!(size, (300, 200), "{depth:?}");
         assert!(pixels == flattened(&d), "{depth:?}: the full-size composite differs from the flattened document");
         assert!(pixels.as_chunks::<4>().0.iter().any(|p| p[3] == 0), "{depth:?}: transparent pixels stay transparent");
         let mut saved = d.clone();
-        saved.name = "a.pcraft".into();
+        saved.name = "a.plyra".into();
         assert_eq!(fotodit_format::load_from_bytes(&bytes).expect("load"), saved, "{depth:?}");
     }
 }
@@ -80,7 +80,7 @@ fn a_pcraft_save_writes_the_flattened_document_at_its_canvas_size() {
 #[test]
 fn a_document_larger_than_the_preview_keeps_its_full_size() {
     let d = doc(1500, 700, SampleType::U8);
-    let bytes = export(&d, "a.pcraft", &on()).expect("export").bytes;
+    let bytes = export(&d, "a.plyra", &on()).expect("export").bytes;
     let (size, pixels) = full_composite(&bytes);
     assert_eq!(size, (1500, 700));
     assert!(pixels == flattened(&d), "the full-size composite differs from the flattened document");
@@ -92,7 +92,7 @@ fn a_document_larger_than_the_preview_keeps_its_full_size() {
 fn the_full_composite_carries_the_profile_of_its_pixels() {
     use fotodit_cms::{Builtin, ColorSpace, Profile};
     let full_icc = |d: &Document| {
-        let bytes = export(d, "a.pcraft", &on()).expect("export").bytes;
+        let bytes = export(d, "a.plyra", &on()).expect("export").bytes;
         let png = ZipReader::new(&bytes).expect("zip").read_by_name("composite/full.png", usize::MAX).expect("entry");
         fotodit_codecs::decode(&png).expect("png").icc.expect("an embedded profile")
     };
@@ -122,8 +122,8 @@ fn a_canvas_past_the_render_limit_is_saved_without_it() {
     // 40000 x 30000 px is over the compositor's 2^30-pixel limit; the layers stay small.
     let mut d = doc(64, 64, SampleType::U8);
     d.size = Size::new(40_000, 30_000);
-    assert!(fotodit_io::pcraft_full_composite(&d).is_none());
-    let bytes = export(&d, "a.pcraft", &on()).expect("export").bytes;
+    assert!(fotodit_io::plyra_full_composite(&d).is_none());
+    let bytes = export(&d, "a.plyra", &on()).expect("export").bytes;
     assert_eq!(fotodit_format::read_full_composite(&bytes).expect("manifest"), None);
     assert!(ZipReader::new(&bytes).expect("zip").find("composite/full.png").is_none());
 }
@@ -133,8 +133,8 @@ fn a_sparse_canvas_past_the_composite_memory_budget_is_saved_without_it() {
     // The layer data stays tiny; an 8193 x 8192 RGBA8 composite exceeds 256 MiB.
     let mut d = doc(64, 64, SampleType::U8);
     d.size = Size::new(8193, 8192);
-    assert!(fotodit_io::pcraft_full_composite(&d).is_none());
-    let bytes = export(&d, "a.pcraft", &on()).expect("export").bytes;
+    assert!(fotodit_io::plyra_full_composite(&d).is_none());
+    let bytes = export(&d, "a.plyra", &on()).expect("export").bytes;
     assert_eq!(fotodit_format::read_full_composite(&bytes).expect("manifest"), None);
     assert!(ZipReader::new(&bytes).expect("zip").find("composite/full.png").is_none());
 }

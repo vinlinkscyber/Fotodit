@@ -192,7 +192,7 @@ fn frame_shapes_strokes_and_editability_survive_native_and_psd() {
             let original = &s.active().unwrap().doc;
             let rendered = fotodit_compose::render(original, original.bounds());
             assert!(rendered.px.iter().any(|p| p[0] > 0.9 && p[3] > 0.5), "empty {shape} stroke at {depth}");
-            for name in ["pcraft", "psd"] {
+            for name in ["plyra", "psd"] {
                 let bytes = fotodit_io::export(original, name, &Default::default()).unwrap().bytes;
                 let restored = fotodit_io::import(name, &bytes).unwrap().document;
                 let l = restored
@@ -469,13 +469,13 @@ fn linked_layers_keep_their_links_beside_a_frame_in_psd() {
 }
 
 #[test]
-fn a_pcraft_with_unusable_frame_metadata_still_opens() {
+fn a_plyra_with_unusable_frame_metadata_still_opens() {
     let (mut s, _, _) = session();
     let id = LayerId(s.execute("layer.new.frame", json!({"x":10,"y":10,"width":40,"height":30})).unwrap()["layer"].as_u64().unwrap());
     let mut doc = (*s.active().unwrap().doc).clone();
     doc.layer_mut(id).unwrap().frame.as_mut().unwrap().transform.m[4] = 900_000.0;
-    let bytes = fotodit_io::export(&doc, "pcraft", &Default::default()).unwrap().bytes;
-    let restored = fotodit_io::import("pcraft", &bytes).unwrap().document;
+    let bytes = fotodit_io::export(&doc, "plyra", &Default::default()).unwrap().bytes;
+    let restored = fotodit_io::import("plyra", &bytes).unwrap().document;
     let l = restored.layer(id).unwrap();
     assert!(l.frame.is_none());
     assert!(l.vector_mask.is_some(), "the clip survives as the group's vector mask");

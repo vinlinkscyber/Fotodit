@@ -94,7 +94,7 @@ fn embed_all_linked_is_disabled_without_a_linked_smart_object_and_enabled_with_o
     app.sync_views();
     let enabled = |app: &FotoditApp, id: &str| submenu(app).iter().find(|i| i.id == id).unwrap().enabled;
     assert!(!enabled(&app, "layer.smartObjects.embedAllLinked"));
-    let path = std::env::temp_dir().join(format!("pc-so-menu-{}.pcraft", std::process::id()));
+    let path = std::env::temp_dir().join(format!("pc-so-menu-{}.plyra", std::process::id()));
     app.run("layer.smartObjects.convertToLinked", json!({"path": path.to_str().unwrap()})).unwrap();
     app.sync_views();
     assert!(enabled(&app, "layer.smartObjects.embedAllLinked"));

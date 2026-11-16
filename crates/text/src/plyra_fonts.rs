@@ -1,6 +1,6 @@
-//! Fonts from the optional craft-fonts build input (https://github.com/storytold/craft-fonts).
+//! Fonts from the optional plyra-fonts build input ().
 //!
-//! `CRAFT_FONTS` is empty unless the app was built with `CRAFT_FONTS_DIR=<craft-fonts checkout>`
+//! `PLYRA_FONTS` is empty unless the app was built with `PLYRA_FONTS_DIR=<plyra-fonts checkout>`
 //! (see `build.rs`); every user of it must work when it is empty. It carries every font in the
 //! checkout's `fonts/manifest.txt`, whatever its scripts: the Japanese fonts BIZ UDPGothic (UI) and
 //! Shippori Mincho / BIZ UDMincho (serif document text) and, in newer checkouts, fonts for other
@@ -8,8 +8,8 @@
 //! [`crate::fonts::FontDb::new`] registers all of them. The web build (wasm32) embeds none of
 //! them: they don't fit its size cap (see `build.rs`).
 
-/// A font from the optional craft-fonts build input (empty unless built with `CRAFT_FONTS_DIR`).
-pub struct CraftFont {
+/// A font from the optional plyra-fonts build input (empty unless built with `PLYRA_FONTS_DIR`).
+pub struct PlyraFont {
     pub family: &'static str,
     pub style: &'static str,
     /// ISO 15924 scripts the font is for, e.g. `"Jpan"`.
@@ -17,12 +17,12 @@ pub struct CraftFont {
     pub bytes: &'static [u8],
 }
 
-include!(concat!(env!("OUT_DIR"), "/craft_fonts.rs"));
+include!(concat!(env!("OUT_DIR"), "/plyra_fonts.rs"));
 
 /// The preferred UI family for Japanese.
 pub const UI_JAPANESE_FAMILY: &str = "BIZ UDPGothic";
 
-impl CraftFont {
+impl PlyraFont {
     /// True for a font meant for Japanese text.
     pub fn is_japanese(&self) -> bool {
         self.scripts.contains(&"Jpan")
@@ -36,8 +36,8 @@ impl CraftFont {
 
 /// The Japanese craft fonts in UI preference order: BIZ UDPGothic Regular first, then its other
 /// styles, then the rest in manifest order.
-pub fn japanese_for_ui() -> Vec<&'static CraftFont> {
-    let mut v: Vec<&CraftFont> = CRAFT_FONTS.iter().filter(|f| f.is_japanese()).collect();
+pub fn japanese_for_ui() -> Vec<&'static PlyraFont> {
+    let mut v: Vec<&PlyraFont> = PLYRA_FONTS.iter().filter(|f| f.is_japanese()).collect();
     v.sort_by_key(|f| (f.family != UI_JAPANESE_FAMILY, f.style != "Regular"));
     v
 }
@@ -112,7 +112,7 @@ mod tests {
     fn mincho_first_reorders_only_craft_families() {
         let fams = japanese_families();
         if fams.len() < 2 {
-            eprintln!("skipping: built without craft-fonts (or with only one Japanese family)");
+            eprintln!("skipping: built without plyra-fonts (or with only one Japanese family)");
             return;
         }
         let fallback: Vec<String> =
@@ -125,7 +125,7 @@ mod tests {
     }
 
     #[test]
-    fn mincho_first_without_craft_fonts_is_identity() {
+    fn mincho_first_without_plyra_fonts_is_identity() {
         let fallback = vec!["Noto Sans".to_string(), "Hiragino Sans".to_string()];
         assert_eq!(mincho_first(&fallback), fallback);
     }
@@ -144,7 +144,7 @@ mod tests {
     fn ui_order_prefers_biz_udpgothic_regular() {
         let v = japanese_for_ui();
         let Some(first) = v.first() else {
-            eprintln!("skipping: built without craft-fonts (CRAFT_FONTS is empty)");
+            eprintln!("skipping: built without plyra-fonts (PLYRA_FONTS is empty)");
             return;
         };
         assert_eq!((first.family, first.style), (UI_JAPANESE_FAMILY, "Regular"));

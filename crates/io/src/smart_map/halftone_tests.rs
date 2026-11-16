@@ -204,7 +204,7 @@ fn halftone_pattern_survives_complete_psd_and_psb_export() {
             source.layers.push(Layer::new("pixels", LayerContent::Raster(pixels.clone())));
             let bytes = fotodit_format::save_to_bytes(&source, &Default::default()).unwrap();
             let mut smart =
-                SmartObject::new(SmartSource::Embedded { file_name: "contents.pcraft".into(), bytes: Arc::new(bytes) }, Affine::IDENTITY, Some(pixels));
+                SmartObject::new(SmartSource::Embedded { file_name: "contents.plyra".into(), bytes: Arc::new(bytes) }, Affine::IDENTITY, Some(pixels));
             smart.smart_filters.push(filter(pattern, 2, 5));
             let mut doc = Document::new("halftone", Size::new(2, 2), ColorMode::Rgb, sample);
             doc.layers.push(Layer::new("halftone", LayerContent::Smart(smart)));

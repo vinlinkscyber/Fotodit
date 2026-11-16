@@ -699,7 +699,7 @@ fn duotone_inks_and_display() {
 #[test]
 fn duotone_curve_points_must_be_finite() {
     let mut s = session(4, 4, 8, "gray");
-    // 1e39 overflows f32 to inf, which the .pcraft writer refuses to save.
+    // 1e39 overflows f32 to inf, which the .plyra writer refuses to save.
     for curve in [json!([[0, 0], [100, 1e39]]), json!([[0, 0], [1e39, 50]]), json!([[-1e39, 0], [100, 100]])] {
         let r = s.execute("image.mode.duotone", json!({"type": "monotone", "inks": [{"curve": curve}]}));
         assert!(r.is_err(), "{curve} accepted");
@@ -711,7 +711,7 @@ fn duotone_curve_points_must_be_finite() {
 }
 
 #[test]
-fn modes_round_trip_through_pcraft() {
+fn modes_round_trip_through_plyra() {
     let mut s = session(12, 12, 8, "rgb");
     s.execute("image.mode.indexedColor", json!({"colors": 6})).unwrap();
     let bytes = fotodit_format::save_to_bytes(doc(&s), &Default::default()).unwrap();

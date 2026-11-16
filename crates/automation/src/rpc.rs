@@ -171,7 +171,7 @@ impl Headless {
                 let mut opts = fotodit_io::ExportOptions {
                     tiff_layers: p.get("tiffLayers").and_then(Value::as_bool).unwrap_or(false),
                     tga_bits,
-                    pcraft_full_composite: fotodit_engine::file_cmds::pcraft_full_composite_param(&p, "doc.save")
+                    plyra_full_composite: fotodit_engine::file_cmds::plyra_full_composite_param(&p, "doc.save")
                         .map_err(|e| bad(e.to_string()))?
                         .unwrap_or(false),
                     ..Default::default()

@@ -100,7 +100,7 @@ what an agent can't finish alone.
   direction buttons landed 2026-10-22), complex-script fallback fonts and golden tests
   (TYPE-218-3), greying out features the font lacks (TYPE-218-5; Character panel buttons 2026-10-11, #3752;
   Stylistic Sets submenu, Set 1–20, 2026-11-05, #10285; Numerals submenu 2026-11-03 —
-  `.pcraft` keeps all figure tags; PSD EngineData only `OldStyle`/`onum` until a Photoshop-authored
+  `.plyra` keeps all figure tags; PSD EngineData only `OldStyle`/`onum` until a Photoshop-authored
   oracle lands; Fotodit-native PSDs keep stylistic sets and other Txt2-only flags through
   save/reopen since 2026-11-04, #10308), text free transform
   (#2630), area type in PSD (TYPE-218-10). Done since the re-measure: manual and optical kerning with PSD round trip
@@ -387,7 +387,7 @@ what an agent can't finish alone.
 ## File-format gaps
 
 ### G10. Missing and partial file formats
-- **Progress (2026-10-26):** Embedded SVG/PDF-compatible AI/PDF/EPS smart objects can be edited in VectorCraft, including nested PSD payloads. AI/PDF/EPS working copies retain their format with a separate source-bound SVG display preview; native bytes and previews persist through .pcraft and PSD/PSB saves. This does not add standalone EPS/DCS import or establish lossless Adobe round-trip compatibility. See [workflow and limits](embedded-vector-editing.md); estimates and parity percentages are unchanged.
+- **Progress (2026-10-26):** Embedded SVG/PDF-compatible AI/PDF/EPS smart objects can be edited in VectorCraft, including nested PSD payloads. AI/PDF/EPS working copies retain their format with a separate source-bound SVG display preview; native bytes and previews persist through .plyra and PSD/PSB saves. This does not add standalone EPS/DCS import or establish lossless Adobe round-trip compatibility. See [workflow and limits](embedded-vector-editing.md); estimates and parity percentages are unchanged.
 - **Missing:** JPEG Options' Matte, progressive Scans and size preview (FILE-215-19 partial), TIFF Options' JPEG compression, Pixel Order and Byte Order (the rest landed 2026-11-02, #8827), Photoshop PDF read and its vector/text/multi-page
   write (FILE-215-10, #2541; a single flattened page now saves via Save As / Save a Copy / CLI,
   2026-10-11, #3401), AVIF read (#463) and default-build AVIF write, JPEG XL, JPEG 2000 (#1047),
@@ -582,7 +582,7 @@ what an agent can't finish alone.
 | 2026-11-05 | minor | G11: Playback Options dialog: Step by Step and Pause For play the whole action, in one history state when Create a single history state is on (one per step when off), saved in preferences (#5212) |
 | 2026-11-05 | minor | G11: Stop step messages with Continue/Stop, silent stop with the dialog toggle off, called actions resume into their callers (#8386); adjustment-layer Make keeps name, blend mode and clipping (#8384) |
 | 2026-11-04 | minor | G8: Fotodit-native PSDs keep stylistic sets and other Txt2-only OpenType flags through save/reopen (#10308); Stylistic Sets menu still #10285 |
-| 2026-11-03 | minor | G8: Type › OpenType › Numerals submenu landed (TYPE-218-5); `.pcraft` keeps figure tags, PSD only `OldStyle`/`onum` for now; Stylistic Sets and font-feature greying still missing |
+| 2026-11-03 | minor | G8: Type › OpenType › Numerals submenu landed (TYPE-218-5); `.plyra` keeps figure tags, PSD only `OldStyle`/`onum` for now; Stylistic Sets and font-feature greying still missing |
 | 2026-10-11 | minor | G8: Character panel OpenType buttons landed (TYPE-218-5, #3752); Numerals and Stylistic Sets submenus still missing |
 | 2026-10-11 | minor | G10: one-page flattened PDF write shipped (io::pdf, #3401); FILE-215-10 now partial |
 | 2026-10-10 | minor | G2: recorded Tilt-Shift computation/filtered-proxy measurements and limits; gap and estimate remain open

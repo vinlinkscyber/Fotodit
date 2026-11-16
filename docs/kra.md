@@ -4,7 +4,7 @@ Fotodit opens Krita's native documents (`.kra`, and the `.krz` archive variant) 
 layers. File › Open, recent files, drops, the CLI (`convert`, `info`, `batch`) and automation
 (`doc.open`, MCP) all use the reader in `fotodit-io`; the browser build accepts them too. A
 file is recognised by its `mimetype` entry (`application/x-krita`). Krita files are import-only:
-Save suggests OpenRaster (`.ora`), which Krita opens with its layers, and `.pcraft` keeps
+Save suggests OpenRaster (`.ora`), which Krita opens with its layers, and `.plyra` keeps
 everything.
 
 ## What is read
@@ -56,7 +56,7 @@ check layers, groups, pass-through, offsets, opacity, visibility, locks, masks, 
 16-bit and gray conversion, the merged-image fallback, LZF edge cases and malformed input.
 `crates/automation/tests/it/krita.rs` opens a `.kra` through the agent surface, edits it and saves
 it as OpenRaster. `crates/engine/tests/it/kra.rs` (opt-in) opens a Krita-authored 16-bit file in a
-session, checks it is read-only, edits with undo and saves as `.ora` and `.pcraft`.
+session, checks it is read-only, edits with undo and saves as `.ora` and `.plyra`.
 
 Real-file checks use the Krita-authored oracles in
 [fotodit-corpus](https://github.com/plyra/fotodit-corpus) (`krita/`, made by

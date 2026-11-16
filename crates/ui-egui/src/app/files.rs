@@ -238,7 +238,7 @@ impl FotoditApp {
             p => {
                 let source = p.as_deref().unwrap_or(&st.doc.name);
                 let ext = match fotodit_engine::file_cmds::extension(source).as_deref() {
-                    Some("pdn") => "pcraft",
+                    Some("pdn") => "plyra",
                     Some("kra" | "krz") => "ora",
                     _ => "psd",
                 };
@@ -454,7 +454,7 @@ impl FotoditApp {
                     && fotodit_engine::file_cmds::extension(p).is_some_and(|e| fotodit_codecs::from_extension(&e).is_some_and(|f| f.caps().write))
             };
             let path = st.path.clone().filter(|p| fotodit_engine::file_cmds::holds_at(&st.doc, p) || flat_own(p)).ok_or(
-                "Save writes back only to the document's own PSD, PSB, .pcraft or OpenRaster file (OpenRaster only when it holds everything), or to its own flat file while the document is a single plain layer",
+                "Save writes back only to the document's own PSD, PSB, .plyra or OpenRaster file (OpenRaster only when it holds everything), or to its own flat file while the document is a single plain layer",
             )?;
             return self.save_in_place(path, choices);
         }
@@ -476,8 +476,8 @@ impl FotoditApp {
     /// What a save writes by default under the preferences: File Handling › Image Previews
     /// decides whether a PSD/PSB gets its thumbnail, and Maximize PSD and PSB File Compatibility
     /// whether it gets its real merged image. Ask When Saving has no dialog here yet, so it saves
-    /// both, as Photoshop's checkboxes start on. Save Full-Size Composite in .pcraft Files decides
-    /// whether a `.pcraft` save also writes `composite/full.png`. A JPEG or WebP is written the way the active
+    /// both, as Photoshop's checkboxes start on. Save Full-Size Composite in .plyra Files decides
+    /// whether a `.plyra` save also writes `composite/full.png`. A JPEG or WebP is written the way the active
     /// document's file was (its JPEG quality, a WebP lossy at its quality or lossless), as
     /// Photoshop's Save and Save As options start there.
     pub(crate) fn save_settings(&self) -> ExportSettings {
@@ -487,7 +487,7 @@ impl FotoditApp {
         let mut settings = ExportSettings {
             image_previews: previews,
             psd_maximize_compatibility: maximize,
-            pcraft_full_composite: file_handling.pcraft_full_composite,
+            plyra_full_composite: file_handling.plyra_full_composite,
             ..ExportSettings::default()
         };
         if let Some(st) = self.session.active() {
@@ -496,7 +496,7 @@ impl FotoditApp {
             settings.webp_lossless = e.webp_lossless.unwrap_or(settings.webp_lossless);
             settings.webp_quality = e.webp_quality.map(|q| q.min(100));
             settings.document_path = st.path.as_deref().map(std::path::PathBuf::from);
-            settings.pcraft_cache = Some(st.pcraft_cache.clone());
+            settings.plyra_cache = Some(st.plyra_cache.clone());
         }
         settings
     }
@@ -766,7 +766,7 @@ impl FotoditApp {
             let state = self.session.active().ok_or("no document")?;
             // As File › Save: without `path` only a layered file is written back (#416).
             path.or_else(|| state.path.clone().filter(|p| fotodit_engine::file_cmds::holds_at(&state.doc, p))).ok_or(
-                "pass `path`: a save without one writes back only to the document's own PSD, PSB, .pcraft or OpenRaster file, and to OpenRaster only when it holds everything (adjustment layers, styles and masks don't fit)",
+                "pass `path`: a save without one writes back only to the document's own PSD, PSB, .plyra or OpenRaster file, and to OpenRaster only when it holds everything (adjustment layers, styles and masks don't fit)",
             )?
         };
         let reply = |path: &str, warnings: &[String]| json!({"path": path, "warnings": warnings});

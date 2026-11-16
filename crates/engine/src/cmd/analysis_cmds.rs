@@ -3,7 +3,7 @@
 //! Marker.
 //!
 //! The scale, count groups and ruler line are document data ([`fotodit_doc::Measurement`],
-//! saved in `.pcraft`; the scale also as PSD resource 1074). The Measurement Log and the data
+//! saved in `.plyra`; the scale also as PSD resource 1074). The Measurement Log and the data
 //! point choices are session-wide, as in Photoshop.
 //!
 //! Selection measurements follow Photoshop's definitions: the selection (coverage ≥ 50 %) is

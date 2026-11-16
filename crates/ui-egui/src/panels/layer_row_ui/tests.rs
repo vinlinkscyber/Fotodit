@@ -239,9 +239,9 @@ fn collapse_all_groups_from_the_panel_menu_and_it_is_saved() {
     let open = groups_open(&h.state().session);
     assert_eq!(open.len(), 4);
     assert!(open.iter().all(|o| !o), "every group closed: {open:?}");
-    // Collapsed state is document data: it survives a PSD and a .pcraft round trip.
+    // Collapsed state is document data: it survives a PSD and a .plyra round trip.
     let doc = (*h.state().session.active().unwrap().doc).clone();
-    for name in ["c.psd", "c.pcraft"] {
+    for name in ["c.psd", "c.plyra"] {
         let bytes = fotodit_io::export(&doc, name, &Default::default()).unwrap().bytes;
         let back = fotodit_io::import(name, &bytes).unwrap().document;
         let mut s = fotodit_engine::Session::new();

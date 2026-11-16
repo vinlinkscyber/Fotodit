@@ -5,7 +5,7 @@ use crate::common;
 use common::temp_dir;
 use fotodit_color::{ColorMode, SampleType};
 use fotodit_doc::Document;
-use fotodit_format::{PcraftWriter, SaveOptions};
+use fotodit_format::{PlyraWriter, SaveOptions};
 use fotodit_geom::Size;
 
 fn empty_doc() -> Document {
@@ -15,8 +15,8 @@ fn empty_doc() -> Document {
 #[test]
 fn directory_cleanup_preserves_unrelated_zst_files() {
     let root = temp_dir("unrelated-object");
-    let bundle = root.join("project.pcraft");
-    let mut writer = PcraftWriter::new();
+    let bundle = root.join("project.plyra");
+    let mut writer = PlyraWriter::new();
     writer.save_dir(&empty_doc(), &bundle, &SaveOptions::default()).unwrap();
 
     let unrelated = bundle.join("tiles/personal-notes.zst");
@@ -61,8 +61,8 @@ mod permissions {
     #[test]
     fn directory_save_without_previews_does_not_require_composite_read_permission() {
         let root = temp_dir("composite-search-only");
-        let bundle = root.join("project.pcraft");
-        let mut writer = PcraftWriter::new();
+        let bundle = root.join("project.plyra");
+        let mut writer = PlyraWriter::new();
         writer.save_dir(&empty_doc(), &bundle, &SaveOptions::default()).unwrap();
         let restricted = RestoreMode::set(&bundle.join("composite"), 0o300);
         let mut changed = empty_doc();
@@ -77,9 +77,9 @@ mod permissions {
     #[test]
     fn directory_save_cleans_stale_previews_through_search_only_root_and_composite() {
         let root = temp_dir("bundle-search-only");
-        let bundle = root.join("project.pcraft");
-        let link = root.join("linked.pcraft");
-        let mut writer = PcraftWriter::new();
+        let bundle = root.join("project.plyra");
+        let link = root.join("linked.plyra");
+        let mut writer = PlyraWriter::new();
         writer.save_dir(&empty_doc(), &bundle, &SaveOptions::default()).unwrap();
         symlink(&bundle, &link).unwrap();
         std::fs::write(bundle.join("thumb.png"), b"stale thumbnail").unwrap();
@@ -105,8 +105,8 @@ mod permissions {
     #[test]
     fn directory_save_writes_current_preview_without_composite_read_permission() {
         let root = temp_dir("preview-search-only");
-        let bundle = root.join("project.pcraft");
-        let mut writer = PcraftWriter::new();
+        let bundle = root.join("project.plyra");
+        let mut writer = PlyraWriter::new();
         writer.save_dir(&empty_doc(), &bundle, &SaveOptions::default()).unwrap();
         let restricted = RestoreMode::set(&bundle.join("composite"), 0o300);
         let mut changed = empty_doc();
@@ -123,8 +123,8 @@ mod permissions {
     #[test]
     fn denied_stale_preview_cleanup_is_retried_after_a_successful_save() {
         let root = temp_dir("denied-preview-cleanup");
-        let bundle = root.join("project.pcraft");
-        let mut writer = PcraftWriter::new();
+        let bundle = root.join("project.plyra");
+        let mut writer = PlyraWriter::new();
         let original = empty_doc();
         writer.save_dir(&original, &bundle, &SaveOptions::default()).unwrap();
         let preview = bundle.join("composite/preview.png");
@@ -153,8 +153,8 @@ mod permissions {
     #[test]
     fn denied_object_cleanup_remains_best_effort_after_manifest_commit() {
         let root = temp_dir("denied-object-cleanup");
-        let bundle = root.join("project.pcraft");
-        let mut writer = PcraftWriter::new();
+        let bundle = root.join("project.plyra");
+        let mut writer = PlyraWriter::new();
         writer.save_dir(&empty_doc(), &bundle, &SaveOptions::default()).unwrap();
         let orphan = bundle.join("tiles").join(format!("{}.zst", "d".repeat(64)));
         std::fs::write(&orphan, b"unreferenced object").unwrap();

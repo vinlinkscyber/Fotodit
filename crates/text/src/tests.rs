@@ -1800,7 +1800,7 @@ fn psd_round_trips_antialias_opentype_and_warp() {
 }
 
 /// EngineData only maps Photoshop's `OldStyle` bool to `onum`. Other Numerals tags (`lnum` /
-/// `pnum` / `tnum`) stay in `.pcraft` until a Photoshop-authored PSD oracle exists — we do not
+/// `pnum` / `tnum`) stay in `.plyra` until a Photoshop-authored PSD oracle exists — we do not
 /// invent EngineData keys or copy figure-style tables from GPL editors (AGENTS.md clean-room).
 #[test]
 fn psd_engine_data_keeps_only_oldstyle_among_numeral_tags() {
@@ -2145,13 +2145,13 @@ fn korean_box_text_wraps_between_words() {
     assert_eq!(super::layout::hangul_runs("a 한국어 b"), vec![2..11]);
 }
 
-/// Which craft-fonts family drew the glyphs of `l` (matched by the embedded bytes).
+/// Which plyra-fonts family drew the glyphs of `l` (matched by the embedded bytes).
 fn craft_family_of(l: &crate::TextLayout) -> Vec<&'static str> {
     let mut v = Vec::new();
     for g in &l.glyphs {
         let Some(face) = l.faces.get(g.face as usize) else { continue };
         let data: &[u8] = face.font.data.as_ref();
-        if let Some(f) = crate::CRAFT_FONTS.iter().find(|f| std::ptr::eq(f.bytes.as_ptr(), data.as_ptr()) && f.bytes.len() == data.len())
+        if let Some(f) = crate::PLYRA_FONTS.iter().find(|f| std::ptr::eq(f.bytes.as_ptr(), data.as_ptr()) && f.bytes.len() == data.len())
             && !v.contains(&f.family)
         {
             v.push(f.family);
@@ -2161,27 +2161,27 @@ fn craft_family_of(l: &crate::TextLayout) -> Vec<&'static str> {
 }
 
 #[test]
-fn craft_fonts_cover_japanese_without_system_fonts() {
-    if !crate::CRAFT_FONTS.iter().any(|f| f.is_japanese()) {
-        eprintln!("skipping: built without craft-fonts (set CRAFT_FONTS_DIR to a craft-fonts checkout)");
+fn plyra_fonts_cover_japanese_without_system_fonts() {
+    if !crate::PLYRA_FONTS.iter().any(|f| f.is_japanese()) {
+        eprintln!("skipping: built without plyra-fonts (set PLYRA_FONTS_DIR to a plyra-fonts checkout)");
         return;
     }
     let mut e = TextEngine::new();
     let text = "日本語の文字、カタカナ。";
     let l = e.layout(&point(text, 24.0), 72.0);
     assert_eq!(l.glyphs.len(), text.chars().count());
-    assert!(l.glyphs.iter().all(|g| g.id != 0), "no .notdef with craft-fonts");
+    assert!(l.glyphs.iter().all(|g| g.id != 0), "no .notdef with plyra-fonts");
     // Sans (Inter) runs fall back to the first CJK craft family in the UI locale's script order:
     // the Gothic UI family when Japanese leads that order or the build has no other CJK craft font.
-    let cjk = |f: &crate::CraftFont| f.scripts.iter().any(|s| matches!(*s, "Jpan" | "Hans" | "Hant" | "Kore"));
-    let first = e.fonts.fallback_stack().find_map(|fam| crate::CRAFT_FONTS.iter().find(|f| f.family == fam && cjk(f))).map(|f| f.family);
-    if !crate::CRAFT_FONTS.iter().any(|f| cjk(f) && !f.is_japanese()) || crate::cjk::ui_script_order()[0] == crate::cjk::CjkScript::Japanese {
-        assert_eq!(first, Some(crate::craft_fonts::UI_JAPANESE_FAMILY));
+    let cjk = |f: &crate::PlyraFont| f.scripts.iter().any(|s| matches!(*s, "Jpan" | "Hans" | "Hant" | "Kore"));
+    let first = e.fonts.fallback_stack().find_map(|fam| crate::PLYRA_FONTS.iter().find(|f| f.family == fam && cjk(f))).map(|f| f.family);
+    if !crate::PLYRA_FONTS.iter().any(|f| cjk(f) && !f.is_japanese()) || crate::cjk::ui_script_order()[0] == crate::cjk::CjkScript::Japanese {
+        assert_eq!(first, Some(crate::plyra_fonts::UI_JAPANESE_FAMILY));
     }
     assert_eq!(craft_family_of(&l), first.into_iter().collect::<Vec<_>>());
     // Serif runs fall back to a Mincho face when the build has one (not the web build) and the
     // Japanese craft fonts come first.
-    if first == Some(crate::craft_fonts::UI_JAPANESE_FAMILY) && crate::CRAFT_FONTS.iter().any(|f| f.is_mincho()) {
+    if first == Some(crate::plyra_fonts::UI_JAPANESE_FAMILY) && crate::PLYRA_FONTS.iter().any(|f| f.is_mincho()) {
         let mut t = point(text, 24.0);
         t.font_family = "Times New Roman".into();
         let l = e.layout(&t, 72.0);
@@ -2195,35 +2195,35 @@ fn craft_fonts_cover_japanese_without_system_fonts() {
 }
 
 /// Chinese, Arabic and Thai set in Inter fall back to the craft font for their script when the
-/// build has one (Noto Sans CJK SC, Noto Sans Arabic and Noto Sans Thai in newer craft-fonts).
+/// build has one (Noto Sans CJK SC, Noto Sans Arabic and Noto Sans Thai in newer plyra-fonts).
 #[test]
-fn craft_fonts_cover_their_other_scripts_without_system_fonts() {
+fn plyra_fonts_cover_their_other_scripts_without_system_fonts() {
     let mut e = TextEngine::new();
     for (script, text) in [("Hans", "中文图层"), ("Arab", "مرحبا"), ("Thai", "ภาษาไทย")] {
-        if !crate::CRAFT_FONTS.iter().any(|f| f.scripts.contains(&script)) {
-            eprintln!("skipping {script}: built without a craft font for it (set CRAFT_FONTS_DIR to a craft-fonts checkout)");
+        if !crate::PLYRA_FONTS.iter().any(|f| f.scripts.contains(&script)) {
+            eprintln!("skipping {script}: built without a craft font for it (set PLYRA_FONTS_DIR to a plyra-fonts checkout)");
             continue;
         }
         let l = e.layout(&point(text, 24.0), 72.0);
-        assert!(!l.glyphs.is_empty() && l.glyphs.iter().all(|g| g.id != 0), "{script}: no .notdef with craft-fonts");
+        assert!(!l.glyphs.is_empty() && l.glyphs.iter().all(|g| g.id != 0), "{script}: no .notdef with plyra-fonts");
         let fams = craft_family_of(&l);
-        assert!(fams.iter().any(|fam| crate::CRAFT_FONTS.iter().any(|f| f.family == *fam && f.scripts.contains(&script))), "{script}: drawn with {fams:?}");
+        assert!(fams.iter().any(|fam| crate::PLYRA_FONTS.iter().any(|f| f.family == *fam && f.scripts.contains(&script))), "{script}: drawn with {fams:?}");
     }
 }
 
 #[test]
-fn works_without_craft_fonts() {
+fn works_without_plyra_fonts() {
     // Whatever the build: the bundled fonts load, Latin lays out, and Japanese never panics
-    // (without craft-fonts or system fonts it may be .notdef).
+    // (without plyra-fonts or system fonts it may be .notdef).
     let mut e = TextEngine::new();
     assert!(e.fonts.has_family("Inter"));
     let l = e.layout(&point("日本語 Latin", 12.0), 72.0);
     assert_eq!(l.glyphs.len(), "日本語 Latin".chars().count());
-    for f in crate::CRAFT_FONTS {
+    for f in crate::PLYRA_FONTS {
         assert!(e.fonts.has_family(f.family), "{} registered under its manifest name", f.family);
     }
-    if crate::CRAFT_FONTS.is_empty() {
-        assert!(crate::craft_fonts::japanese_families().is_empty());
+    if crate::PLYRA_FONTS.is_empty() {
+        assert!(crate::plyra_fonts::japanese_families().is_empty());
         let fb = fonts::fallback_candidates(&crate::cjk::script_order(Some("ja")));
         assert!(!fb.iter().any(|f| f.contains("BIZ UD")));
     }
@@ -2449,8 +2449,8 @@ fn indic_fallback_candidates_cover_every_platform() {
 
 #[test]
 fn a_served_script_fallback_joins_the_fallback_stack_once_it_arrives() {
-    let Some(cairo) = crate::CRAFT_FONTS.iter().find(|f| f.family == "Cairo") else {
-        eprintln!("skipping: built without craft-fonts (set CRAFT_FONTS_DIR to a craft-fonts checkout)");
+    let Some(cairo) = crate::PLYRA_FONTS.iter().find(|f| f.family == "Cairo") else {
+        eprintln!("skipping: built without plyra-fonts (set PLYRA_FONTS_DIR to a plyra-fonts checkout)");
         return;
     };
     crate::served::add_fonts(&crate::served::parse_manifest("Cairo | Regular | fonts/cairo/Cairo.ttf | Arab,Latn\n").0);
@@ -2563,8 +2563,8 @@ fn txt2_frame_moves_box_text_onto_its_bounds() {
 /// fallback's glyph (#1909).
 #[test]
 fn missing_glyph_protection_can_turn_the_fallback_stack_off() {
-    let Some(cairo) = crate::CRAFT_FONTS.iter().find(|f| f.family == "Cairo") else {
-        eprintln!("skipping: built without craft-fonts (set CRAFT_FONTS_DIR to a craft-fonts checkout)");
+    let Some(cairo) = crate::PLYRA_FONTS.iter().find(|f| f.family == "Cairo") else {
+        eprintln!("skipping: built without plyra-fonts (set PLYRA_FONTS_DIR to a plyra-fonts checkout)");
         return;
     };
     let mut db = fonts::FontDb::new();

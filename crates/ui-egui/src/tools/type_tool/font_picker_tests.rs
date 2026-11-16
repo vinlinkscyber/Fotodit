@@ -939,7 +939,7 @@ fn localized_font_names_label_the_menu_but_pick_the_family() {
         state,
     );
     // The localized menu lists Japanese names, so install the app's bundled theme fonts
-    // (including the craft-fonts Japanese faces) before the first pass shapes text.
+    // (including the plyra-fonts Japanese faces) before the first pass shapes text.
     crate::theme::install_fonts(&h.ctx);
     // Show Font Names in English on: no localized labels.
     crate::type_tool::sync_font_names(&h.ctx, true);
@@ -1709,7 +1709,7 @@ fn options_bar_hover_previews_with_the_character_picker_also_shown() {
 // FONT_FIELD_VISUAL_FIXTURE_START: kept compatible with the base revision for before/after capture.
 #[test]
 fn capture_font_field_gpu_visual_fixtures() {
-    let Some(directory) = std::env::var_os("CRAFT_FONT_FIELD_FIXTURES").map(std::path::PathBuf::from) else { return };
+    let Some(directory) = std::env::var_os("PLYRA_FONT_FIELD_FIXTURES").map(std::path::PathBuf::from) else { return };
     let _gpu = fotodit_testkit::gpu_lock();
     std::fs::create_dir_all(&directory).unwrap();
     let phase = std::env::var("FONT_FIELD_FIXTURE_PHASE").unwrap_or_else(|_| "after".into());

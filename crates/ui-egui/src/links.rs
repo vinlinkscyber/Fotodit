@@ -98,8 +98,8 @@ mod tests {
         let mut app = FotoditApp::new(fotodit_engine::Session::new(), Default::default());
         let ctx = egui::Context::default();
         for (id, url) in [
-            ("help.discord", "https://discord.gg/artcraft"),
-            ("help.website", "https://getartcraft.com/apps/fotodit"),
+            ("help.discord", ""),
+            ("help.website", ""),
             ("help.github", "https://github.com/storytold/fotodit"),
         ] {
             let r = crate::menus::invoke(&mut app, &ctx, id, serde_json::json!({})).unwrap();

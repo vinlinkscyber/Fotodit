@@ -65,42 +65,42 @@ fn read_growth_is_rejected_at_the_observed_length() {
 }
 
 #[test]
-fn open_pcraft_loads_a_directory_below_the_read_root() {
-    let (inside, _, workspace) = roots("pcraft-dir");
+fn open_plyra_loads_a_directory_below_the_read_root() {
+    let (inside, _, workspace) = roots("plyra-dir");
     let doc = fotodit_doc::Document::new("Native", fotodit_doc::Size::new(16, 12), fotodit_doc::ColorMode::Rgb, fotodit_doc::SampleType::U8);
-    fotodit_format::PcraftWriter::new().save_dir(&doc, &inside.join("native.pcraft"), &fotodit_format::SaveOptions::default()).unwrap();
-    let loaded = workspace.open_pcraft("native.pcraft").unwrap().expect("the directory form loads");
+    fotodit_format::PlyraWriter::new().save_dir(&doc, &inside.join("native.plyra"), &fotodit_format::SaveOptions::default()).unwrap();
+    let loaded = workspace.open_plyra("native.plyra").unwrap().expect("the directory form loads");
     assert_eq!(loaded.name, doc.name);
     assert_eq!((loaded.size.width, loaded.size.height), (16, 12));
 }
 
 #[test]
-fn open_pcraft_reports_zip_files_and_missing_paths_clearly() {
-    let (inside, _, workspace) = roots("pcraft-errors");
+fn open_plyra_reports_zip_files_and_missing_paths_clearly() {
+    let (inside, _, workspace) = roots("plyra-errors");
     let doc = fotodit_doc::Document::new("Zipped", fotodit_doc::Size::new(4, 4), fotodit_doc::ColorMode::Rgb, fotodit_doc::SampleType::U8);
-    let zip = inside.join("zipped.pcraft");
-    fotodit_format::PcraftWriter::new().save_path(&doc, &zip, &fotodit_format::SaveOptions::default()).unwrap();
+    let zip = inside.join("zipped.plyra");
+    fotodit_format::PlyraWriter::new().save_path(&doc, &zip, &fotodit_format::SaveOptions::default()).unwrap();
     assert!(zip.is_file());
-    assert!(workspace.open_pcraft("zipped.pcraft").unwrap().is_none(), "the zip form falls back to the bytes path");
-    let error = workspace.open_pcraft("missing.pcraft").unwrap_err().to_string();
+    assert!(workspace.open_plyra("zipped.plyra").unwrap().is_none(), "the zip form falls back to the bytes path");
+    let error = workspace.open_plyra("missing.plyra").unwrap_err().to_string();
     assert!(error.contains("failed"), "a missing path propagates its io error: {error}");
-    assert!(AuthorizedWorkspace::default().open_pcraft("x.pcraft").is_err(), "no read authority fails closed");
+    assert!(AuthorizedWorkspace::default().open_plyra("x.plyra").is_err(), "no read authority fails closed");
 }
 
 #[cfg(unix)]
 #[test]
-fn open_pcraft_rejects_non_regular_entries_and_escaping_symlinks() {
-    let (inside, _, workspace) = roots("pcraft-nonregular");
-    let bundle = inside.join("native.pcraft");
+fn open_plyra_rejects_non_regular_entries_and_escaping_symlinks() {
+    let (inside, _, workspace) = roots("plyra-nonregular");
+    let bundle = inside.join("native.plyra");
     std::fs::create_dir_all(bundle.join("manifest.json")).unwrap();
-    let error = workspace.open_pcraft("native.pcraft").unwrap_err().to_string();
+    let error = workspace.open_plyra("native.plyra").unwrap_err().to_string();
     assert!(error.contains("not a regular file"), "a directory entry is refused, not streamed: {error}");
 
-    let (inside2, _, workspace2) = roots("pcraft-symlink");
-    let bundle2 = inside2.join("native.pcraft");
+    let (inside2, _, workspace2) = roots("plyra-symlink");
+    let bundle2 = inside2.join("native.plyra");
     std::fs::create_dir(&bundle2).unwrap();
     std::os::unix::fs::symlink("/dev/zero", bundle2.join("manifest.json")).unwrap();
-    assert!(workspace2.open_pcraft("native.pcraft").is_err(), "an escaping symlink entry is refused");
+    assert!(workspace2.open_plyra("native.plyra").is_err(), "an escaping symlink entry is refused");
 }
 
 fn temp_files(dir: &Path) -> Vec<String> {

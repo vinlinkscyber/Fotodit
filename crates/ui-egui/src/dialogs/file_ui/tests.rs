@@ -234,7 +234,7 @@ fn droplet_folder_follows_the_document_or_uses_a_safe_fallback() {
     }
     #[cfg(not(target_os = "macos"))]
     assert_eq!(fallback, ".");
-    app.session.active_mut().unwrap().path = Some("/tmp/fotodit/drawing.pcraft".into());
+    app.session.active_mut().unwrap().path = Some("/tmp/fotodit/drawing.plyra".into());
     assert_eq!(droplet_default_dir(&app), "/tmp/fotodit");
 }
 

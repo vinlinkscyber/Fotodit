@@ -1077,7 +1077,7 @@ mod snapshot_row_tests {
     }
 
     /// Snapshot thumbnails belong to the snapshot's document (#6087): closing a document drops
-    /// them, and a document reopened with the same id (a `.pcraft` keeps it) gets fresh ones
+    /// them, and a document reopened with the same id (a `.plyra` keeps it) gets fresh ones
     /// rather than the closed document's, even before the views are synced.
     #[test]
     fn snapshot_thumbnails_follow_their_document() {

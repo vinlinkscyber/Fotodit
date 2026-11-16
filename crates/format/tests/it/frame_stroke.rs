@@ -1,4 +1,4 @@
-//! A Photoshop Frame's stroke (`Group::frame_stroke`) survives a `.pcraft` round trip; older
+//! A Photoshop Frame's stroke (`Group::frame_stroke`) survives a `.plyra` round trip; older
 //! manifests, written before it existed, load without one (#4381).
 
 use fotodit_color::{Color, ColorMode, SampleType};

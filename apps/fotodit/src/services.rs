@@ -18,7 +18,7 @@ mod recovery_tests;
 /// Photoshop brushes (.abr), gradients (.grd), layer styles (.asl), swatches (.aco, .act, .ase) and keyboard shortcut sets
 /// (.kys), which go to the preset libraries and Edit › Keyboard Shortcuts.
 const OPEN_EXTS: &[&str] = &[
-    "pcraft", "pdn", "ora", "xcf", "xcfgz", "gz", "kra", "krz", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "dib", "tga",
+    "plyra", "pcraft", "pdn", "ora", "xcf", "xcfgz", "gz", "kra", "krz", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "dib", "tga",
     "ico", "qoi", "exr", "hdr", "pbm", "pgm", "ppm", "pnm", "pam", "pfm", "pcx", "dds", "xpm", "fits", "fit", "fts", "dpx", "cin", "dcm", "dicom", "dc3",
     "iff", "lbm", "ilbm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "asl", "svg", "svgz",
     "aco", "act", "ase", "kys", "af", "afdesign", "afphoto", "afpub",
@@ -40,7 +40,7 @@ fn open_filter_extensions(extensions: &[&str]) -> Vec<String> {
 /// [`OPEN_EXTS`]. An explicit SVG filter also keeps vector artwork discoverable when a native
 /// picker defaults to another filter.
 const OPEN_FILTERS: &[(&str, &[&str])] = &[
-    ("Fotodit", &["pcraft"]),
+    ("Fotodit", &["plyra", "pcraft"]),
     ("Photoshop", &["psd", "psb", "psdt"]),
     ("Affinity", &["af", "afdesign", "afphoto", "afpub"]),
     ("Krita", &["kra", "krz"]),
@@ -83,12 +83,12 @@ fn open_filters() -> Vec<(&'static str, Vec<String>)> {
 }
 
 /// File › Save As formats: (filter name, extensions). The filter matching the suggested name's
-/// extension comes first, so a .pcraft document saves as .pcraft by default and everything else
+/// extension comes first, so a .plyra document saves as .plyra by default and everything else
 /// keeps defaulting to PSD.
 const SAVE_FILTERS: &[(&str, &[&str])] = &[
     ("PSD Document", &["psd", "psb"]),
     ("PDF", &["pdf"]),
-    ("Fotodit", &["pcraft"]),
+    ("Fotodit", &["plyra", "pcraft"]),
     ("OpenRaster", &["ora"]),
     ("PNG", &["png"]),
     ("JPEG", &["jpg", "jpeg"]),
@@ -501,7 +501,7 @@ fn with_store<R>(store: &SharedRecovery, f: impl FnOnce(&mut RecoveryStore) -> R
     Ok(f(slot.as_mut().ok_or("no config directory")?))
 }
 
-/// Crash recovery: background incremental .pcraft autosaves into `dir` (`None`: no config
+/// Crash recovery: background incremental .plyra autosaves into `dir` (`None`: no config
 /// directory, so autosaves fail and nothing is recovered). Recovered documents keep their entries
 /// until a newer autosave replaces them or they're saved or closed (see [`RecoveryStore`]).
 fn recovery_services(dir: Option<PathBuf>) -> Services {
@@ -711,12 +711,12 @@ pub fn native(automation: Option<fotodit_automation::AuthorizedWorkspace>) -> Se
     let automation_write = automation.clone().map(|workspace| {
         Box::new(move |path: &str, bytes: &[u8]| workspace.write(path, bytes).map_err(|error| error.to_string())) as fotodit_ui_egui::AutomationWriteFn
     });
-    let automation_open_pcraft = automation.clone().map(|workspace| {
+    let automation_open_plyra = automation.clone().map(|workspace| {
         Box::new(move |path: &str| {
             let name = Path::new(path).file_name().and_then(|name| name.to_str()).unwrap_or(path).to_string();
-            let opened = crate::crash_guard::guard("Open", || workspace.open_pcraft(path).map_err(|e| e.to_string()))?;
+            let opened = crate::crash_guard::guard("Open", || workspace.open_plyra(path).map_err(|e| e.to_string()))?;
             Ok(opened.map(|doc| (name, doc)))
-        }) as fotodit_ui_egui::AutomationOpenPcraftFn
+        }) as fotodit_ui_egui::AutomationOpenPlyraFn
     });
     let automation_save = automation.clone().map(|workspace| {
         std::sync::Arc::new(move |doc: &Document, path: &str, settings: &fotodit_ui_egui::ExportSettings, ctl: &fotodit_ui_egui::jobs_ui::SaveCtl| {
@@ -751,7 +751,7 @@ pub fn native(automation: Option<fotodit_automation::AuthorizedWorkspace>) -> Se
         same_file: Some(Box::new(|a: &str, b: &str| same_entry(Path::new(a), Path::new(b), same_file))),
         automation_read,
         automation_write,
-        automation_open_pcraft,
+        automation_open_plyra,
         automation_save,
         automation_command,
         automation_authorize,

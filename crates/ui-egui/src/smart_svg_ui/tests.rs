@@ -123,7 +123,7 @@ fn routing_keeps_automation_non_svg_and_unrelated_commands_internal() {
     let st = app.session.active_mut().unwrap();
     let layer = st.active_layer.unwrap();
     let LayerContent::Smart(smart) = &mut Arc::make_mut(&mut st.doc).layer_mut(layer).unwrap().content else { panic!("smart") };
-    smart.source = SmartSource::Embedded { file_name: "Embedded.pcraft".into(), bytes: Arc::new(vec![]) };
+    smart.source = SmartSource::Embedded { file_name: "Embedded.plyra".into(), bytes: Arc::new(vec![]) };
     assert!(intercept(&mut app, "layer.smartObjects.editContents", &json!({})).is_none());
     assert!(calls.borrow().is_empty());
 }
@@ -221,7 +221,7 @@ fn missing_external_service_keeps_internal_edit_and_save_back() {
     let st = app.session.active().unwrap();
     let LayerContent::Smart(smart) = &st.doc.layer(layer).unwrap().content else { panic!("smart") };
     let SmartSource::Embedded { file_name, bytes } = &smart.source else { panic!("embedded") };
-    assert!(file_name.ends_with(".pcraft"));
+    assert!(file_name.ends_with(".plyra"));
     assert_ne!(&**bytes, SVG.as_bytes());
     assert_eq!(smart.cache.as_ref().unwrap().rgba(32, 32), [0.0, 1.0, 0.0, 1.0]);
     assert_eq!(st.history.past_len(), history + 1);
@@ -564,7 +564,7 @@ fn bounded_sessions_require_reuse_or_closing_a_document() {
 
 #[test]
 fn capture_smart_svg_visual_fixtures() {
-    let Some(directory) = std::env::var_os("CRAFT_SMART_SVG_FIXTURES").map(std::path::PathBuf::from) else { return };
+    let Some(directory) = std::env::var_os("PLYRA_SMART_SVG_FIXTURES").map(std::path::PathBuf::from) else { return };
     std::fs::create_dir_all(&directory).unwrap();
     for theme in [crate::theme::ThemeKind::Pro, crate::theme::ThemeKind::StudioLight] {
         let (mut app, _, _) = fixture();
@@ -632,7 +632,7 @@ fn embedded_ai_link_table_handoff_preserves_source_until_saved_and_undo_restores
 /// Optional screenshot uses authored bytes and mock services, never private artwork or an editor.
 #[test]
 fn capture_embedded_vector_conversion_prompt() {
-    let Some(directory) = std::env::var_os("CRAFT_SMART_SVG_FIXTURES").map(std::path::PathBuf::from) else { return };
+    let Some(directory) = std::env::var_os("PLYRA_SMART_SVG_FIXTURES").map(std::path::PathBuf::from) else { return };
     std::fs::create_dir_all(&directory).unwrap();
     let (mut app, _, _) = fixture();
     let state = app.session.active_mut().unwrap();

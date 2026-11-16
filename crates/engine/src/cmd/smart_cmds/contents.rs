@@ -81,7 +81,7 @@ pub fn contents_of(doc: &Document, id: LayerId) -> Result<(String, Arc<Vec<u8>>)
 }
 
 /// Writes the smart object's file as it is. To a path with another extension (a `.png` for
-/// `.psb` or `.pcraft` contents) the contents are opened and exported in that format instead.
+/// `.psb` or `.plyra` contents) the contents are opened and exported in that format instead.
 pub(super) fn export_contents(s: &mut Session, p: &Value) -> Result<Value> {
     let path = path_param("layer.smartObjects.exportContents", p)?;
     let id = layer_param(s, p)?;
@@ -154,7 +154,7 @@ pub fn commit_child(s: &mut Session, index: usize) -> Result<bool> {
                 SmartSource::Linked { .. } => child.name.as_str(),
             };
             let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
-            sm.source = SmartSource::Embedded { file_name: format!("{stem}.pcraft"), bytes: bytes.clone() };
+            sm.source = SmartSource::Embedded { file_name: format!("{stem}.plyra"), bytes: bytes.clone() };
             detach_psd(doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?);
             refresh_or_fail(doc, id)?;
         }

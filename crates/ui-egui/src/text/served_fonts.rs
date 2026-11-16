@@ -224,7 +224,7 @@ mod tests {
             scripts: |_| Vec::new(),
             covers: |_, _| None,
             embedded: crate::cjk_fonts::no_embedded,
-            eager_craft_fonts: false,
+            eager_plyra_fonts: false,
         };
         let ctx = egui::Context::default();
         crate::theme::install_fonts_with(&ctx, web());

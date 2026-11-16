@@ -56,10 +56,10 @@ impl AuthorizedWorkspace {
         read_to_observed_length(&mut file, metadata.len())
     }
 
-    /// Load one `.pcraft` document in directory form — the native on-disk layout — below the
+    /// Load one `.plyra` document in directory form — the native on-disk layout — below the
     /// read root. `read` serves regular files only (the zip form), so a regular file at the
     /// path is reported as `Ok(None)` for the caller to fall back to.
-    pub fn open_pcraft(&self, path: &str) -> Result<Option<fotodit_doc::Document>, AutomationError> {
+    pub fn open_plyra(&self, path: &str) -> Result<Option<fotodit_doc::Document>, AutomationError> {
         let relative = request_path(path, self.read.as_ref())?;
         let root = self.read.as_ref().ok_or_else(|| AutomationError::BadRequest(format!("{DENIED}: read authority is absent")))?;
         let dir = match root.dir.open_dir(&relative) {
@@ -324,7 +324,7 @@ fn path_error(path: &str, reason: &str) -> AutomationError {
     AutomationError::BadRequest(format!("automation path rejected: {reason}: `{path}`"))
 }
 
-/// A `.pcraft` directory behind the read-root capability: bounded reads, no ambient paths.
+/// A `.plyra` directory behind the read-root capability: bounded reads, no ambient paths.
 struct DirHandle {
     dir: Dir,
 }

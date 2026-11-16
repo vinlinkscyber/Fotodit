@@ -13,7 +13,7 @@ const COMPOSITE_BYTES_PER_PX: u64 = 16;
 
 /// Formats that keep the layers: their model is built from the layer pixels, not a composite.
 fn keeps_layers(ext: &str) -> bool {
-    matches!(ext, "psd" | "psb" | "pcraft" | "ora" | "kra" | "xcf")
+    matches!(ext, "psd" | "psb" | "plyra" | "ora" | "kra" | "xcf")
 }
 
 /// Formats whose writer fills a composite of the canvas: every flat format, and OpenRaster for
@@ -95,7 +95,7 @@ mod tests {
         let merged = 64 * 64 * 4 * 2;
         assert_eq!(estimate_export_bytes(&doc, "x.psd"), (10 << 20) + merged);
         assert_eq!(estimate_export_bytes(&doc, "/a/b/x.PSD"), (10 << 20) + merged);
-        assert_eq!(estimate_export_bytes(&doc, "x.pcraft"), 10 << 20);
+        assert_eq!(estimate_export_bytes(&doc, "x.plyra"), 10 << 20);
         assert_eq!(estimate_export_bytes(&doc, "png"), (10 << 20) + 64 * 64 * 16);
         // OpenRaster keeps the layers but also writes a merged image, flattened first.
         assert_eq!(estimate_export_bytes(&doc, "x.ora"), (10 << 20) + 64 * 64 * 16);
@@ -113,6 +113,6 @@ mod tests {
     fn an_empty_document_needs_next_to_nothing() {
         let doc = Document::new("t", fotodit_geom::Size::new(10, 10), ColorMode::Rgb, SampleType::U8);
         assert_eq!(estimate_export_bytes(&doc, "psd"), 10 * 10 * 4 * 2, "only the merged image");
-        assert_eq!(estimate_export_bytes(&doc, "pcraft"), 0);
+        assert_eq!(estimate_export_bytes(&doc, "plyra"), 0);
     }
 }

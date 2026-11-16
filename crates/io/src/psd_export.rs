@@ -369,7 +369,7 @@ impl Ex<'_> {
             for mode in modes.into_iter().flatten() {
                 if !mode.has_psd_equivalent() {
                     self.warnings.push(format!(
-                        "layer \"{}\", {}: {} has no PSD equivalent and was written as Normal; save as .pcraft to preserve it",
+                        "layer \"{}\", {}: {} has no PSD equivalent and was written as Normal; save as .plyra to preserve it",
                         l.name,
                         effect.label(),
                         mode.label()
@@ -396,7 +396,7 @@ impl Ex<'_> {
         }
         if !l.blend.has_psd_equivalent() {
             self.warnings.push(format!(
-                "layer \"{}\": {} has no PSD equivalent and was written as Normal; save as .pcraft to preserve it",
+                "layer \"{}\": {} has no PSD equivalent and was written as Normal; save as .plyra to preserve it",
                 l.name,
                 l.blend.label()
             ));
@@ -821,7 +821,7 @@ impl Ex<'_> {
     }
 
     /// The `lnk2` file a smart object's source is written as: a preserved embedded file, or a new
-    /// one (a `.pcraft` source becomes a PSB of the nested document; image files are embedded as
+    /// one (a `.plyra` source becomes a PSB of the nested document; image files are embedded as
     /// they are; a linked file is read and embedded).
     fn smart_source(&mut self, sm: &fotodit_doc::SmartObject, template: Option<&crate::smart_map::Placed>) -> Result<Source, String> {
         use fotodit_doc::SmartSource;
@@ -933,7 +933,7 @@ impl Ex<'_> {
         c
     }
 
-    /// Adds `bytes` as an embedded file (converted to PSB when it is a `.pcraft` bundle), once
+    /// Adds `bytes` as an embedded file (converted to PSB when it is a `.plyra` bundle), once
     /// per contents identity and bytes. Equal bytes in independent objects stay independent.
     /// `linked`: the bytes were read from a path the document names, so only a file Fotodit
     /// can open is embedded (a link to a text or settings file is written as pixels instead).
@@ -954,7 +954,7 @@ impl Ex<'_> {
     }
 
     fn convert_source(&mut self, contents_id: SmartContentsId, file_name: &str, bytes: &[u8], linked: bool) -> Result<Source, String> {
-        let (name, data, size, dpi, nested) = if fotodit_format::is_pcraft(bytes) {
+        let (name, data, size, dpi, nested) = if fotodit_format::is_plyra(bytes) {
             if self.smart.depth >= MAX_NESTING {
                 return Err(format!("smart objects nest more than {MAX_NESTING} deep"));
             }

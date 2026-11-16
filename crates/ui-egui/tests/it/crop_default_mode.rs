@@ -117,7 +117,7 @@ fn a_ratio_dropdown_updates_the_preview_and_enter_without_touching_a_handle() {
     h.get_by_label("1 : 1 (Square)").click();
     h.run_steps(3);
     assert_eq!(h.state().ui.crop_rect, Some([50.0, 0.0, 250.0, 200.0]));
-    if let Some(dir) = std::env::var_os("CRAFT_UI_VISUAL_FIXTURES") {
+    if let Some(dir) = std::env::var_os("PLYRA_UI_VISUAL_FIXTURES") {
         let dir = std::path::PathBuf::from(dir);
         std::fs::create_dir_all(&dir).unwrap();
         h.render().unwrap().save(dir.join("fotodit-crop-square.png")).unwrap();
@@ -254,7 +254,7 @@ fn clear_removes_the_displayed_crop_proportions_without_changing_the_frame() {
     assert!(h.query_all_by_value("9").next().is_some());
     let frame = h.state().ui.crop_rect;
     let save = |h: &mut Harness, name: &str| {
-        if let Some(dir) = std::env::var_os("CRAFT_UI_VISUAL_FIXTURES") {
+        if let Some(dir) = std::env::var_os("PLYRA_UI_VISUAL_FIXTURES") {
             let dir = std::path::PathBuf::from(dir);
             std::fs::create_dir_all(&dir).unwrap();
             h.render().unwrap().save(dir.join(name)).unwrap();

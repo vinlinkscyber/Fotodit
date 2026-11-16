@@ -156,7 +156,7 @@ mod open_recent_tests {
             ..Default::default()
         };
         let mut app = FotoditApp::new(fotodit_engine::Session::new(), services);
-        let path = std::env::temp_dir().join("fotodit_recent_test.pcraft");
+        let path = std::env::temp_dir().join("fotodit_recent_test.plyra");
         std::fs::write(&path, b"x").unwrap();
         let p = path.to_string_lossy().to_string();
         let ctx = egui::Context::default();

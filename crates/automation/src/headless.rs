@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use fotodit_engine::jobs::{JobEvent, JobId, JobOutcome, Started};
 use fotodit_engine::{Session, command_specs, file_cmds};
-use fotodit_format::PcraftWriter;
+use fotodit_format::PlyraWriter;
 use fotodit_io::ExportOptions;
 use serde_json::{Value, json};
 
@@ -28,8 +28,8 @@ enum Filesystem {
 /// A headless editing session.
 pub struct Headless {
     pub session: Session,
-    /// Incremental `.pcraft` writers per document id.
-    writers: HashMap<u64, PcraftWriter>,
+    /// Incremental `.plyra` writers per document id.
+    writers: HashMap<u64, PlyraWriter>,
     filesystem: Filesystem,
     /// Jobs a caller waits on ([`Headless::command_begin`]), with their outcome once they end.
     /// Kept here because `jobs.list` holds only the last few jobs that ended.
@@ -344,7 +344,7 @@ impl Headless {
         })
     }
 
-    /// Save (`.pcraft` or any export format by extension). With no path,
+    /// Save (`.plyra` or any export format by extension). With no path,
     /// saves to the document's own path.
     pub fn save(&mut self, index: Option<usize>, path: Option<&Path>, format: Option<&str>, opts: &ExportOptions) -> Result<Value, AutomationError> {
         let i = self.doc_index(index)?;
@@ -363,7 +363,7 @@ impl Headless {
                     let lost = file_cmds::losses_at(&doc, p);
                     let why = if lost.is_empty() { String::new() } else { format!(" (it can't keep: {})", lost.join("; ")) };
                     return Err(AutomationError::BadRequest(format!(
-                        "pass `path`: without one, only a PSD, PSB, .pcraft or OpenRaster file that holds the whole document is written back, in its own format, so `{p}` was left unchanged{why}"
+                        "pass `path`: without one, only a PSD, PSB, .plyra or OpenRaster file that holds the whole document is written back, in its own format, so `{p}` was left unchanged{why}"
                     )));
                 }
                 PathBuf::from(p)
@@ -411,7 +411,7 @@ impl Headless {
             }
         };
         warnings.extend(fotodit_engine::type_extra_cmds::missing_font_warnings(&doc));
-        // A layered document save (PSD, PSB, OpenRaster or .pcraft) that holds the whole document is a
+        // A layered document save (PSD, PSB, OpenRaster or .plyra) that holds the whole document is a
         // full write, not a flattened copy: record the current revision as saved so the session
         // stops reporting `dirty`, and make the file the document's path. A flat export (PNG,
         // JPEG, …), or an OpenRaster file that drops part of it, is a copy and leaves both alone

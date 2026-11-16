@@ -91,8 +91,8 @@ fn smart_objects_and_filters_survive_psd() {
         s.execute("edit.transform", json!({"layer": id, "matrix": [0.75, 0, 0, 0.75, 10, 4]})).unwrap();
         let doc = s.active().unwrap().doc.clone();
         let (_, before) = smart(&doc);
-        let SmartSource::Embedded { bytes: pcraft, .. } = &before.source else { panic!("embedded") };
-        let nested = decode_source("x.pcraft", pcraft).unwrap();
+        let SmartSource::Embedded { bytes: plyra, .. } = &before.source else { panic!("embedded") };
+        let nested = decode_source("x.plyra", plyra).unwrap();
 
         let out = fotodit_io::export(&doc, "psd", &Default::default()).unwrap();
         assert!(!out.warnings.iter().any(|w| w.contains("pixels")), "{:?}", out.warnings);
@@ -406,7 +406,7 @@ fn edited_psd_smart_objects_drop_their_old_file() {
 
 /// A Displace smart filter from a Photoshop mockup PSD carries its displacement map embedded
 /// (`DspD`, stretched over the canvas): it re-renders displaced instead of passing the pixels
-/// through, and keeps that map through PSD export, `.pcraft` and a PSD re-import.
+/// through, and keeps that map through PSD export, `.plyra` and a PSD re-import.
 #[test]
 fn displace_psd_filter_renders_with_its_embedded_map() {
     use fotodit_psd::descriptor::{Descriptor, Id, UnicodeString, Value};
@@ -475,7 +475,7 @@ fn displace_psd_filter_renders_with_its_embedded_map() {
 #[test]
 fn displace_psd_filter_with_only_a_map_path_renders_after_replace_contents() {
     use fotodit_psd::descriptor::{Descriptor, Id, UnicodeString, Value};
-    let dir = std::env::temp_dir().join(format!("pcraft-9162-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("plyra-9162-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let png = |name: &str, size: (u32, u32), c: [f32; 4]| {
         let d = Document::with_background(
@@ -540,7 +540,7 @@ fn displace_psd_filter_with_only_a_map_path_renders_after_replace_contents() {
 /// A Perspective Warp smart filter as Photoshop writes it (`perspectiveWarpTransform`: vertices,
 /// warped vertices and quads of vertex indices, document pixels) opens as
 /// `layer.smartObjects.perspectiveWarp` and re-renders warped instead of flat (#6268), and keeps
-/// its planes through PSD export, `.pcraft` and a PSD re-import.
+/// its planes through PSD export, `.plyra` and a PSD re-import.
 #[test]
 fn perspective_warp_psd_filter_renders_warped() {
     use fotodit_psd::descriptor::{Descriptor, UnicodeString, Value};
@@ -647,8 +647,8 @@ fn cs2_plld_only_smart_object_opens_its_contents() {
     s.execute("edit.transform", json!({"layer": id, "matrix": [0.75, 0, 0, 0.75, 10, 4]})).unwrap();
     let doc = s.active().unwrap().doc.clone();
     let (_, before) = smart(&doc);
-    let SmartSource::Embedded { bytes: pcraft, .. } = &before.source else { panic!("embedded") };
-    let nested = decode_source("x.pcraft", pcraft).unwrap();
+    let SmartSource::Embedded { bytes: plyra, .. } = &before.source else { panic!("embedded") };
+    let nested = decode_source("x.plyra", plyra).unwrap();
 
     let back = fotodit_io::import("cs2.psd", &cs2_layout(&doc)).unwrap().document;
     let (bid, after) = smart(&back);

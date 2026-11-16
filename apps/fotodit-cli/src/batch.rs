@@ -21,7 +21,7 @@ fn same_dir(a: &Path, b: &Path) -> bool {
 
 pub(crate) fn is_input(p: &Path) -> bool {
     let known = |e: &str| {
-        matches!(e, "pcraft" | "psd" | "psb" | "pdn" | "ora" | "kra" | "krz" | "af" | "afdesign" | "afphoto" | "afpub")
+        matches!(e, "plyra" | "psd" | "psb" | "pdn" | "ora" | "kra" | "krz" | "af" | "afdesign" | "afphoto" | "afpub")
             || fotodit_codecs::from_extension(e).is_some_and(|f| fotodit_codecs::caps(f).read)
     };
     p.is_file() && p.extension().is_some_and(|e| known(&e.to_string_lossy().to_ascii_lowercase()))
@@ -325,7 +325,7 @@ mod tests {
         let bad_file = tmp.join("01_bad.png");
         std::fs::write(&bad_file, b"not a valid png or document file").unwrap();
 
-        let good_file = tmp.join("02_good.pcraft");
+        let good_file = tmp.join("02_good.plyra");
         let mut good_doc = Document::with_background("test", Size::new(32, 32), ColorMode::Rgb, SampleType::U8, Color::WHITE);
         let extra_layer = good_doc.layers[0].clone();
         good_doc.layers.push(extra_layer);

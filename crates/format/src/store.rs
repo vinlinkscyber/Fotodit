@@ -253,7 +253,7 @@ pub fn read_entry(file: &mut impl std::io::Read, len: u64, max: usize, path: &st
 // Loading
 // ---------------------------------------------------------------------------
 
-/// The limits a manifest is checked against: craft-pcraft-format's item limit, the JSON nesting
+/// The limits a manifest is checked against: the shared format crate's item limit, the JSON nesting
 /// of [`convert::MAX_GROUP_DEPTH`] nested groups ([`craft_pcraft_format::manifest_depth`]) and at
 /// most `max_manifest_bytes` bytes. The saver checks the same nesting and items, so every bundle
 /// it writes loads again.
@@ -546,11 +546,11 @@ fn tile_le(t: &Tile, sample: SampleType) -> LeBytes<'_> {
     }
 }
 
-/// Default for [`PcraftWriter::set_reverify_budget`]: compressed bytes of already-verified
+/// Default for [`PlyraWriter::set_reverify_budget`]: compressed bytes of already-verified
 /// objects re-read per directory save.
 pub const DEFAULT_REVERIFY_BUDGET: u64 = 16 * 1024 * 1024;
 
-/// Incremental `.pcraft` writer. Keep one per open document: it remembers
+/// Incremental `.plyra` writer. Keep one per open document: it remembers
 /// tile hashes (by `Arc` identity), compressed objects, and objects it has
 /// verified in the current directory, so repeated saves stay cheap.
 ///
@@ -563,7 +563,7 @@ pub const DEFAULT_REVERIFY_BUDGET: u64 = 16 * 1024 * 1024;
 /// the cached objects, oldest-checked first, up to [`DEFAULT_REVERIFY_BUDGET`] bytes (see
 /// [`Self::set_reverify_budget`]). Over enough saves every object is read again, and a damaged
 /// one is rewritten.
-pub struct PcraftWriter {
+pub struct PlyraWriter {
     hash_cache: TileHashCache,
     blob_hash_cache: BlobHashCache,
     /// Compressed objects by bundle path (ZIP mode).
@@ -575,7 +575,7 @@ pub struct PcraftWriter {
     lock_wait: std::time::Duration,
 }
 
-impl Default for PcraftWriter {
+impl Default for PlyraWriter {
     fn default() -> Self {
         Self {
             hash_cache: HashMap::new(),
@@ -1041,7 +1041,7 @@ fn par_compress<'a>(objects: &[(&'a String, &'a Object)]) -> Result<Vec<Compress
     })
 }
 
-impl PcraftWriter {
+impl PlyraWriter {
     pub fn new() -> Self {
         Self::default()
     }
@@ -1418,7 +1418,7 @@ fn compressed_cache_budget_limits_retained_capacity_without_changing_bytes() {
     surface.write_pixel(0, 0, &[0.2, 0.4, 0.6, 1.0]);
     surface.write_pixel(256, 0, &[0.6, 0.4, 0.2, 1.0]);
     doc.layers.push(Layer::new("pixels", LayerContent::Raster(surface)));
-    let mut writer = PcraftWriter::new();
+    let mut writer = PlyraWriter::new();
     let (expected, _) = writer.save_zip(&doc, &SaveOptions::default()).unwrap();
     let key = writer.compressed.keys().next().unwrap().clone();
     let key_allocation = writer.compressed.get_key_value(&key).unwrap().0.as_ptr();
@@ -1469,7 +1469,7 @@ fn previews_follow_the_manifest_with_the_bytes_of_a_serial_encode() {
             full_composite: f.then(|| full.clone()),
             ..Default::default()
         };
-        let (bytes, _) = PcraftWriter::new().save_zip(&doc, &opts).unwrap();
+        let (bytes, _) = PlyraWriter::new().save_zip(&doc, &opts).unwrap();
         let zip = ZipReader::new(&bytes).unwrap();
         let names: Vec<&str> = zip.entries.iter().map(|e| e.name.as_str()).collect();
         let mut want = vec![MANIFEST];
@@ -1484,34 +1484,34 @@ fn previews_follow_the_manifest_with_the_bytes_of_a_serial_encode() {
         assert_eq!(crate::read_full_composite(&bytes).unwrap(), opts.full_composite.as_ref().map(|i| png(i).unwrap()));
     }
     let bad = SaveOptions { thumbnail: Some(Rgba8Image { width: 4, height: 3, pixels: vec![0; 5] }), composite: Some(composite.clone()), ..Default::default() };
-    assert!(matches!(PcraftWriter::new().save_zip(&doc, &bad), Err(FormatError::Unsupported(m)) if m.starts_with("preview")));
+    assert!(matches!(PlyraWriter::new().save_zip(&doc, &bad), Err(FormatError::Unsupported(m)) if m.starts_with("preview")));
     let bad = SaveOptions { thumbnail: Some(thumb.clone()), composite: Some(Rgba8Image { width: 9, height: 5, pixels: vec![0; 5] }), ..Default::default() };
-    assert!(matches!(PcraftWriter::new().save_zip(&doc, &bad), Err(FormatError::Unsupported(m)) if m.starts_with("preview")));
+    assert!(matches!(PlyraWriter::new().save_zip(&doc, &bad), Err(FormatError::Unsupported(m)) if m.starts_with("preview")));
     // A full-size composite that cannot be encoded is left out, and the save goes on without it.
     let bad =
         SaveOptions { thumbnail: Some(thumb.clone()), full_composite: Some(Rgba8Image { width: 600, height: 3, pixels: vec![0; 5] }), ..Default::default() };
-    let (bytes, stats) = PcraftWriter::new().save_zip(&doc, &bad).unwrap();
+    let (bytes, stats) = PlyraWriter::new().save_zip(&doc, &bad).unwrap();
     let zip = ZipReader::new(&bytes).unwrap();
     assert!(zip.read_by_name(FULL_COMPOSITE, usize::MAX).is_err());
     assert_eq!(zip.read_by_name(THUMB, usize::MAX).unwrap(), png(&thumb).unwrap());
     assert_eq!(crate::read_full_composite(&bytes).unwrap(), None);
     assert_eq!(stats.manifest_bytes, zip.read_by_name(MANIFEST, usize::MAX).unwrap().len());
-    let dir = std::env::temp_dir().join(format!("pcraft-bad-full-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("plyra-bad-full-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    PcraftWriter::new().save_dir(&doc, &dir, &bad).unwrap();
+    PlyraWriter::new().save_dir(&doc, &dir, &bad).unwrap();
     assert!(!dir.join(FULL_COMPOSITE).exists());
     assert!(!std::fs::read_to_string(dir.join(MANIFEST)).unwrap().contains("full_composite"));
     std::fs::remove_dir_all(&dir).unwrap();
 
-    let dir = std::env::temp_dir().join(format!("pcraft-previews-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("plyra-previews-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let opts = SaveOptions { thumbnail: Some(thumb.clone()), composite: Some(composite.clone()), full_composite: Some(full.clone()), ..Default::default() };
-    PcraftWriter::new().save_dir(&doc, &dir, &opts).unwrap();
+    PlyraWriter::new().save_dir(&doc, &dir, &opts).unwrap();
     assert_eq!(std::fs::read(dir.join(THUMB)).unwrap(), png(&thumb).unwrap());
     assert_eq!(std::fs::read(dir.join(COMPOSITE)).unwrap(), png(&composite).unwrap());
     assert_eq!(std::fs::read(dir.join(FULL_COMPOSITE)).unwrap(), png(&full).unwrap());
     // A later save without it removes the file once the new manifest is in place.
-    PcraftWriter::new().save_dir(&doc, &dir, &SaveOptions { full_composite: None, ..opts }).unwrap();
+    PlyraWriter::new().save_dir(&doc, &dir, &SaveOptions { full_composite: None, ..opts }).unwrap();
     assert!(!dir.join(FULL_COMPOSITE).exists());
     assert!(dir.join(COMPOSITE).exists());
     std::fs::remove_dir_all(&dir).unwrap();
@@ -1536,15 +1536,15 @@ fn zip_save_leaves_the_full_composite_out_past_the_zip_limit() {
         full_composite: Some(full.clone()),
         ..Default::default()
     };
-    let (whole, _) = PcraftWriter::new().save_zip(&doc, &opts).unwrap();
+    let (whole, _) = PlyraWriter::new().save_zip(&doc, &opts).unwrap();
     // The whole archive, central directory included, and how many entries it holds: what the
     // limit compares.
     let bytes = whole.len() as u64;
     let count = ZipReader::new(&whole).unwrap().entries.len();
-    let (fits, _) = PcraftWriter::new().save_zip_within(&doc, &opts, (bytes, count)).unwrap();
+    let (fits, _) = PlyraWriter::new().save_zip_within(&doc, &opts, (bytes, count)).unwrap();
     assert_eq!(fits, whole, "an archive at the limit keeps the composite");
     for limit in [(bytes - 1, count), (bytes, count - 1)] {
-        let (saved, stats) = PcraftWriter::new().save_zip_within(&doc, &opts, limit).unwrap();
+        let (saved, stats) = PlyraWriter::new().save_zip_within(&doc, &opts, limit).unwrap();
         let zip = ZipReader::new(&saved).unwrap();
         let names: Vec<&str> = zip.entries.iter().map(|e| e.name.as_str()).collect();
         assert!(!names.contains(&FULL_COMPOSITE), "{limit:?}: {names:?}");
@@ -1563,8 +1563,8 @@ fn gc_pinned_directory_handles_resist_subdirectory_swap() {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT: AtomicU64 = AtomicU64::new(0);
-    let root = std::env::temp_dir().join(format!("pcraft-gc-swap-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
-    let bundle = root.join("project.pcraft");
+    let root = std::env::temp_dir().join(format!("plyra-gc-swap-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    let bundle = root.join("project.plyra");
     let outside = root.join("outside");
     for sub in ["tiles", "blobs", "composite"] {
         std::fs::create_dir_all(bundle.join(sub)).unwrap();
@@ -1594,7 +1594,7 @@ fn a_failed_manifest_flush_keeps_the_previous_objects() {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT: AtomicU64 = AtomicU64::new(0);
-    let dir = std::env::temp_dir().join(format!("pcraft-flush-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    let dir = std::env::temp_dir().join(format!("plyra-flush-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
     std::fs::create_dir_all(&dir).unwrap();
     let dir = std::fs::canonicalize(dir).unwrap();
     let mut doc = Document::new("flush", fotodit_doc::Size::new(64, 64), fotodit_color::ColorMode::Rgb, SampleType::U8);
@@ -1603,7 +1603,7 @@ fn a_failed_manifest_flush_keeps_the_previous_objects() {
         doc.layer_mut(id).unwrap().surface_mut().unwrap().fill_rect(fotodit_geom::Rect::new(0, 0, 64, 64), &[red, 0.5, 0.25, 1.0]);
     };
     paint(&mut doc, 1.0);
-    let mut w = PcraftWriter::new();
+    let mut w = PlyraWriter::new();
     w.save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
     let old = list_objects(&dir).unwrap();
     paint(&mut doc, 0.0);
@@ -1627,14 +1627,14 @@ fn a_retried_save_flushes_the_folder_of_a_reused_object() {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT: AtomicU64 = AtomicU64::new(0);
-    let dir = std::env::temp_dir().join(format!("pcraft-retry-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    let dir = std::env::temp_dir().join(format!("plyra-retry-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
     std::fs::create_dir_all(&dir).unwrap();
     let dir = std::fs::canonicalize(dir).unwrap();
     // One layer of one tile: the retry finds its only object already written.
     let mut doc = Document::new("retry", fotodit_doc::Size::new(16, 16), fotodit_color::ColorMode::Rgb, SampleType::U8);
     let id = doc.insert_above(None, fotodit_doc::Layer::raster("paint", doc.pixel_format()));
     doc.layer_mut(id).unwrap().surface_mut().unwrap().fill_rect(fotodit_geom::Rect::new(0, 0, 16, 16), &[1.0, 0.5, 0.25, 1.0]);
-    let mut w = PcraftWriter::new();
+    let mut w = PlyraWriter::new();
     FAIL_DIR_FLUSH.with(|f| f.set(Some("tiles")));
     let e = w.save_dir(&doc, &dir, &SaveOptions::default()).unwrap_err();
     assert!(e.to_string().contains("could not be flushed"), "{e}");

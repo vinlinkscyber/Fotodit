@@ -1,5 +1,5 @@
-//! Font database: bundled fonts (always available, also on the web), the optional craft-fonts
-//! fonts of every script ([`crate::craft_fonts`], when built with `CRAFT_FONTS_DIR`), optional
+//! Font database: bundled fonts (always available, also on the web), the optional plyra-fonts
+//! fonts of every script ([`crate::plyra_fonts`], when built with `PLYRA_FONTS_DIR`), optional
 //! system fonts found by scanning platform directories (plus Fontconfig's file list on Linux),
 //! user-registered font data, and PostScript-name lookup for PSD import.
 
@@ -130,10 +130,10 @@ pub fn fallback_candidates(order: &[crate::cjk::CjkScript; 4]) -> Vec<&'static s
         }
     }
     for s in order {
-        // craft-fonts' Japanese fonts (if built in) go ahead of the installed Japanese fonts, in
+        // plyra-fonts' Japanese fonts (if built in) go ahead of the installed Japanese fonts, in
         // the Japanese slot of the locale order, so shared Han keeps the locale's forms.
         if *s == crate::cjk::CjkScript::Japanese {
-            v.extend(crate::craft_fonts::japanese_families());
+            v.extend(crate::plyra_fonts::japanese_families());
         }
         v.extend_from_slice(crate::cjk::families(*s));
     }
@@ -228,17 +228,17 @@ impl FontDb {
         for (_, bytes) in BUNDLED {
             db.register_static_font(bytes.as_slice());
         }
-        // The optional craft-fonts (empty unless built with CRAFT_FONTS_DIR; always empty on
+        // The optional plyra-fonts (empty unless built with PLYRA_FONTS_DIR; always empty on
         // wasm32), every script, before any system font.
-        db.register_craft_fonts(crate::craft_fonts::CRAFT_FONTS);
+        db.register_plyra_fonts(crate::plyra_fonts::PLYRA_FONTS);
         db.refresh_generics();
         db
     }
 
-    /// Registers craft-fonts manifest entries of every script. A single-face file registers under
+    /// Registers plyra-fonts manifest entries of every script. A single-face file registers under
     /// its manifest family, whatever family its `name` table gives. Each face of a collection
     /// (TTC/OTC) keeps the family its `name` table gives.
-    fn register_craft_fonts(&mut self, fonts: &[crate::CraftFont]) {
+    fn register_plyra_fonts(&mut self, fonts: &[crate::PlyraFont]) {
         for f in fonts {
             let family = (face_count(f.bytes) == 1).then_some(f.family);
             self.register_blob(Blob::new(Arc::new(f.bytes)), family);

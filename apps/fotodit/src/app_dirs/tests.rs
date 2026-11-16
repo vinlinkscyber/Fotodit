@@ -165,8 +165,8 @@ fn autosaves_go_to_the_xdg_state_folder() {
 
 /// An autosave bundle and its sidecar, as `format::Autosaver` writes them.
 fn autosave(dir: &Path, key: &str) {
-    std::fs::create_dir_all(dir.join(format!("{key}.pcraft"))).unwrap();
-    std::fs::write(dir.join(format!("{key}.pcraft")).join("manifest.json"), key).unwrap();
+    std::fs::create_dir_all(dir.join(format!("{key}.plyra"))).unwrap();
+    std::fs::write(dir.join(format!("{key}.plyra")).join("manifest.json"), key).unwrap();
     std::fs::write(dir.join(format!("{key}.json")), key).unwrap();
 }
 
@@ -178,7 +178,7 @@ fn autosaves_from_the_old_folder_move_to_the_new_one() {
     autosave(&legacy, "a");
     assert_eq!(adopt_legacy_recovery(&legacy, &dir), dir);
     assert!(!legacy.exists(), "the old folder is gone");
-    assert_eq!(std::fs::read_to_string(dir.join("a.pcraft").join("manifest.json")).unwrap(), "a");
+    assert_eq!(std::fs::read_to_string(dir.join("a.plyra").join("manifest.json")).unwrap(), "a");
     assert!(dir.join("a.json").is_file());
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -197,10 +197,10 @@ fn autosaves_merge_into_an_existing_folder_without_overwriting() {
     std::fs::write(dir.join("both.json"), "newer").unwrap();
     assert_eq!(adopt_legacy_recovery(&legacy, &dir), dir);
     assert!(dir.join(temp_file).is_file() && !legacy.join(temp_file).exists());
-    assert!(dir.join("old.pcraft").is_dir() && dir.join("old.json").is_file(), "a whole autosave moves");
+    assert!(dir.join("old.plyra").is_dir() && dir.join("old.json").is_file(), "a whole autosave moves");
     assert_eq!(std::fs::read_to_string(dir.join("both.json")).unwrap(), "newer", "never overwritten");
-    assert!(!dir.join("both.pcraft").exists(), "a clashing autosave isn't split");
-    assert!(legacy.join("both.pcraft").is_dir() && legacy.join("both.json").is_file(), "it stays behind whole");
+    assert!(!dir.join("both.plyra").exists(), "a clashing autosave isn't split");
+    assert!(legacy.join("both.plyra").is_dir() && legacy.join("both.json").is_file(), "it stays behind whole");
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -236,15 +236,15 @@ fn a_move_across_volumes_copies_then_removes() {
     let root = temp("recovery-copy");
     let legacy = root.join("roaming").join("Recovery");
     autosave(&legacy, "a");
-    std::fs::create_dir_all(legacy.join("a.pcraft").join("tiles")).unwrap();
-    std::fs::write(legacy.join("a.pcraft").join("tiles").join("t0.zst"), b"tile").unwrap();
+    std::fs::create_dir_all(legacy.join("a.plyra").join("tiles")).unwrap();
+    std::fs::write(legacy.join("a.plyra").join("tiles").join("t0.zst"), b"tile").unwrap();
     let dir = root.join("local").join("Recovery");
     std::fs::create_dir_all(root.join("local")).unwrap();
     move_across(&legacy, &dir).unwrap();
     assert!(!legacy.exists(), "the original is removed after the copy");
     assert_eq!(side_leftovers(&root.join("roaming")), 0, "nothing is left held aside");
-    assert_eq!(std::fs::read_to_string(dir.join("a.pcraft").join("manifest.json")).unwrap(), "a");
-    assert_eq!(std::fs::read(dir.join("a.pcraft").join("tiles").join("t0.zst")).unwrap(), b"tile");
+    assert_eq!(std::fs::read_to_string(dir.join("a.plyra").join("manifest.json")).unwrap(), "a");
+    assert_eq!(std::fs::read(dir.join("a.plyra").join("tiles").join("t0.zst")).unwrap(), b"tile");
     assert_eq!(std::fs::read_to_string(dir.join("a.json")).unwrap(), "a");
     // One file on its own, as the per-autosave moves do.
     move_across(&dir.join("a.json"), &root.join("a.json")).unwrap();
@@ -259,7 +259,7 @@ fn a_failed_copy_puts_the_original_back_and_leaves_no_partial_copy() {
     let legacy = root.join("Recovery");
     autosave(&legacy, "a");
     // Deeper than any bundle: the copy gives up part way.
-    let mut deep = legacy.join("a.pcraft");
+    let mut deep = legacy.join("a.plyra");
     for _ in 0..=MAX_COPY_DEPTH {
         deep = deep.join("d");
     }

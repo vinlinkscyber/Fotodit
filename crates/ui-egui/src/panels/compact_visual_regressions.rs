@@ -102,7 +102,7 @@ fn tall_toolbar_keeps_the_colour_chips_under_the_tools() {
 #[test]
 fn capture_compact_visual_fixtures() {
     let _gpu = fotodit_testkit::gpu_lock();
-    let Some(directory) = std::env::var_os("CRAFT_UI_VISUAL_FIXTURES").map(std::path::PathBuf::from) else { return };
+    let Some(directory) = std::env::var_os("PLYRA_UI_VISUAL_FIXTURES").map(std::path::PathBuf::from) else { return };
     std::fs::create_dir_all(&directory).unwrap();
     for kind in crate::theme::ThemeKind::ALL {
         for (width, height) in [(800.0, 480.0), (1280.0, 720.0)] {

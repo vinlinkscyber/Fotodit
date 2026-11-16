@@ -127,12 +127,12 @@ fn hebrew_and_urdu_mirror_the_shell_and_draw_their_letters() {
     let _lang = i18n::language_scope(Lang::EN);
     for (code, letter) in [("he", 'ש'), ("ur", 'ر')] {
         let lang = Lang::from_code(code).expect("registered language");
-        // Builds with craft-fonts (CI: `CRAFT_FONTS_REQUIRED`) draw these letters from the first
+        // Builds with plyra-fonts (CI: `PLYRA_FONTS_REQUIRED`) draw these letters from the first
         // frame and check them. Without it the host's fonts decide, so the harness allows tofu
         // and only the mirroring is checked.
         let fonts = craft_font_covers(letter);
         if !fonts {
-            eprintln!("{code}: no craft-fonts face for {letter}; glyphs not checked (build with CRAFT_FONTS_DIR)");
+            eprintln!("{code}: no plyra-fonts face for {letter}; glyphs not checked (build with PLYRA_FONTS_DIR)");
         }
         let mut h = if fonts { harness() } else { harness_with(Harness::builder().allow_missing_glyphs()) };
         h.state_mut().run("prefs.set", json!({"path": "interface.language", "value": code})).expect("choose language");
@@ -151,11 +151,11 @@ fn hebrew_and_urdu_mirror_the_shell_and_draw_their_letters() {
     }
 }
 
-/// Whether craft-fonts has a face for `letter`. Only those are served in the first frame (the
+/// Whether plyra-fonts has a face for `letter`. Only those are served in the first frame (the
 /// eager provider); installed fonts arrive a frame later through the lazy loader, which the
 /// harness's strict missing-glyph policy doesn't wait for (`cjk_fonts` tests).
 fn craft_font_covers(letter: char) -> bool {
-    fotodit_text::craft_fonts::CRAFT_FONTS.iter().any(|f| !f.bytes.is_empty() && scripts::covering_face(f.bytes, letter).is_some())
+    fotodit_text::plyra_fonts::PLYRA_FONTS.iter().any(|f| !f.bytes.is_empty() && scripts::covering_face(f.bytes, letter).is_some())
 }
 
 #[test]

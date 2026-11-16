@@ -68,7 +68,7 @@ fn scratch_pixels_history_and_failed_save_are_transactional() {
     assert!(Arc::ptr_eq(&session.active().unwrap().doc, &retained));
     assert_eq!(session.active().unwrap().revision, revision);
     assert_eq!(session.active().unwrap().active_layer, Some(id));
-    let mut writer = fotodit_format::PcraftWriter::new();
+    let mut writer = fotodit_format::PlyraWriter::new();
     assert!(writer.save_zip(&retained, &Default::default()).is_err());
     assert!(fotodit_io::export(&retained, "png", &Default::default()).is_err());
     // No failure or recovery happens during a retry, so only the document's own health
@@ -96,7 +96,7 @@ fn scratch_pixels_history_and_failed_save_are_transactional() {
     spill::settle();
     let healthy = session.active().unwrap().doc.clone();
     assert!(healthy.scratch_health().is_ok());
-    let (saved, _) = fotodit_format::PcraftWriter::new().save_zip(&healthy, &Default::default()).unwrap();
+    let (saved, _) = fotodit_format::PlyraWriter::new().save_zip(&healthy, &Default::default()).unwrap();
     assert_eq!(fotodit_format::load_from_bytes(&saved).unwrap().layers, healthy.layers);
     assert!(fotodit_io::export(&healthy, "png", &Default::default()).is_ok());
     assert!(retained.scratch_health().is_err());

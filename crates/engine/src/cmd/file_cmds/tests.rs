@@ -1844,33 +1844,33 @@ fn maximize_compatibility_preference_controls_the_psd_merged_image() {
     }
 }
 
-/// Preferences › File Handling › Save Full-Size Composite in .pcraft Files decides whether a
-/// `.pcraft` save writes `composite/full.png` (off by default); a command's
-/// `"pcraftFullComposite"` overrides it.
+/// Preferences › File Handling › Save Full-Size Composite in .plyra Files decides whether a
+/// `.plyra` save writes `composite/full.png` (off by default); a command's
+/// `"plyraFullComposite"` overrides it.
 #[test]
-fn full_composite_preference_controls_the_pcraft_full_size_composite() {
+fn full_composite_preference_controls_the_plyra_full_size_composite() {
     let dir = tmp("full-composite");
     let mut s = session(300, 200, 16);
     let full = |path: &str| fotodit_format::read_full_composite(&std::fs::read(path).unwrap()).unwrap().is_some();
-    let out = join(&dir, "default.pcraft");
+    let out = join(&dir, "default.plyra");
     s.execute("file.saveACopy", json!({"path": out})).unwrap();
     assert!(!full(&out), "off by default");
     for on in [true, false] {
-        s.edit_prefs(|p| p.file_handling.pcraft_full_composite = on);
-        let out = join(&dir, &format!("{on}.pcraft"));
+        s.edit_prefs(|p| p.file_handling.plyra_full_composite = on);
+        let out = join(&dir, &format!("{on}.plyra"));
         s.execute("file.saveACopy", json!({"path": out})).unwrap();
         assert_eq!(full(&out), on, "preference {on}");
-        let out = join(&dir, &format!("{on} param.pcraft"));
-        s.execute("file.saveACopy", json!({"path": out, "pcraftFullComposite": !on})).unwrap();
+        let out = join(&dir, &format!("{on} param.plyra"));
+        s.execute("file.saveACopy", json!({"path": out, "plyraFullComposite": !on})).unwrap();
         assert_eq!(full(&out), !on, "preference {on}, param {}", !on);
     }
-    let out = join(&dir, "null param.pcraft");
-    s.execute("file.saveACopy", json!({"path": out, "pcraftFullComposite": null})).unwrap();
+    let out = join(&dir, "null param.plyra");
+    s.execute("file.saveACopy", json!({"path": out, "plyraFullComposite": null})).unwrap();
     assert!(!full(&out), "null takes the preference");
     for bad in [json!("true"), json!(1)] {
-        let out = join(&dir, "bad param.pcraft");
-        let err = s.execute("file.saveACopy", json!({"path": out, "pcraftFullComposite": bad})).unwrap_err().to_string();
-        assert!(err.contains("`pcraftFullComposite` must be true or false"), "{bad}: {err}");
+        let out = join(&dir, "bad param.plyra");
+        let err = s.execute("file.saveACopy", json!({"path": out, "plyraFullComposite": bad})).unwrap_err().to_string();
+        assert!(err.contains("`plyraFullComposite` must be true or false"), "{bad}: {err}");
         assert!(!std::path::Path::new(&out).exists(), "{bad}: nothing is written");
     }
 }
@@ -2330,7 +2330,7 @@ fn flatten_all_layer_effects_and_masks() {
 /// Flatten All Layer Effects must bake the effect visuals without destroying the layer's masks:
 /// an enabled raster mask and a vector mask on one layer, a disabled raster mask on another
 /// (#3804). The command is a visual no-op; the masks (pixels and state) survive, including a
-/// `.pcraft` round trip.
+/// `.plyra` round trip.
 #[test]
 fn flatten_all_layer_effects_keeps_masks() {
     for depth in [8, 16, 32] {
@@ -2424,16 +2424,16 @@ fn flatten_all_layer_effects_keeps_masks() {
         assert_eq!(doc(&s).layer(id1).unwrap().mask, m1);
         assert_eq!(doc(&s).layer(id1).unwrap().vector_mask, v1);
         assert_eq!(doc(&s).layer(id2).unwrap().mask, m2);
-        // The masks survive a `.pcraft` save and reopen.
+        // The masks survive a `.plyra` save and reopen.
         let dir = tmp("flatten-effects-masks");
-        let path = join(&dir, "masks.pcraft");
+        let path = join(&dir, "masks.plyra");
         save_doc(doc(&s), &path, None).unwrap();
         let bytes = std::fs::read(&path).unwrap();
         let mut s2 = Session::new();
-        open_bytes_as(&mut s2, "masks.pcraft", &bytes, None, None).unwrap();
+        open_bytes_as(&mut s2, "masks.plyra", &bytes, None, None).unwrap();
         let layers: Vec<_> = doc(&s2).walk().into_iter().map(|(_, _, l)| l).collect();
-        assert!(layers.iter().any(|l| l.mask == m1 && l.vector_mask == v1), "the raster and vector masks survive .pcraft");
-        assert!(layers.iter().any(|l| l.mask == m2), "the disabled mask survives .pcraft");
+        assert!(layers.iter().any(|l| l.mask == m1 && l.vector_mask == v1), "the raster and vector masks survive .plyra");
+        assert!(layers.iter().any(|l| l.mask == m2), "the disabled mask survives .plyra");
     }
 }
 
@@ -3165,7 +3165,7 @@ fn guide_layouts() {
 
 #[test]
 fn only_layered_files_save_in_place() {
-    for path in ["a.psd", "dir/a.PSB", r"C:\w\a.pcraft", "my.dir/a.psd", "a.ora", "dir/A.ORA"] {
+    for path in ["a.psd", "dir/a.PSB", r"C:\w\a.plyra", "my.dir/a.psd", "a.ora", "dir/A.ORA"] {
         assert!(saves_in_place(path), "{path}");
     }
     // Flat formats, no extension, a dotted folder with an extensionless file, a dot file.
@@ -3182,7 +3182,7 @@ fn openraster_holds_a_document_only_when_it_drops_nothing() {
     let mut s = session(16, 16, 8);
     s.execute("layer.new.layer", json!({})).unwrap();
     let plain = doc(&s).clone();
-    for p in ["a.psd", "a.psb", "a.pcraft", "a.ora", "A.ORA"] {
+    for p in ["a.psd", "a.psb", "a.plyra", "a.ora", "A.ORA"] {
         assert!(holds_at(&plain, p), "{p}");
     }
     for p in ["a.png", "a.tif", "a", ""] {

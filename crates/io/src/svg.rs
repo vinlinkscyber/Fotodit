@@ -142,7 +142,7 @@ fn fonts() -> Arc<usvg::fontdb::Database> {
     static DB: OnceLock<Arc<usvg::fontdb::Database>> = OnceLock::new();
     DB.get_or_init(|| {
         let mut db = usvg::fontdb::Database::new();
-        for f in fotodit_text::CRAFT_FONTS {
+        for f in fotodit_text::PLYRA_FONTS {
             db.load_font_data(f.bytes.to_vec());
         }
         #[cfg(not(target_arch = "wasm32"))]

@@ -329,7 +329,7 @@ fn numerals_are_one_undo_step_each() {
 }
 
 #[test]
-fn numerals_survive_a_pcraft_round_trip() {
+fn numerals_survive_a_plyra_round_trip() {
     let mut s = session(8);
     let id = text_layer(&mut s, "Il36");
     s.execute("type.openType.numerals.proportionalLining", json!({})).unwrap();
@@ -462,11 +462,11 @@ fn stylistic_set_toggles_are_one_undo_step_each() {
     assert!(on_at(&s, id, 0, "ss01") && on_at(&s, id, 0, "ss03"));
 }
 
-/// The sets survive a `.pcraft` save. In PSD they live only in the file's `Txt2` block, which a
+/// The sets survive a `.plyra` save. In PSD they live only in the file's `Txt2` block, which a
 /// document made here doesn't get yet; the PSD round trip of an opened file is tested in
 /// `fotodit-io` (`psd_kerning.rs`, `edited_text_layer_keeps_its_stylistic_sets`).
 #[test]
-fn stylistic_sets_survive_a_pcraft_round_trip() {
+fn stylistic_sets_survive_a_plyra_round_trip() {
     let mut s = session(8);
     let id = text_layer(&mut s, "Il36");
     s.execute("type.openType.stylisticSets.set1", json!({})).unwrap();
@@ -744,13 +744,13 @@ fn guessed_family_layer(s: &mut Session, text: &str, ps: Option<&str>) -> (Layer
 #[test]
 fn installed_postscript_face_is_not_missing_or_replaced() {
     // Opening a PSD corrects the label when the face is installed; a run set by command, or one
-    // reopened from .pcraft after its face was installed, keeps it.
+    // reopened from .plyra after its face was installed, keeps it.
     let mut s = session(8);
     let (id, created) = guessed_family_layer(&mut s, "test", Some("Inter-SemiBold"));
     let bytes = fotodit_format::save_to_bytes(&s.active().unwrap().doc, &Default::default()).unwrap();
-    let reopened = fotodit_io::import("reopened.pcraft", &bytes).unwrap().document;
+    let reopened = fotodit_io::import("reopened.plyra", &bytes).unwrap().document;
     let LayerContent::Text(t) = &reopened.layer(id).unwrap().content else { panic!("text") };
-    assert_eq!(t.char_runs()[0].style.font_family, "Imported Wrong Family", ".pcraft open keeps the stored label");
+    assert_eq!(t.char_runs()[0].style.font_family, "Imported Wrong Family", ".plyra open keeps the stored label");
     let on_open = missing_font_warnings(&reopened);
     s.add_document(reopened, None);
     let replaced = s.execute("type.replaceAllMissingFonts", json!({})).unwrap()["replaced"].clone();

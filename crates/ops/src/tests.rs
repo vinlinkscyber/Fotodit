@@ -731,7 +731,7 @@ const TILE: usize = 256 * 256 * 4;
 const SOURCE: usize = 1_000_000;
 
 fn embedded(len: usize) -> fotodit_doc::SmartSource {
-    fotodit_doc::SmartSource::Embedded { file_name: "source.pcraft".into(), bytes: Arc::new(vec![7; len]) }
+    fotodit_doc::SmartSource::Embedded { file_name: "source.plyra".into(), bytes: Arc::new(vec![7; len]) }
 }
 
 /// `base()` with one smart object holding `source`; returns the document and the layer's id.

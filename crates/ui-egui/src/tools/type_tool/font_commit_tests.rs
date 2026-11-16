@@ -540,7 +540,7 @@ fn caret_font_and_face_persist_across_more_font_choices_and_paste() {
     let applied = saved(&h, id);
     commit(&mut h, "shortcut-focused");
     assert_eq!(saved(&h, id), applied);
-    for name in ["probe.pcraft", "probe.psd"] {
+    for name in ["probe.plyra", "probe.psd"] {
         let doc = h.state().app.session.active().unwrap().doc.clone();
         let out = fotodit_io::export(&doc, name, &Default::default()).unwrap();
         let back = fotodit_io::import(name, &out.bytes).unwrap().document;

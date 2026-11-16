@@ -118,7 +118,7 @@ theme, 800×480 and 1280×720 point viewports, and 1×, 1.5× and 2× display sc
 60 initial/scrolled PNGs while running the compact geometry and interaction checks:
 
 ```sh
-CRAFT_UI_VISUAL_FIXTURES=/tmp/fotodit-compact cargo test -p fotodit-ui-egui --lib compact_visual_regressions -- --nocapture
+PLYRA_UI_VISUAL_FIXTURES=/tmp/fotodit-compact cargo test -p fotodit-ui-egui --lib compact_visual_regressions -- --nocapture
 ```
 
 Keyboard tests clear the configurable `window.togglePanels` canvas shortcut through preferences,

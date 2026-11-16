@@ -37,7 +37,7 @@ fn imported_layers_remain_editable_with_history_and_native_persistence() {
     session.execute("layer.delete", json!({"layer":copy})).unwrap();
     assert!(session.undo());
     let doc = &session.active().unwrap().doc;
-    let native = fotodit_io::export(doc, "edited.pcraft", &Default::default()).unwrap();
-    let reopened = fotodit_io::import("edited.pcraft", &native.bytes).unwrap().document;
+    let native = fotodit_io::export(doc, "edited.plyra", &Default::default()).unwrap();
+    let reopened = fotodit_io::import("edited.plyra", &native.bytes).unwrap().document;
     assert_eq!(doc.layers, reopened.layers);
 }

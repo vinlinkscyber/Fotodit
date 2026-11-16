@@ -1,4 +1,4 @@
-//! `.pcraft` is lossless for f64: every coordinate reloads bit-for-bit.
+//! `.plyra` is lossless for f64: every coordinate reloads bit-for-bit.
 
 use fotodit_color::{ColorMode, SampleType};
 use fotodit_doc::{Document, Layer, LayerContent, Size};

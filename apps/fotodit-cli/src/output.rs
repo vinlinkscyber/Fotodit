@@ -12,7 +12,7 @@ impl From<&ExportArgs> for ExportOptions {
             tiff_layers: a.tiff_layers,
             tiff_transparency: a.tiff_transparency,
             tga_bits: a.tga_bits,
-            pcraft_full_composite: a.pcraft_full_composite,
+            plyra_full_composite: a.plyra_full_composite,
             ..Default::default()
         };
         if let Some(q) = a.quality {

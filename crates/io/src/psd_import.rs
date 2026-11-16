@@ -837,7 +837,7 @@ fn apply_link_groups(nodes: &[LayerNode], layers: &mut [Layer], records: &[Layer
 }
 
 /// Rejects a file whose groups nest deeper than the document model's cap, with the actionable
-/// limit error. Nesting past the cap could never be saved (.pcraft refuses it).
+/// limit error. Nesting past the cap could never be saved (.plyra refuses it).
 pub(crate) fn check_group_depth(file: &PsdFile) -> Result<(), crate::IoError> {
     if group_depth(file) > fotodit_doc::MAX_GROUP_DEPTH {
         return Err(crate::IoError::Unsupported(format!("layer groups nested deeper than {}", fotodit_doc::MAX_GROUP_DEPTH)));

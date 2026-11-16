@@ -258,7 +258,7 @@ fn load_thumbnail_image_bounded(path: &str, file_len: u64) -> Option<ColorImage>
         return read_psd_thumbnail_bounded(std_path, file_len);
     }
 
-    // Enforce 64 MB input budget for all other file types (.pcraft, PNG, JPEG, TIFF, etc.)
+    // Enforce 64 MB input budget for all other file types (.plyra, PNG, JPEG, TIFF, etc.)
     const MAX_THUMBNAIL_FILE_SIZE: u64 = 64 * 1024 * 1024;
     if file_len > MAX_THUMBNAIL_FILE_SIZE {
         return None;
@@ -270,8 +270,8 @@ fn load_thumbnail_image_bounded(path: &str, file_len: u64) -> Option<ColorImage>
         ..Default::default()
     };
 
-    // 2. If .pcraft, read the embedded thumbnail PNG
-    if ext.eq_ignore_ascii_case("pcraft") {
+    // 2. If .plyra, read the embedded thumbnail PNG
+    if ext.eq_ignore_ascii_case("plyra") {
         if std_path.is_dir() {
             let thumb_path = std_path.join("thumb.png");
             if let Ok(thumb_meta) = std::fs::metadata(&thumb_path)
@@ -1514,8 +1514,8 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn recent_thumbnail_skips_oversized_thumb_in_pcraft_dir() {
-        let temp_dir = std::env::temp_dir().join(format!("fotodit_oversized_pcraft_test_{}.pcraft", std::process::id()));
+    fn recent_thumbnail_skips_oversized_thumb_in_plyra_dir() {
+        let temp_dir = std::env::temp_dir().join(format!("fotodit_oversized_plyra_test_{}.plyra", std::process::id()));
         let _ = std::fs::create_dir_all(&temp_dir);
         let thumb_path = temp_dir.join("thumb.png");
         let path_str = temp_dir.to_string_lossy().into_owned();
@@ -1528,7 +1528,7 @@ mod tests {
         // Directory metadata len is small (typically 0 or 4096), but the inner thumb.png exceeds budget
         let dir_len = std::fs::metadata(&temp_dir).map(|m| m.len()).unwrap_or(0);
         let thumb = load_thumbnail_image_bounded(&path_str, dir_len);
-        assert!(thumb.is_none(), "oversized thumb.png in .pcraft directory must be rejected before reading");
+        assert!(thumb.is_none(), "oversized thumb.png in .plyra directory must be rejected before reading");
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }

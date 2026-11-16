@@ -172,11 +172,11 @@ pub struct NewParams {
 pub struct SaveParams {
     /// Target beneath the configured automation write root: relative (forward slashes) or absolute.
     /// The extension selects the format. Omit to write back to the document's own file, which
-    /// works only for a PSD, PSB or .pcraft file kept in its own format; any other save needs
+    /// works only for a PSD, PSB or .plyra file kept in its own format; any other save needs
     /// `path`, so a flattened or converted copy never replaces the opened file.
     #[serde(default)]
     pub path: Option<String>,
-    /// Format override as an extension (pcraft, psd, png, jpg, tif, webp, exr, …).
+    /// Format override as an extension (plyra, psd, png, jpg, tif, webp, exr, …).
     #[serde(default)]
     pub format: Option<String>,
     /// JPEG or WebP quality 1..100. A WebP saved with a quality is lossy; without one it is lossless.
@@ -210,10 +210,10 @@ pub struct SaveParams {
     /// DDS: also write the full mip chain, each level a box filter of the one above.
     #[serde(default, rename = "ddsMipmaps")]
     pub dds_mipmaps: bool,
-    /// .pcraft: request the flattened document at its canvas size as `composite/full.png`.
+    /// .plyra: request the flattened document at its canvas size as `composite/full.png`.
     /// The save may omit it; check the manifest's `full_composite` member. Off by default.
-    #[serde(default, rename = "pcraftFullComposite")]
-    pub pcraft_full_composite: Option<bool>,
+    #[serde(default, rename = "plyraFullComposite")]
+    pub plyra_full_composite: Option<bool>,
     #[serde(default)]
     pub index: Option<usize>,
 }
@@ -879,8 +879,8 @@ impl FotoditMcp {
         self.run_command("file.new".into(), Value::Object(params), true).await
     }
 
-    #[tool(description = "Save the document. `.pcraft` is the lossless native format (incremental); other extensions \
-        (psd, png, jpg, tif, webp, exr, …) export. Without `path` only a PSD, PSB or .pcraft document is written back to its own file. `pcraftFullComposite` requests `composite/full.png`, which may be omitted; check the manifest's `full_composite` member. Returns warnings about anything the format cannot hold.")]
+    #[tool(description = "Save the document. `.plyra` is the lossless native format (incremental); other extensions \
+        (psd, png, jpg, tif, webp, exr, …) export. Without `path` only a PSD, PSB or .plyra document is written back to its own file. `plyraFullComposite` requests `composite/full.png`, which may be omitted; check the manifest's `full_composite` member. Returns warnings about anything the format cannot hold.")]
     async fn doc_save(&self, Parameters(p): Parameters<SaveParams>) -> Result<CallToolResult, McpError> {
         self.save_impl(p).await
     }
@@ -1193,7 +1193,7 @@ impl FotoditMcp {
                 p.format.is_some().then_some("format"),
                 p.quality.is_some().then_some("quality"),
                 p.tiff_layers.then_some("tiffLayers"),
-                p.pcraft_full_composite.is_some().then_some("pcraftFullComposite"),
+                p.plyra_full_composite.is_some().then_some("plyraFullComposite"),
                 dpx_bits.is_some().then_some("dpxBits"),
                 p.index.is_some().then_some("index"),
             ]
@@ -1234,7 +1234,7 @@ impl FotoditMcp {
                     tiff_layers: p.tiff_layers,
                     tiff_transparency: p.tiff_transparency,
                     tga_bits,
-                    pcraft_full_composite: p.pcraft_full_composite.unwrap_or(false),
+                    plyra_full_composite: p.plyra_full_composite.unwrap_or(false),
                     ..Default::default()
                 };
                 opts.encode.dpx_bits = dpx_bits;

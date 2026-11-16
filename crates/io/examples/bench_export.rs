@@ -2,7 +2,7 @@
 //! a painted layer covering part of the canvas, and a soft half-transparent layer.
 //!
 //! ```sh
-//! cargo run --release -p fotodit-io --example bench_export -- [--size 7360x4912] [--reps 7] [--only pcraft] [--out DIR]
+//! cargo run --release -p fotodit-io --example bench_export -- [--size 7360x4912] [--reps 7] [--only plyra] [--out DIR]
 //! ```
 //!
 //! Each row is the median (and min) of `--reps` runs. `--out DIR` writes each format's bytes to
@@ -65,14 +65,14 @@ fn main() {
     doc.layers.push(soft);
 
     println!("document {w}×{h}, {} layers, {reps} reps (median / min ms)", doc.layers.len());
-    // "pcraft+cache" is the app's Save: one export cache per document, so the first save
+    // "plyra+cache" is the app's Save: one export cache per document, so the first save
     // compresses every tile and later ones reuse what fits the cache (timed after a warm-up save).
-    for ext in ["psd", "pcraft", "pcraft+cache", "tif", "png", "jpg"] {
+    for ext in ["psd", "plyra", "plyra+cache", "tif", "png", "jpg"] {
         if only.as_deref().is_some_and(|o| o != ext) {
             continue;
         }
-        let cached = ext == "pcraft+cache";
-        let opts = fotodit_io::ExportOptions { pcraft_cache: cached.then(fotodit_io::PcraftExportCache::default), ..Default::default() };
+        let cached = ext == "plyra+cache";
+        let opts = fotodit_io::ExportOptions { plyra_cache: cached.then(fotodit_io::PlyraExportCache::default), ..Default::default() };
         let name = format!("x.{}", ext.trim_end_matches("+cache"));
         if cached {
             fotodit_io::export(&doc, &name, &opts).expect("warm-up");

@@ -115,24 +115,24 @@ Rust test and variable work on Windows with the native shell's environment-varia
 
 **GPU tests without a GPU.** Linux CI uses the shared `craft-common-actions` gate with Mesa's Vulkan driver installed. After the regular gate, `python3 scripts/ci-gpu-lavapipe.py` reruns the configured `gpu` group with `WGPU_BACKEND=vulkan` and the lavapipe ICD explicitly selected. It requires Vulkan parity evidence and rejects authored skips, except the documented software-adapter timing exceptions. It reads the filter from `.config/nextest.toml`, so no second filter needs maintaining. To run locally on Linux, install `mesa-vulkan-drivers libvulkan1` and run the same script. Windows uses WARP; this check does not certify Windows skip coverage.
 
-## Fonts (craft-fonts)
+## Fonts (plyra-fonts)
 
-Font assets shared by the Crafting Apps live in [plyra/craft-fonts](https://github.com/plyra/craft-fonts), never in this repo: don't commit font files here (Inter and JetBrains Mono in `assets/fonts/` are the only exceptions; new fonts go to craft-fonts).
+Font assets shared by the Plyra Apps live in plyra/plyra-fonts, never in this repo: don't commit font files here (Inter and JetBrains Mono in `assets/fonts/` are the only exceptions; new fonts go to plyra-fonts).
 
-craft-fonts is an **optional build input**, never a Cargo dependency:
+plyra-fonts is an **optional build input**, never a Cargo dependency:
 
 ```sh
-git clone https://github.com/plyra/craft-fonts ../craft-fonts
-CRAFT_FONTS_DIR="$PWD/../craft-fonts" cargo run --release -p fotodit
-CRAFT_FONTS_DIR="$PWD/../craft-fonts" cargo test --workspace     # runs the Japanese font tests too
+git clone  ../plyra-fonts
+PLYRA_FONTS_DIR="$PWD/../plyra-fonts" cargo run --release -p fotodit
+PLYRA_FONTS_DIR="$PWD/../plyra-fonts" cargo test --workspace     # runs the Japanese font tests too
 ```
 
-- Use an absolute path (`$PWD/...`): `build.rs` runs in `crates/text`, so a relative `CRAFT_FONTS_DIR` would resolve from there.
-- `crates/text/build.rs` reads `$CRAFT_FONTS_DIR/fonts/manifest.txt` and embeds the fonts as `fotodit_text::CRAFT_FONTS` (`crates/text/src/craft_fonts.rs`). Unset, `CRAFT_FONTS` is empty and the build is unchanged. A bad path is a build warning, or an error with `CRAFT_FONTS_REQUIRED=1` (release builds set both).
+- Use an absolute path (`$PWD/...`): `build.rs` runs in `crates/text`, so a relative `PLYRA_FONTS_DIR` would resolve from there.
+- `crates/text/build.rs` reads `$PLYRA_FONTS_DIR/fonts/manifest.txt` and embeds the fonts as `fotodit_text::PLYRA_FONTS` (`crates/text/src/plyra_fonts.rs`). Unset, `PLYRA_FONTS` is empty and the build is unchanged. A bad path is a build warning, or an error with `PLYRA_FONTS_REQUIRED=1` (release builds set both).
 - **UI:** the Japanese fonts (BIZ UDPGothic Regular first) are the first Japanese fallback in the lazy CJK loader (`crates/ui-egui/src/cjk_fonts.rs`), ahead of the system Japanese fonts and in the same locale script order, appended last to every egui family with the usual baseline alignment.
 - **Type tool:** the text engine registers them in `FontDb::new` (so also with no system fonts) and puts them first in the Japanese slot of the locale-ordered fallback list: BIZ UDPGothic for sans runs, Shippori Mincho / BIZ UDMincho for serif runs.
-- **Web:** the wasm32 build never embeds craft-fonts, even with `CRAFT_FONTS_DIR` set: measured on 2026-10-06, the UI face alone took the release wasm from 24.19 MB to 28.87 MB, over the 24 MiB gate in `packaging/web/package.sh`. Instead it loads fonts served next to it, on demand: `fonts/manifest.txt` beside `index.html`, in craft-fonts' manifest format (`crates/text/src/served.rs`; hosting: `packaging/web/README.md` › Fonts). `FOTODIT_WEB_FONTS_DIR="$PWD/../craft-fonts" packaging/web/package.sh` puts craft-fonts there. Served families are in the font menus and are fetched when picked or when a document's text needs them; they aren't in the script fallback list yet, so Japanese text set in a Latin font still needs a Japanese font picked (#1615).
-- Tests that need the fonts skip with a message when `CRAFT_FONTS` is empty; CI's Linux gate and Windows test legs build with `CRAFT_FONTS_DIR` set and `CRAFT_FONTS_REQUIRED=1`, so they run there. Desktop releases check out craft-fonts at the commit pinned in `.github/workflows/release.yml` (`CRAFT_FONTS_REF`; ci.yml pins the same commit) and ship each font's `OFL.txt` as `OFL-<family>.txt`.
+- **Web:** the wasm32 build never embeds plyra-fonts, even with `PLYRA_FONTS_DIR` set: measured on 2026-10-06, the UI face alone took the release wasm from 24.19 MB to 28.87 MB, over the 24 MiB gate in `packaging/web/package.sh`. Instead it loads fonts served next to it, on demand: `fonts/manifest.txt` beside `index.html`, in plyra-fonts' manifest format (`crates/text/src/served.rs`; hosting: `packaging/web/README.md` › Fonts). `FOTODIT_WEB_FONTS_DIR="$PWD/../plyra-fonts" packaging/web/package.sh` puts plyra-fonts there. Served families are in the font menus and are fetched when picked or when a document's text needs them; they aren't in the script fallback list yet, so Japanese text set in a Latin font still needs a Japanese font picked (#1615).
+- Tests that need the fonts skip with a message when `PLYRA_FONTS` is empty; CI's Linux gate and Windows test legs build with `PLYRA_FONTS_DIR` set and `PLYRA_FONTS_REQUIRED=1`, so they run there. Desktop releases check out plyra-fonts at the commit pinned in `.github/workflows/release.yml` (`PLYRA_FONTS_REF`; ci.yml pins the same commit) and ship each font's `OFL.txt` as `OFL-<family>.txt`.
 
 ## One instance per user
 
@@ -250,8 +250,8 @@ See `docs/control-protocol.md` for every method. Tips:
 `apps/fotodit-cli` builds the binary `fotodit-cli`:
 
 ```sh
-cargo run -p fotodit-cli -- convert in.psd out.pcraft               # any supported format -> any
-cargo run -p fotodit-cli -- info out.pcraft                          # JSON: size, mode, depth, layer tree
+cargo run -p fotodit-cli -- convert in.psd out.plyra               # any supported format -> any
+cargo run -p fotodit-cli -- info out.plyra                          # JSON: size, mode, depth, layer tree
 cargo run -p fotodit-cli -- info out.psd --detail                    # also text runs, anti-aliasing, full layer-effect settings
 cargo run -p fotodit-cli -- run in.png --cmd layer.new.layer --params '{"name":"Ink"}' \
                                           --cmd filter.blur.gaussianBlur --params '{"radius":3}' --out out.psd
@@ -279,27 +279,27 @@ Fotodit CLI supports optional native GPU acceleration for flat exports and compo
 - `--gpu`: Opt into GPU acceleration. Prefers a hardware adapter, performs bounded multi-band readback, and automatically falls back to CPU if an unsupported document feature (such as unsupported blend modes or layered saves) is encountered or if the GPU device becomes unavailable.
 - `--no-gpu`: Explicitly disable GPU rendering and use CPU composition (the default).
 - `FOTODIT_GPU`: Environment variable equivalent when neither flag is supplied (`1` enables GPU, `0` disables it). An empty or whitespace-only value is treated as unset (defaulting to CPU). Any other value is rejected with a usage error naming the variable. Explicit `--gpu` or `--no-gpu` flags always override the environment variable.
-- **Backend scope and limitations**: GPU acceleration applies to flat exports (e.g. PNG, JPEG, WebP, flat TIFF). Layered/native saves (`.pcraft`, PSD, TIFF with layers) and embedded thumbnail generation remain CPU operations.
+- **Backend scope and limitations**: GPU acceleration applies to flat exports (e.g. PNG, JPEG, WebP, flat TIFF). Layered/native saves (`.plyra`, PSD, TIFF with layers) and embedded thumbnail generation remain CPU operations.
 - **Diagnostics and protocol safety**: GPU initialization status, adapter information, and deduplicated fallback warnings are written to standard error. Standard output (JSON lines in `run`, MCP protocol frames, etc.) is never polluted with diagnostics.
 - **Bridge MCP**: When `fotodit-cli mcp` is bridged to a running desktop app (`--bridge`), explicit `--gpu` / `--no-gpu` flags are rejected because the desktop process controls rendering. `FOTODIT_GPU` is ignored in bridge mode to prevent ambient environment variables from disrupting live bridges.
 
 `actions.json` holds the steps of a recorded action: `[["<id>", {…}], …]`, `[{"command": "<id>", "params": {…}}, …]` or bare ids, as a list or wrapped in `{"actions": …}` or `{"steps": …}`; a droplet file works too. It can also be an Actions set (the Actions panel's `actions.json`, `{"actions": [{"name": …, "steps": […]}, …]}`): `--action <name>` picks the action to play (optional when the set holds one), and the whole set is loaded for each file, so a step that plays another action of the set works. `batch` refuses an `--out` folder that is the `--in` folder, since the results would replace the originals, unless `--in-place` is given. `run` prints one JSON line per command result.
 
-## Native format (.pcraft)
+## Native format (.plyra)
 
 `crates/format` defines the lossless native bundle. It is either a ZIP of STORE entries or a directory with the same layout:
 
 - `manifest.json`: the versioned document tree, with migrations in `format/src/migrate.rs`.
 - `tiles/<blake3>.zst` and `blobs/<blake3>.zst`: zstd-compressed objects, content-addressed by the BLAKE3 hash of their uncompressed bytes.
 - `thumb.png` and `composite/preview.png`: previews.
-- `composite/full.png`: the flattened document at the canvas size, for other apps that read `.pcraft` files. Saves write it only when asked (`ExportOptions::pcraft_full_composite`, off by default), and may leave it out in the cases listed in [the format guide](../book/src/formats/pcraft.md). Check the manifest's `full_composite` member to confirm it was written.
+- `composite/full.png`: the flattened document at the canvas size, for other apps that read `.plyra` files. Saves write it only when asked (`ExportOptions::plyra_full_composite`, off by default), and may leave it out in the cases listed in [the format guide](../book/src/formats/plyra.md). Check the manifest's `full_composite` member to confirm it was written.
 - `save.lock` (directory bundles only): an empty file a save holds an OS file lock on, so two writers or processes saving one bundle take turns (#4957).
 
-Keep one `PcraftWriter` per open document: re-saving then only compresses and writes tiles that changed. Directory bundles verify objects on first encounter in a folder; later saves reuse them while their file size and modification time are unchanged, and re-verify changed objects, repair missing or damaged objects, and garbage-collect unreferenced ones. `format::Autosaver` writes snapshots into a recovery directory on a background thread. `list_recovery` / `recover` / `discard_recovery` implement crash recovery, and `format::RecoveryStore` is the lifecycle the desktop app uses: new documents autosave under per-launch keys (document ids restart every launch, so they never overwrite an older entry), and a recovered document adopts the entry it came from. That entry is replaced in place by the next autosave and removed only when the document is saved or closed, never just because it was recovered, so a second crash loses nothing. The web build has no crash recovery (no autosave services).
+Keep one `PlyraWriter` per open document: re-saving then only compresses and writes tiles that changed. Directory bundles verify objects on first encounter in a folder; later saves reuse them while their file size and modification time are unchanged, and re-verify changed objects, repair missing or damaged objects, and garbage-collect unreferenced ones. `format::Autosaver` writes snapshots into a recovery directory on a background thread. `list_recovery` / `recover` / `discard_recovery` implement crash recovery, and `format::RecoveryStore` is the lifecycle the desktop app uses: new documents autosave under per-launch keys (document ids restart every launch, so they never overwrite an older entry), and a recovered document adopts the entry it came from. That entry is replaced in place by the next autosave and removed only when the document is saved or closed, never just because it was recovered, so a second crash loses nothing. The web build has no crash recovery (no autosave services).
 
 At startup the desktop lists recovery metadata, then decodes one document at a time through the existing background-job system. The window stays usable, with recovery progress and Cancel in the status bar. Cancel skips the rest of that launch's recovery queue and prevents the current result from opening; the decoder may finish in the background. Failed or cancelled loads leave their recovery files intact for a later launch. Turning off Preferences › File Handling › Recover on launch skips discovery altogether.
 
-`fotodit-io` routes `.pcraft` through this crate in `import`/`export`, detecting it by magic or by extension.
+`fotodit-io` routes `.plyra` through this crate in `import`/`export`, detecting it by magic or by extension.
 
 ## MCP (agents)
 
@@ -373,7 +373,7 @@ A typical agent loop (place inputs under the configured read root and outputs un
 2. `command_list {filter:"blur"}`
 3. `command_run {id:"filter.blur.gaussianBlur", params:{radius:4}}`
 4. `doc_render_preview` to check the result
-5. `doc_save {path:"out.pcraft"}`
+5. `doc_save {path:"out.plyra"}`
 
 ## Colour management
 
@@ -600,7 +600,7 @@ trunk build --release              # writes ../../dist/web (index.html, .js glue
 trunk serve --release              # dev server on http://127.0.0.1:8765
 ```
 
-Any static file server works for `dist/web`, for example `python3 -m http.server 8765` run inside that directory. Trunk downloads the matching `wasm-bindgen` and `wasm-opt` itself. `trunk build --release` uses the `wasm-release` Cargo profile (`data-cargo-profile` in `index.html`: fat LTO, opt-level "z" for the UI, engine, I/O and web shells and for large crates off the hot paths (document model, file parsers, JSON, SVG parsing, shader translation), "s" for other crates except pixel processing, which keeps level 3). The UI override reduces browser code size while retaining the speed-oriented settings for filters and compositing. Serve the `.wasm` with compression; its raw size varies with the source and compiler. Some static hosts refuse a file that large (Cloudflare's per-file cap is 25 MiB), so the release site doesn't hold it as one file: `packaging/web/package.sh` gzips it, cuts it into parts of at most 20 MiB under `app/`, and ships the page of `apps/fotodit-web-boot`, a small module that fetches the parts, has the browser inflate them (or inflates them itself where the browser can't) and passes the stream to the app's own loader (issue #5302). The script fails if any file in the site is over 24 MiB; the wasm's own size is no longer limited, but it is still what every visitor downloads, so watch it. Pull-request CI also builds the actual browser app with the same pinned Trunk version as the release job and runs `packaging/web/package.sh`, including the relative-URL and file-size checks. The `web build and wasm size gate` check runs on main and on PRs that change something the web build compiles or packages (`apps/fotodit-web`, `apps/fotodit-web-boot`, `packaging/web`, crate sources and manifests, `Cargo.toml`/`Cargo.lock`, the CI workflow), and reports the wasm's size and the site's largest file in the Actions job summary. The web build never embeds craft-fonts (see Fonts above). To see where the bytes go, run `twiggy top -n 40` on `target/wasm32-unknown-unknown/wasm-release/fotodit-web.wasm` (before wasm-opt strips the names).
+Any static file server works for `dist/web`, for example `python3 -m http.server 8765` run inside that directory. Trunk downloads the matching `wasm-bindgen` and `wasm-opt` itself. `trunk build --release` uses the `wasm-release` Cargo profile (`data-cargo-profile` in `index.html`: fat LTO, opt-level "z" for the UI, engine, I/O and web shells and for large crates off the hot paths (document model, file parsers, JSON, SVG parsing, shader translation), "s" for other crates except pixel processing, which keeps level 3). The UI override reduces browser code size while retaining the speed-oriented settings for filters and compositing. Serve the `.wasm` with compression; its raw size varies with the source and compiler. Some static hosts refuse a file that large (Cloudflare's per-file cap is 25 MiB), so the release site doesn't hold it as one file: `packaging/web/package.sh` gzips it, cuts it into parts of at most 20 MiB under `app/`, and ships the page of `apps/fotodit-web-boot`, a small module that fetches the parts, has the browser inflate them (or inflates them itself where the browser can't) and passes the stream to the app's own loader (issue #5302). The script fails if any file in the site is over 24 MiB; the wasm's own size is no longer limited, but it is still what every visitor downloads, so watch it. Pull-request CI also builds the actual browser app with the same pinned Trunk version as the release job and runs `packaging/web/package.sh`, including the relative-URL and file-size checks. The `web build and wasm size gate` check runs on main and on PRs that change something the web build compiles or packages (`apps/fotodit-web`, `apps/fotodit-web-boot`, `packaging/web`, crate sources and manifests, `Cargo.toml`/`Cargo.lock`, the CI workflow), and reports the wasm's size and the site's largest file in the Actions job summary. The web build never embeds plyra-fonts (see Fonts above). To see where the bytes go, run `twiggy top -n 40` on `target/wasm32-unknown-unknown/wasm-release/fotodit-web.wasm` (before wasm-opt strips the names).
 
 URL flags: `?webgl` forces the WebGL2 backend, and `?cpu` forces the CPU canvas path. `?free-mb=N` is a diagnostic: the memory gates and the low-memory warning behave as if only N MiB could be allocated, so they can be checked in a browser without gigabytes of images (for example `?free-mb=300`, then Place a large image, or `?free-mb=400` for the warning).
 

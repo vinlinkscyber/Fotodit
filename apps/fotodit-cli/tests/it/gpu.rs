@@ -91,7 +91,7 @@ fn gpu_env_var_rejects_a_non_utf8_value() {
 fn explicit_flags_override_environment() {
     let d = tmp("override");
     let in_png = d.join("in.png");
-    let in_layers = d.join("in.pcraft");
+    let in_layers = d.join("in.plyra");
     let out1 = d.join("out1.png");
     let out2 = d.join("out2.png");
     write_png(&in_png, 16, 16);

@@ -14,8 +14,8 @@ Their actual bodies and diffs were reviewed before this change; neither is merge
 inspection date. This change addresses metadata missing from the existing decoder, without
 duplicating those colour-development proposals.
 
-LightCraft's [#115](https://github.com/plyra/lightcraft/pull/115),
-[#535](https://github.com/plyra/lightcraft/issues/535) and its current camera-preview-colour
+LightCraft's #115,
+#535 and its current camera-preview-colour
 documentation distinguish applied WB, camera calibration and JPEG tone/DRO. Its SR2 investigation
 suggested testing encrypted metadata before estimating WB from scene pixels. Fotodit's
 implementation is independent: no sibling source, decoder dependency or camera colour table is

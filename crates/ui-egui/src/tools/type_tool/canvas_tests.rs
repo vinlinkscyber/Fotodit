@@ -1543,7 +1543,7 @@ fn temporary_type_transform_control_roundtrip_and_input_safety() {
     call(&mut app, json!({"events": [{"kind": "up", "x": a[0]+60.0, "y": a[1]+30.0}]}));
     assert_ne!(text(&app, id).transform, initial);
     let doc = &app.session.active().unwrap().doc;
-    for name in ["type.pcraft", "type.psd"] {
+    for name in ["type.plyra", "type.psd"] {
         let out = fotodit_io::export(doc, name, &Default::default()).unwrap();
         let back = fotodit_io::import(name, &out.bytes).unwrap().document;
         let t = back.walk().into_iter().find_map(|(_, _, l)| if let LayerContent::Text(t) = &l.content { Some(t) } else { None }).unwrap();

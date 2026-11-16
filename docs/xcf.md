@@ -4,7 +4,7 @@ Fotodit opens GIMP's native `.xcf` files (and `.xcf.gz`) with their layers, read
 Open, recent files, drops, the CLI (`convert`, `info`, `batch`) and automation (`doc.open`, MCP)
 use the same reader in `fotodit-io` (`crates/io/src/xcf.rs`). A file is recognised by its
 `gimp xcf ` signature, so an XCF with another extension still opens as one. Save suggests
-`.pcraft`, which keeps everything Fotodit holds; exporting as `.xcf` fails with a message.
+`.plyra`, which keeps everything Fotodit holds; exporting as `.xcf` fails with a message.
 
 ## What is kept
 

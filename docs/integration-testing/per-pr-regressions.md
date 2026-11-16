@@ -924,7 +924,7 @@ Expected assertion context (overlapping windows merged):
 
 ```rust
 use fotodit_psd::descriptor::{Descriptor, Id, UnicodeString, Value};
-    let dir = std::env::temp_dir().join(format!("pcraft-9162-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("plyra-9162-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let png = |name: &str, size: (u32, u32), c: [f32; 4]| {
         let d = Document::with_background(
@@ -2551,7 +2551,7 @@ assert_eq!(h.state().session.tools.brush.scattering.enabled, enabled);
         let f = Fixture::new();
         let (doc, layer) = f.saved_filter(lookup);
         let mut h = f.headless();
-        h.open(Path::new("stored.pcraft")).unwrap();
+        h.open(Path::new("stored.plyra")).unwrap();
         let before = h.session.active().unwrap().doc.clone();
         // Session::edit is the outside-execute mutation path (an edit closure the UI or a
         // linked-file change runs); the stored filter must be denied there too.

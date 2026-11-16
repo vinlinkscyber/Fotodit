@@ -83,14 +83,14 @@ fn the_picked_file_type_gives_the_name_its_extension() {
         // (the PSD type untouched, or PNG picked and .jpg typed).
         ("/pics/art.png", opened, &psd, "/pics/art.png"),
         ("/pics/art.jpg", opened, &png, "/pics/art.jpg"),
-        ("/pics/art.pcraft", opened, &png, "/pics/art.pcraft"),
+        ("/pics/art.plyra", opened, &png, "/pics/art.plyra"),
         // Already the type's: kept, including its other extensions.
         ("/pics/art.png", opened, &png, "/pics/art.png"),
         ("/pics/art.PNG", opened, &png, "/pics/art.PNG"),
         ("/pics/big.psb", opened, &psd, "/pics/big.psb"),
-        // The dialog opened on a .pcraft: that is the extension the type replaces.
-        ("/pics/art.pcraft", Some("art.pcraft"), &png, "/pics/art.png"),
-        ("/pics/art.psd", Some("art.pcraft"), &png, "/pics/art.psd"),
+        // The dialog opened on a .plyra: that is the extension the type replaces.
+        ("/pics/art.plyra", Some("art.plyra"), &png, "/pics/art.png"),
+        ("/pics/art.psd", Some("art.plyra"), &png, "/pics/art.psd"),
     ];
     for (typed, opened, chosen, want) in cases {
         assert_eq!(with_chosen_type(Path::new(typed), opened, chosen), PathBuf::from(want), "{typed} (opened {opened:?})");
@@ -162,7 +162,7 @@ fn open_filters_cover_uppercase_and_mixed_case_extensions() {
         }
         text.next().is_none()
     }
-    assert_eq!(open_filter_extensions(&["cr2", "pcraft"]), ["[cC][rR]2", "[pP][cC][rR][aA][fF][tT]"]);
+    assert_eq!(open_filter_extensions(&["cr2", "plyra"]), ["[cC][rR]2", "[pP][cC][rR][aA][fF][tT]"]);
     let globs = open_filter_extensions(OPEN_EXTS);
     assert_eq!(globs.len(), OPEN_EXTS.len());
     for (ext, glob) in OPEN_EXTS.iter().zip(&globs) {
@@ -208,7 +208,7 @@ fn every_open_format_has_its_own_filter() {
 #[test]
 fn open_filters_keep_literal_extensions_on_windows_and_macos() {
     assert_eq!(open_filter_extensions(OPEN_EXTS), OPEN_EXTS);
-    assert_eq!(open_filter_extensions(&["pcraft"]), ["pcraft"]);
+    assert_eq!(open_filter_extensions(&["plyra"]), ["plyra"]);
     assert_eq!(open_filters().into_iter().find(|(name, _)| *name == "SVG").map(|(_, exts)| exts), Some(vec!["svg".to_string(), "svgz".to_string()]));
     assert_eq!(
         open_filters().into_iter().find(|(name, _)| *name == "Photoshop").map(|(_, exts)| exts),
@@ -274,7 +274,7 @@ fn every_save_dialog_leads_with_its_own_extension() {
     // Save As, Save a Copy.
     // Files in a format Save As can't write, like .dng, should suggest .psd instead.
     let _ = invoke(&mut app, "file.saveAs");
-    for name in ["cat.pcraft", "cat.jpeg", "cat.gif", "cat.bmp", "cat.dng"] {
+    for name in ["cat.plyra", "cat.jpeg", "cat.gif", "cat.bmp", "cat.dng"] {
         app.session.active_mut().unwrap().path = Some(name.into());
         let _ = invoke(&mut app, "file.saveAs");
     }
@@ -301,7 +301,7 @@ fn every_save_dialog_leads_with_its_own_extension() {
     // The extension each save above should suggest, in order.
     let want = [
         "psd",                            // Save As untitled
-        "pcraft jpeg gif bmp psd",        // Save As opened .pcraft .jpeg .gif .bmp .dng
+        "plyra jpeg gif bmp psd",        // Save As opened .plyra .jpeg .gif .bmp .dng
         "psd",                            // Save a Copy
         "png jpg webp tif tga",           // Export As
         "png jpg gif webp",               // Quick Export
@@ -321,7 +321,7 @@ fn every_save_dialog_leads_with_its_own_extension() {
 #[test]
 fn save_as_offers_only_writable_formats_including_ico() {
     // Layered formats, and PDF, are written by `fotodit-io`, not a codec.
-    let layered = ["psd", "psb", "pcraft", "ora", "pdf"];
+    let layered = ["psd", "psb", "plyra", "ora", "pdf"];
     for (name, exts) in SAVE_FILTERS {
         for ext in exts.iter().filter(|e| !layered.contains(e)) {
             let format = fotodit_codecs::from_extension(ext).unwrap_or_else(|| panic!("{name}: .{ext} is no known format"));
@@ -387,7 +387,7 @@ fn the_windows_save_dialog_gets_a_bare_name_so_the_type_picks_the_extension() {
     for (suggested, name, first) in [
         ("/pics/image.psd", "image", "psd"),
         ("/pics/image.psb", "image", "psb"),
-        ("/pics/image.pcraft", "image", "pcraft"),
+        ("/pics/image.plyra", "image", "plyra"),
         ("/pics/sky.fit", "sky", "fit"),
         ("cat.jpeg", "cat", "jpeg"),
         ("swatches.aco", "swatches", "aco"),

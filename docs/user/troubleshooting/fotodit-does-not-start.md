@@ -17,7 +17,7 @@ On Windows, Fotodit starts Intel graphics on DirectX 12. If Fotodit closed while
 ### Windows
 
 1. Use Fotodit 0.7.0 or later. Older builds do not have the steps below.
-2. Start Fotodit again. Double-clicking its icon or a `.pcraft` file works. Fotodit notes that the last start did not finish and uses the next safer graphics mode this time:
+2. Start Fotodit again. Double-clicking its icon or a `.plyra` file works. Fotodit notes that the last start did not finish and uses the next safer graphics mode this time:
    - A start on Vulkan is followed by one on DirectX 12.
    - A start on DirectX 12 is followed by one on the CPU. The CPU mode does not depend on the graphics driver.
 3. If it started, nothing more to do. Fotodit remembers the mode that worked. You can see or reset it under **Edit › Preferences › Performance…** (on macOS, **Fotodit › Settings › Performance…**).

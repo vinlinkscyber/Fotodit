@@ -73,7 +73,7 @@ over 4096 knots/subpaths, more than 100,000 tessellation points, or a dash workl
 no custom saved preset libraries in this change. Style defaults use existing serde UI state,
 but the app does not save and restore these defaults across restarts.
 
-All fields already exist in `ShapeStroke` and the native manifest/conversion. Old `.pcraft`
+All fields already exist in `ShapeStroke` and the native manifest/conversion. Old `.plyra`
 files retain their serde defaults; saves preserve all style fields. PSD import/export maps
 the same fields through `vstk` (line width, dash set/offset, cap, join, alignment, miter limit,
 opacity, and paint); existing unknown layer blocks and original compatible vector records
@@ -131,7 +131,7 @@ not offered yet.
 
 ## Editable arrows and older Fotodit versions
 
-Native `.pcraft` documents store arrow geometry in the regular shape path and
+Native `.plyra` documents store arrow geometry in the regular shape path and
 the editable arrow parameters separately in the optional `arrow_live` field.
 
 Fotodit versions that do not support editable arrows can open these documents

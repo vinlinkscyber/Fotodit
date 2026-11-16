@@ -1,4 +1,4 @@
-//! doc → .pcraft → doc equality, incremental saves, ids, previews.
+//! doc → .plyra → doc equality, incremental saves, ids, previews.
 
 use crate::common;
 use common::*;
@@ -84,7 +84,7 @@ fn custom_shape_stroke_roundtrip_keeps_every_style_field() {
 fn check_zip(mode: ColorMode, depth: SampleType) {
     let doc = rich_doc(mode, depth);
     let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
-    assert!(is_pcraft(&bytes));
+    assert!(is_plyra(&bytes));
     let back = load_from_bytes(&bytes).unwrap();
     assert_eq!(back, doc, "{mode:?} {depth:?}");
 }
@@ -111,7 +111,7 @@ fn directory_bundle_roundtrip_all_modes() {
         for depth in SampleType::ALL {
             let doc = rich_doc(mode, depth);
             let dir = temp_dir("dir");
-            PcraftWriter::new().save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
+            PlyraWriter::new().save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
             assert!(dir.join("manifest.json").is_file());
             assert_eq!(load_path(&dir).unwrap(), doc, "{mode:?} {depth:?}");
             std::fs::remove_dir_all(dir).unwrap();
@@ -123,8 +123,8 @@ fn directory_bundle_roundtrip_all_modes() {
 fn save_path_zip_file() {
     let doc = rich_doc(ColorMode::Rgb, SampleType::U8);
     let dir = temp_dir("file");
-    let path = dir.join("a.pcraft");
-    PcraftWriter::new().save_path(&doc, &path, &SaveOptions::default()).unwrap();
+    let path = dir.join("a.plyra");
+    PlyraWriter::new().save_path(&doc, &path, &SaveOptions::default()).unwrap();
     assert!(path.is_file());
     assert_eq!(load_path(&path).unwrap(), doc);
     std::fs::remove_dir_all(dir).unwrap();
@@ -135,8 +135,8 @@ fn save_path_zip_file() {
 fn load_bytes_source_matches_the_path_load() {
     let doc = rich_doc(ColorMode::Rgb, SampleType::U8);
     let dir = temp_dir("bytes-source");
-    let bundle = dir.join("a.pcraft");
-    PcraftWriter::new().save_dir(&doc, &bundle, &SaveOptions::default()).unwrap();
+    let bundle = dir.join("a.plyra");
+    PlyraWriter::new().save_dir(&doc, &bundle, &SaveOptions::default()).unwrap();
     let loaded = load_bytes_source(&FsDir { root: bundle.clone() }, &LoadOptions::default()).unwrap();
     assert_eq!(loaded, doc);
     assert!(load_bytes_source(&FsDir { root: bundle.join("no-such-dir") }, &LoadOptions::default()).is_err(), "a missing bundle errors");
@@ -216,7 +216,7 @@ fn nesting_beyond_the_load_limit_is_refused_at_save() {
     assert!(matches!(e, FormatError::LimitExceeded(_)), "{e}");
 }
 
-/// craft-pcraft-format's default manifest nesting limit is computed from its own copy of the
+/// the shared format crate's default manifest nesting limit is computed from its own copy of the
 /// group depth, so the two must stay equal.
 #[test]
 fn group_depth_matches_craft_pcraft_format() {
@@ -286,7 +286,7 @@ fn text_run_baseline_roundtrips() {
 #[test]
 fn zip_incremental_only_new_tiles() {
     let mut doc = rich_doc(ColorMode::Rgb, SampleType::U16);
-    let mut w = PcraftWriter::new();
+    let mut w = PlyraWriter::new();
     let (first, s1) = w.save_zip(&doc, &SaveOptions::default()).unwrap();
     assert!(s1.tiles_total > 5);
     assert_eq!(s1.tiles_written, s1.tiles_total);
@@ -301,21 +301,21 @@ fn zip_incremental_only_new_tiles() {
     let (bytes, s3) = w.save_zip(&doc, &SaveOptions::default()).unwrap();
     assert_eq!(s3.tiles_written, 1);
     assert_eq!(load_from_bytes(&bytes).unwrap(), doc);
-    assert_eq!(bytes, PcraftWriter::new().save_zip(&doc, &SaveOptions::default()).unwrap().0);
+    assert_eq!(bytes, PlyraWriter::new().save_zip(&doc, &SaveOptions::default()).unwrap().0);
 }
 
 #[test]
 fn directory_incremental_and_gc() {
     let mut doc = rich_doc(ColorMode::Rgb, SampleType::U8);
     let dir = temp_dir("gc");
-    let mut w = PcraftWriter::new();
+    let mut w = PlyraWriter::new();
     let s1 = w.save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
     assert_eq!(s1.tiles_written, s1.tiles_total);
     let s2_same_writer = w.save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
     assert_eq!(s2_same_writer.tiles_written, 0);
     assert_eq!(s2_same_writer.tiles_reused, s2_same_writer.tiles_total);
     // A fresh writer still skips files already on disk.
-    let s2 = PcraftWriter::new().save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
+    let s2 = PlyraWriter::new().save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
     assert_eq!(s2.tiles_written, 0);
     assert_eq!(s2.objects_removed, 0);
     // Delete a layer: its unique tiles get garbage-collected.
@@ -341,7 +341,7 @@ fn directory_save_rejects_object_directory_symlink_without_deleting_external_obj
     std::fs::write(&external_object, b"keep this object").unwrap();
     symlink(&outside, dir.join("tiles")).unwrap();
 
-    assert!(PcraftWriter::new().save_dir(&doc, &dir, &SaveOptions::default()).is_err());
+    assert!(PlyraWriter::new().save_dir(&doc, &dir, &SaveOptions::default()).is_err());
     assert_eq!(std::fs::read(&external_object).unwrap(), b"keep this object");
     assert!(!dir.join("manifest.json").exists());
 
@@ -358,7 +358,7 @@ fn directory_save_rejects_object_symlink_without_overwriting_target() {
     let doc = rich_doc(ColorMode::Rgb, SampleType::U8);
     let dir = temp_dir("symlink-object");
     let outside = temp_dir("symlink-object-outside");
-    let mut writer = PcraftWriter::new();
+    let mut writer = PlyraWriter::new();
     writer.save_dir(&doc, &dir, &SaveOptions::default()).unwrap();
     let object = std::fs::read_dir(dir.join("tiles")).unwrap().next().unwrap().unwrap().path();
     std::fs::remove_file(&object).unwrap();
@@ -382,12 +382,12 @@ fn directory_save_accepts_chosen_root_symlink_but_rejects_preview_symlink() {
     let doc = rich_doc(ColorMode::Rgb, SampleType::U8);
     let outside = temp_dir("symlink-preview-outside");
     let root_link_parent = temp_dir("symlink-root-parent");
-    let root_link = root_link_parent.join("linked.pcraft");
+    let root_link = root_link_parent.join("linked.plyra");
     symlink(&outside, &root_link).unwrap();
-    PcraftWriter::new().save_dir(&doc, &root_link, &SaveOptions::default()).unwrap();
+    PlyraWriter::new().save_dir(&doc, &root_link, &SaveOptions::default()).unwrap();
     assert_eq!(load_path(&root_link).unwrap(), doc);
     let trailing_separator = std::path::PathBuf::from(format!("{}/", root_link.display()));
-    PcraftWriter::new().save_dir(&doc, &trailing_separator, &SaveOptions::default()).unwrap();
+    PlyraWriter::new().save_dir(&doc, &trailing_separator, &SaveOptions::default()).unwrap();
     assert!(outside.join("manifest.json").is_file());
 
     let dir = temp_dir("symlink-preview");
@@ -396,7 +396,7 @@ fn directory_save_accepts_chosen_root_symlink_but_rejects_preview_symlink() {
     std::fs::create_dir(dir.join("composite")).unwrap();
     symlink(&external_preview, dir.join("composite/preview.png")).unwrap();
     let opts = SaveOptions { composite: Some(Rgba8Image::new(2, 2)), ..Default::default() };
-    assert!(PcraftWriter::new().save_dir(&doc, &dir, &opts).is_err());
+    assert!(PlyraWriter::new().save_dir(&doc, &dir, &opts).is_err());
     assert_eq!(std::fs::read(&external_preview).unwrap(), b"keep preview");
     assert!(!dir.join("manifest.json").exists());
 
@@ -418,7 +418,7 @@ fn directory_save_rejects_manifest_symlink_without_overwriting_target() {
     std::fs::write(&external_manifest, b"keep manifest").unwrap();
     symlink(&external_manifest, dir.join("manifest.json")).unwrap();
 
-    assert!(PcraftWriter::new().save_dir(&doc, &dir, &SaveOptions::default()).is_err());
+    assert!(PlyraWriter::new().save_dir(&doc, &dir, &SaveOptions::default()).is_err());
     assert_eq!(std::fs::read(&external_manifest).unwrap(), b"keep manifest");
     assert_eq!(std::fs::read_dir(dir.join("tiles")).unwrap().count(), 0);
 
@@ -434,7 +434,7 @@ fn identical_tiles_are_stored_once() {
     let b = a.duplicate();
     doc.layers.push(a);
     doc.layers.push(b);
-    let (_, s) = PcraftWriter::new().save_zip(&doc, &SaveOptions::default()).unwrap();
+    let (_, s) = PlyraWriter::new().save_zip(&doc, &SaveOptions::default()).unwrap();
     let per_layer = doc.layers[0].surface().unwrap().tile_count();
     assert_eq!(s.tiles_total, per_layer);
 }
@@ -587,12 +587,12 @@ fn save_load_save_gives_the_same_bytes() {
 }
 
 #[test]
-fn not_pcraft() {
-    assert!(!is_pcraft(b""));
-    assert!(!is_pcraft(b"8BPS...."));
+fn not_plyra() {
+    assert!(!is_plyra(b""));
+    assert!(!is_plyra(b"8BPS...."));
     let mut z = zip::ZipWriter::new();
     z.add("other.txt", b"x").unwrap();
-    assert!(!is_pcraft(&z.finish().unwrap()));
+    assert!(!is_plyra(&z.finish().unwrap()));
 }
 
 #[test]
@@ -643,7 +643,7 @@ fn vector_fields_roundtrip_and_default_when_absent() {
     assert!(!shapes.is_empty() && shapes.iter().all(|s| *s == (1.0, 0.0)), "{shapes:?}");
 }
 
-/// Type kerning (#206): the auto mode and manual kerning survive .pcraft; manifests written
+/// Type kerning (#206): the auto mode and manual kerning survive .plyra; manifests written
 /// before `kern` existed load with no manual kerning.
 #[test]
 fn text_kerning_roundtrips_and_defaults() {
@@ -682,7 +682,7 @@ fn text_kerning_roundtrips_and_defaults() {
     assert!(s.contains("\"kern\":0.0"), "kern defaults to 0");
 }
 
-/// Type on a path (#218): the path, start offset and flip survive .pcraft.
+/// Type on a path (#218): the path, start offset and flip survive .plyra.
 #[test]
 fn path_text_shape_roundtrips() {
     use fotodit_doc::text::TextShape;
@@ -703,7 +703,7 @@ fn path_text_shape_roundtrips() {
     assert_eq!(shape, Some(TextShape::Path { path, start: 12.5, flip: true }));
 }
 
-/// Area type (#218): the whole path, ops and fill rule included, survives .pcraft.
+/// Area type (#218): the whole path, ops and fill rule included, survives .plyra.
 #[test]
 fn area_text_shape_roundtrips() {
     use fotodit_doc::text::TextShape;
@@ -778,7 +778,7 @@ fn blend_if_roundtrips() {
 }
 
 /// Advanced Blending (knockout, as-group switches, transparency shapes, masks hide effects)
-/// survives .pcraft at every depth; manifests written before the field existed load with
+/// survives .plyra at every depth; manifests written before the field existed load with
 /// Photoshop's defaults, and default layers don't write it.
 #[test]
 fn advanced_blending_roundtrips_and_defaults_when_absent() {
@@ -888,8 +888,8 @@ fn a_non_finite_float_is_refused_at_save_rather_than_breaking_every_later_load()
         let msg = err.to_string();
         assert!(msg.contains(field) && msg.contains("NaN or infinite"), "{field}: {msg}");
         // The incremental writer shares the check, for autosave and directory bundles.
-        let mut w = PcraftWriter::new();
-        assert!(matches!(w.save_zip(&doc, &SaveOptions::default()), Err(FormatError::NonFinite { .. })), "{field}: PcraftWriter");
+        let mut w = PlyraWriter::new();
+        assert!(matches!(w.save_zip(&doc, &SaveOptions::default()), Err(FormatError::NonFinite { .. })), "{field}: PlyraWriter");
     }
     // The same document with finite values round-trips as before.
     let mut doc = base.clone();
@@ -913,7 +913,7 @@ fn directory_save_waits_for_the_bundle_lock() {
         Err(std::fs::TryLockError::Error(e)) => panic!("locking save.lock failed: {e}"),
         Err(std::fs::TryLockError::WouldBlock) => panic!("save.lock is already locked"),
     }
-    let mut w = PcraftWriter::new();
+    let mut w = PlyraWriter::new();
     w.set_lock_wait(std::time::Duration::from_millis(100));
     let e = w.save_dir(&doc, &dir, &SaveOptions::default()).unwrap_err();
     assert!(e.to_string().contains("in progress"), "{e}");
@@ -958,8 +958,8 @@ fn color_lookup_lut_file_round_trips_and_old_files_load() {
     let mut doc = Document::new("d", fotodit_doc::Size::new(4, 4), ColorMode::Rgb, SampleType::U8);
     doc.insert_above(None, Layer::new("lookup", LayerContent::Adjustment(adj.clone())));
     let back = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
-    assert_eq!(back, doc, "the LUT file survives a .pcraft round trip (#6544)");
-    // A .pcraft written before the field existed has no `source`: it loads as None.
+    assert_eq!(back, doc, "the LUT file survives a .plyra round trip (#6544)");
+    // A .plyra written before the field existed has no `source`: it loads as None.
     let mut v = serde_json::to_value(&adj).unwrap();
     let removed = v.as_object_mut().and_then(|o| o.values_mut().next()).and_then(|f| f.as_object_mut()).and_then(|f| f.remove("source"));
     assert!(removed.is_some(), "{v}");
@@ -972,7 +972,7 @@ fn color_lookup_lut_file_round_trips_and_old_files_load() {
 fn directory_save_without_previews_removes_stale_files_after_commit() {
     let mut doc = Document::new("before", fotodit_doc::Size::new(4, 3), ColorMode::Rgb, SampleType::U8);
     let dir = temp_dir("preview-cleanup");
-    let mut writer = PcraftWriter::new();
+    let mut writer = PlyraWriter::new();
     let opts = SaveOptions { thumbnail: Some(Rgba8Image::new(2, 2)), composite: Some(Rgba8Image::new(4, 3)), ..Default::default() };
     writer.save_dir(&doc, &dir, &opts).unwrap();
     doc.name = "after".into();
@@ -992,7 +992,7 @@ fn failed_manifest_commit_preserves_omitted_previews() {
     for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
         let mut doc = Document::with_background("before", fotodit_doc::Size::new(4, 3), ColorMode::Rgb, depth, fotodit_color::Color::WHITE);
         let dir = temp_dir("locked-manifest-previews");
-        let mut writer = PcraftWriter::new();
+        let mut writer = PlyraWriter::new();
         let opts = SaveOptions { thumbnail: Some(Rgba8Image::new(2, 2)), composite: Some(Rgba8Image::new(4, 3)), ..Default::default() };
         writer.save_dir(&doc, &dir, &opts).unwrap();
         let old_doc = doc.clone();
@@ -1023,7 +1023,7 @@ fn locked_stale_preview_does_not_fail_committed_save() {
 
     let mut doc = Document::new("before", fotodit_doc::Size::new(4, 3), ColorMode::Rgb, SampleType::U8);
     let dir = temp_dir("locked-stale-preview");
-    let mut writer = PcraftWriter::new();
+    let mut writer = PlyraWriter::new();
     let opts = SaveOptions { thumbnail: Some(Rgba8Image::new(2, 2)), composite: Some(Rgba8Image::new(4, 3)), ..Default::default() };
     writer.save_dir(&doc, &dir, &opts).unwrap();
     let held = std::fs::OpenOptions::new().read(true).share_mode(3).open(dir.join("thumb.png")).unwrap();

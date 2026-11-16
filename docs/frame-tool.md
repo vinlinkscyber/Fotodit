@@ -41,7 +41,7 @@ pending gestures live in `frameTool`; `ui.set` accepts `frameShape`, `frameSides
 `frameTarget` (`frame`, `content`, `both`). A completed drag is one undo step; previews do not
 change the document. Locks and invalid geometry are rejected before committing an edit.
 
-Native `.pcraft` saves keep the complete frame model, with a default for old files. PSD export
+Native `.plyra` saves keep the complete frame model, with a default for old files. PSD export
 uses editable groups, vector masks, Smart Objects, and a separate vector border to preserve the
 appearance. Private `pcFr` metadata restores Fotodit frame editability when reopened here;
 unknown Photoshop blocks remain preserved. These exports are **not Photoshop's native frame layer

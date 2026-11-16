@@ -498,9 +498,9 @@ pub struct FileHandling {
     pub exr_aces_cg: bool,
     pub ask_before_saving_layered_tiff: bool,
     pub maximize_psd_compatibility: Ask,
-    /// A `.pcraft` save also writes the flattened document at its canvas size as
+    /// A `.plyra` save also writes the flattened document at its canvas size as
     /// `composite/full.png`. Off by default.
-    pub pcraft_full_composite: bool,
+    pub plyra_full_composite: bool,
     /// SVG groups deeper than this are rasterised on import; parser and document safety caps remain fixed.
     pub rasterize_svg_groups_deeper_than: u32,
     pub recent_file_count: u32,
@@ -533,7 +533,7 @@ impl Default for FileHandling {
             exr_aces_cg: false,
             ask_before_saving_layered_tiff: true,
             maximize_psd_compatibility: Ask::Always,
-            pcraft_full_composite: false,
+            plyra_full_composite: false,
             rasterize_svg_groups_deeper_than: fotodit_doc::MAX_GROUP_DEPTH as u32,
             recent_file_count: 20,
             recent_files: Vec::new(),

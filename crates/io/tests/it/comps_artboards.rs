@@ -1,5 +1,5 @@
 //! Layer comps (resource 1065 + per-layer `cmls`) and artboards (`artb`) through PSD and
-//! `.pcraft`: byte-exact while unchanged, regenerated after edits.
+//! `.plyra`: byte-exact while unchanged, regenerated after edits.
 
 #[cfg(feature = "corpus")]
 use std::path::PathBuf;
@@ -205,7 +205,7 @@ fn synthetic_psd_roundtrip_all_depths() {
 }
 
 #[test]
-fn synthetic_pcraft_roundtrip_keeps_everything() {
+fn synthetic_plyra_roundtrip_keeps_everything() {
     let mut d = synthetic(SampleType::U16);
     d.last_document_state = Some(LayerComp {
         id: 0,
@@ -237,15 +237,15 @@ fn synthetic_pcraft_roundtrip_keeps_everything() {
         reordered.add(&entry.name, &zip.read(entry, bytes.len()).unwrap()).unwrap();
     }
     let reordered = reordered.finish().unwrap();
-    for name in ["x.PCRAFT", "no-extension"] {
+    for name in ["x.PLYRA", "no-extension"] {
         let imported = import(name, &reordered).unwrap().document;
         assert_eq!(imported.layer_comps, d.layer_comps);
         assert_eq!(imported.layers[1].artboard(), d.layers[1].artboard());
     }
 
     let png = export(&d, "x.png", &ExportOptions::default()).unwrap().bytes;
-    assert!(import("pcraft", &png).is_ok());
-    assert!(matches!(import("broken.pcraft", b"not a native bundle"), Err(fotodit_io::IoError::Pcraft(_))));
+    assert!(import("plyra", &png).is_ok());
+    assert!(matches!(import("broken.plyra", b"not a native bundle"), Err(fotodit_io::IoError::Plyra(_))));
 }
 
 /// A layer at (4, 4) whose preserved `shmd` block offsets it by `(dx, 0)` in comp 1, plus the

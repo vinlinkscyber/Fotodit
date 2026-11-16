@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 pub use craft_pcraft_format::{FORMAT_VERSION, Hash, TileRef};
 
-/// The manifest: craft-pcraft-format's envelope (`format_version`, `generator`, the optional
+/// The manifest: the shared format crate's envelope (`format_version`, `generator`, the optional
 /// `thumbnail` and `composite` previews) around the document [`DocM`]. A save with the full-size
 /// composite adds a `full_composite` member after the envelope; [`crate::read_full_composite`]
 /// reads it.

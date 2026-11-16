@@ -180,7 +180,7 @@ fn only_a_plain_png_is_stepped() {
     let png = Arc::new(encode(&noise(4, 4, ChannelLayout::Rgb, SampleType::U8), Format::Png, &EncodeOptions::default()).unwrap());
     assert!(PngImport::new("a.png", &png).unwrap().is_some());
     // The same bytes under a name that sends them to another importer, or another format.
-    assert!(PngImport::new("a.pcraft", &png).unwrap().is_none());
+    assert!(PngImport::new("a.plyra", &png).unwrap().is_none());
     let jpeg = Arc::new(encode(&noise(4, 4, ChannelLayout::Rgb, SampleType::U8), Format::Jpeg, &EncodeOptions::default()).unwrap());
     assert!(PngImport::new("a.jpg", &jpeg).unwrap().is_none());
     assert!(PngImport::new("a.svg", &Arc::new(b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>".to_vec())).unwrap().is_none());

@@ -20,7 +20,7 @@ type PlaceInbox = fotodit_ui_egui::PlaceInbox;
 /// Everything File › Open reads: Fotodit, Photoshop, OpenRaster, Krita and Affinity documents, flat images, and
 /// Photoshop brushes (.abr), gradients (.grd), layer styles (.asl) and swatches (.aco, .act, .ase), which go to the preset libraries.
 const OPEN_EXTS: &[&str] = &[
-    "pcraft", "pdn", "ora", "xcf", "xcfgz", "gz", "kra", "krz", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico",
+    "plyra", "pcraft", "pdn", "ora", "xcf", "xcfgz", "gz", "kra", "krz", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico",
     "qoi", "exr", "hdr", "pbm", "pgm", "ppm", "pam", "pfm", "dds", "fits", "fit", "fts", "dpx", "cin", "dcm", "dicom", "dc3", "iff", "lbm", "ilbm", "heic",
     "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "asl", "svg", "svgz", "aco", "act", "ase", "af",
     "afdesign", "afphoto", "afpub",
@@ -30,7 +30,7 @@ const SVG_EXTS: &[&str] = &["svg", "svgz"];
 static STOPPED: AtomicBool = AtomicBool::new(false);
 const CANVAS_ID: &str = "fotodit_canvas";
 
-/// Fonts the host serves next to the page (`fotodit_ui_egui::served_fonts`): craft-fonts' manifest
+/// Fonts the host serves next to the page (`fotodit_ui_egui::served_fonts`): plyra-fonts' manifest
 /// format, each file relative to the site root. No manifest (a 404) means no served fonts.
 const FONTS_MANIFEST: &str = "fonts/manifest.txt";
 

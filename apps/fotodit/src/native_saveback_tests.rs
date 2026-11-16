@@ -216,7 +216,7 @@ fn contains_source(doc: &Document, saved: &[u8], depth: usize) -> bool {
         let LayerContent::Smart(sm) = &layer.content else { return false };
         let Some((name, bytes)) = embedded(doc, sm) else { return false };
         bytes == saved
-            || ((bytes.starts_with(b"8BPS") || fotodit_format::is_pcraft(bytes))
+            || ((bytes.starts_with(b"8BPS") || fotodit_format::is_plyra(bytes))
                 && fotodit_io::import(&name, bytes).is_ok_and(|child| contains_source(&child.document, saved, depth + 1)))
     })
 }

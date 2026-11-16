@@ -46,11 +46,11 @@ fn painting_the_filter_mask_hides_the_filters_there_in_one_undo_step() {
         s.execute("edit.redo", json!({})).unwrap();
         assert_eq!(flat(&s), px);
 
-        // The painted mask is saved: .pcraft and PSD give it back.
+        // The painted mask is saved: .plyra and PSD give it back.
         let doc = s.active().unwrap().doc.clone();
         let id = s.active().unwrap().active_layer.unwrap();
         let back = fotodit_format::load_from_bytes(&fotodit_format::save_to_bytes(&doc, &Default::default()).unwrap()).unwrap();
-        assert_eq!(smart(&back, id).unwrap().filter_mask, smart(&doc, id).unwrap().filter_mask, "depth {depth}: .pcraft");
+        assert_eq!(smart(&back, id).unwrap().filter_mask, smart(&doc, id).unwrap().filter_mask, "depth {depth}: .plyra");
         let psd = fotodit_io::export(&doc, "psd", &Default::default()).unwrap();
         let back = fotodit_io::import("x.psd", &psd.bytes).unwrap().document;
         let sm = back.walk().into_iter().find_map(|(_, _, l)| if let LayerContent::Smart(sm) = &l.content { Some(sm.clone()) } else { None }).unwrap();

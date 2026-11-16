@@ -1255,7 +1255,7 @@ fn linked_layers_move_together_and_undo() {
     }
 }
 
-/// Plain layers carrying stored link groups, as a loaded `.pcraft` or PSD can hold (#961).
+/// Plain layers carrying stored link groups, as a loaded `.plyra` or PSD can hold (#961).
 fn stored_groups(s: &mut Session, groups: &[Option<u64>]) -> Vec<LayerId> {
     let ids: Vec<LayerId> = groups.iter().map(|_| rect_layer(s, Rect::new(0, 0, 4, 4))).collect();
     s.edit("load groups", |doc, _| {

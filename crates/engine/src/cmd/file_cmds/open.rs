@@ -71,7 +71,7 @@ fn import_result(name: &str, bytes: &[u8]) -> Result<fotodit_io::ImportResult> {
     import_result_with(name, bytes, &fotodit_io::ImportOptions::default())
 }
 
-/// The one import path every caller shares: allocation checkpoint, native `.pcraft` and format
+/// The one import path every caller shares: allocation checkpoint, native `.plyra` and format
 /// dispatch through `fotodit_io::import_with_options`, typed memory refusals, and the
 /// preview-only refusal wherever the import came from.
 fn import_result_with(name: &str, bytes: &[u8], opts: &fotodit_io::ImportOptions) -> Result<fotodit_io::ImportResult> {

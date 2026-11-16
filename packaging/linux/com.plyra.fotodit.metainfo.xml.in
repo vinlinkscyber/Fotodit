@@ -26,7 +26,7 @@
   <launchable type="desktop-id">com.plyra.fotodit.desktop</launchable>
   <icon type="stock">com.plyra.fotodit</icon>
   <!-- Only url types known to appstream 0.15 (Ubuntu 22.04, where CI validates): no vcs-browser. -->
-  <url type="homepage">https://getartcraft.com/apps/fotodit</url>
+  <url type="homepage"></url>
   <url type="bugtracker">https://github.com/plyra/fotodit/issues</url>
   <url type="help">https://github.com/plyra/fotodit</url>
   <url type="contact">https://discord.gg/plyra</url>

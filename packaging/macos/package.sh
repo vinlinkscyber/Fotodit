@@ -126,8 +126,8 @@ cp "$ROOT/assets/app-icon/fotodit.icns" "$APP/Contents/Resources/Fotodit.icns"
 for notice_file in "$ROOT/NOTICE" "$ROOT/ATTRIBUTION.md"; do
   [ -f "$notice_file" ] && cp "$notice_file" "$APP/Contents/Resources/"
 done
-# Licences of the embedded craft-fonts fonts (only when built with CRAFT_FONTS_DIR).
-if [[ -n "${CRAFT_FONTS_DIR:-}" ]]; then
+# Licences of the embedded plyra-fonts fonts (only when built with PLYRA_FONTS_DIR).
+if [[ -n "${PLYRA_FONTS_DIR:-}" ]]; then
   mkdir -p "$APP/Contents/Resources/Licenses"
   copy_font_licences "$APP/Contents/Resources/Licenses"
 fi

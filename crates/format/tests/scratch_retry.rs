@@ -29,7 +29,7 @@ fn retry_after_failed_hashing_never_reuses_placeholder_hashes() {
     file.write_all(&vec![0; good.len()]).unwrap();
     file.sync_all().unwrap();
 
-    let mut writer = fotodit_format::PcraftWriter::new();
+    let mut writer = fotodit_format::PlyraWriter::new();
     // This save discovers the failure itself, after entering the hash collection stage.
     assert!(writer.save_zip(&doc, &Default::default()).is_err());
     file.seek(SeekFrom::Start(0)).unwrap();

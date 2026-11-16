@@ -39,12 +39,12 @@ fn network_alias(p: &Path) -> String {
     format!("/{}", p.display())
 }
 
-/// A 32×32 white document saved (as far as its links know) at `d/doc.pcraft`, with `file` placed
+/// A 32×32 white document saved (as far as its links know) at `d/doc.plyra`, with `file` placed
 /// linked → (session, layer id).
 fn document(d: &Path, file: &Path) -> (Session, LayerId) {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 32, "height": 32})).unwrap();
-    s.active_mut().unwrap().path = Some(d.join("doc.pcraft").to_string_lossy().into_owned());
+    s.active_mut().unwrap().path = Some(d.join("doc.plyra").to_string_lossy().into_owned());
     s.execute("file.placeLinked", json!({"path": file.to_string_lossy()})).unwrap();
     let id = s.active().unwrap().active_layer.unwrap();
     (s, id)
@@ -227,7 +227,7 @@ fn data_sets_and_footage_read_only_followed_files() {
     png(&d.join("blue.png"), |_| [0, 0, 255]);
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 32, "height": 32, "background": "#ff0000"})).unwrap();
-    s.active_mut().unwrap().path = Some(d.join("doc.pcraft").to_string_lossy().into_owned());
+    s.active_mut().unwrap().path = Some(d.join("doc.plyra").to_string_lossy().into_owned());
     let layer = s.active().unwrap().active_layer.unwrap();
     s.execute("image.variables.define", json!({"defs": [{"name": "img", "layer": layer.0, "type": "pixelReplacement", "method": "conform"}]})).unwrap();
     let set = |name: &str, path: &str| json!({"name": name, "values": [{"variable": "img", "kind": "pixels", "value": path}]});
@@ -271,7 +271,7 @@ fotodit-text-marker
     std::fs::write(d.join("Downloads").join(".settings"), TEXT).unwrap();
     png(&d.join("red.png"), |_| [255, 0, 0]);
     let (mut s, id) = document(&d, &d.join("red.png"));
-    s.active_mut().unwrap().path = Some(d.join("Downloads").join("doc.pcraft").to_string_lossy().into_owned());
+    s.active_mut().unwrap().path = Some(d.join("Downloads").join("doc.plyra").to_string_lossy().into_owned());
     let has_text = |bytes: &[u8]| bytes.windows(TEXT.len()).any(|w| w == TEXT);
     for (n, path) in ["../notes/readme", ".settings"].into_iter().enumerate() {
         relink(&mut s, id, path);

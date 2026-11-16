@@ -414,9 +414,9 @@ The repository already has the right harnesses:
   `egui_kittest` + wgpu, deterministic `RendererOptions`, scripts, themes and
   scales.
 - `crates/ui-egui/src/panel_docking_tests.rs:179` captures theme/width/scale
-  docking fixtures when `CRAFT_UI_DOCKING_FIXTURES` is set.
+  docking fixtures when `PLYRA_UI_DOCKING_FIXTURES` is set.
 - `crates/ui-egui/src/panels.rs:6904` captures compact chrome fixtures under
-  `CRAFT_UI_VISUAL_FIXTURES`.
+  `PLYRA_UI_VISUAL_FIXTURES`.
 - `perf/budgets.toml` maps P1…Pn rows to `perf_scenarios`, `interactive_bench`,
   `fx_bench`, `bevel_bench`, `camera_raw_bench`, `type_bench`,
   `large_image_bench`, `large_file_bench`, plus the new `text_tessellation`
@@ -1189,7 +1189,7 @@ Windows/macOS native checks follow the corresponding server workflow and their o
 VM/helper procedures.
 
 Do not claim a gate passed from a compile-only run. A skipped optional test
-(e.g. missing `CRAFT_FONTS_DIR`) is recorded as skipped, not passed. Baseline
+(e.g. missing `PLYRA_FONTS_DIR`) is recorded as skipped, not passed. Baseline
 evidence for P0b (raw samples, machine fingerprint, lock/source hashes) must exist
 before any P1 production edit is measured.
 
@@ -1338,8 +1338,8 @@ and the fork are controls, not replacement baselines.
 - renderer: Vulkan (or Metal/DX12 as applicable), plus a separate `--cpu`
   software-renderer run;
 - DPI: 1.0 and 2.0; viewport 1440×900, plus 3840×2160 for large-window tests;
-- profile: `--release`, `--locked`, no `CRAFT_FONTS_DIR` unless the row is
-  font-specific; record whether craft-fonts is embedded.
+- profile: `--release`, `--locked`, no `PLYRA_FONTS_DIR` unless the row is
+  font-specific; record whether plyra-fonts is embedded.
 
 Run each row with the shared sample protocol; keep raw JSON. The repository's
 existing 15-sample/5-sample bench counts and `interactive_bench --reps 5` are
@@ -1530,7 +1530,7 @@ Implemented in this checkout (release 0.15.0 base `e6d6fb45`):
 - **Fonts**: `build.rs` deflates `egui-icons` and the feature-gated emoji faces;
   `egui_fonts.rs` reproduces 0.37's faces, scale tweaks and family order; `cjk_fonts.rs` uses
   `FontData::bytes()`; a glyph test covers `egui::special_emojis` in both families;
-  `NativeOptions::system_font_fallback = false` keeps Fotodit's own CJK/craft-fonts
+  `NativeOptions::system_font_fallback = false` keeps Fotodit's own CJK/plyra-fonts
   fallback the only provider.
 - **Mechanical 0.37 API port**: `WidgetType` → `egui::Role` (with the renamed variants),
   `Id::new` → `Id::unique` (hash-preserving), `ui.id()` → `ui.scope_id()`,

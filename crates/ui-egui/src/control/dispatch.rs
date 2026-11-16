@@ -1534,7 +1534,7 @@ fn app_methods(app: &mut FotoditApp, ctx: &egui::Context, req: &ControlRequest) 
 /// The `app.open` control method: opens a path through the configured automation read
 /// capability, with optional high-memory approval.
 fn app_open(app: &mut FotoditApp, path: &str, approved: bool) -> Outcome {
-    if let Some(outcome) = open_pcraft_directory(app, path) {
+    if let Some(outcome) = open_plyra_directory(app, path) {
         return outcome;
     }
     let opened = match app.services.automation_read.as_mut() {
@@ -1552,14 +1552,14 @@ fn app_open(app: &mut FotoditApp, path: &str, approved: bool) -> Outcome {
     }))
 }
 
-/// Directory .pcraft (the native on-disk form) loads through a capability-scoped
+/// Directory .plyra (the native on-disk form) loads through a capability-scoped
 /// source; the single-file (zip) form falls back to the bytes path, as do all
-/// other formats. `None` means "not a directory .pcraft".
-fn open_pcraft_directory(app: &mut FotoditApp, path: &str) -> Option<Outcome> {
+/// other formats. `None` means "not a directory .plyra".
+fn open_plyra_directory(app: &mut FotoditApp, path: &str) -> Option<Outcome> {
     if !path.rsplit_once('.').is_some_and(|(_, ext)| ext.eq_ignore_ascii_case(fotodit_format::EXTENSION)) {
         return None;
     }
-    let open = app.services.automation_open_pcraft.as_mut()?;
+    let open = app.services.automation_open_plyra.as_mut()?;
     match open(path) {
         Ok(Some((name, doc))) => {
             app.session.add_document(doc, None);

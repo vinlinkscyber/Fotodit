@@ -153,7 +153,7 @@ fn short_color_lookup_table_warns_on_open() {
         dither: false,
         source: None,
     };
-    let (doc, warnings) = reopen(short, "x.pcraft", &ExportOptions::default());
+    let (doc, warnings) = reopen(short, "x.plyra", &ExportOptions::default());
     assert!(matches!(&doc.layers[0].content, LayerContent::Adjustment(Adjustment::ColorLookup { .. })), "{:?}", doc.layers[0].content);
     let w: Vec<&String> = warnings.iter().filter(|w| w.contains("Teal Look")).collect();
     assert_eq!(w.len(), 1, "{warnings:?}");
@@ -167,11 +167,11 @@ fn short_color_lookup_table_warns_on_open() {
         dither: false,
         source: None,
     };
-    let (_, warnings) = reopen(ok, "x.pcraft", &ExportOptions::default());
+    let (_, warnings) = reopen(ok, "x.plyra", &ExportOptions::default());
     assert!(warnings.iter().all(|w| !w.contains("Teal Look")), "{warnings:?}");
     // A missing table renders as the identity too.
     let none = Adjustment::ColorLookup { name: "t.cube".into(), size: 2, lut: None, tetrahedral: false, dither: false, source: None };
-    let (_, warnings) = reopen(none, "x.pcraft", &ExportOptions::default());
+    let (_, warnings) = reopen(none, "x.plyra", &ExportOptions::default());
     assert!(warnings.iter().any(|w| w.contains("Teal Look") && w.contains("no usable table")), "{warnings:?}");
 }
 
@@ -204,8 +204,8 @@ fn custom_domain_lookup_warns_and_round_trips_verbatim() {
                 warnings[0]
             );
 
-            let native = export(&opened.document, "preserved.pcraft", &ExportOptions::default()).expect("save native document");
-            let native_open = import("preserved.pcraft", &native.bytes).expect("reopen native document");
+            let native = export(&opened.document, "preserved.plyra", &ExportOptions::default()).expect("save native document");
+            let native_open = import("preserved.plyra", &native.bytes).expect("reopen native document");
             assert_eq!(unsupported_lookup_raw(&native_open.document), source_block, "native preservation, {extension}, {depth}-bit");
 
             let output_name = format!("roundtrip.{extension}");

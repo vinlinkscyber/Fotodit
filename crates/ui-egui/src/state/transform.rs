@@ -134,7 +134,7 @@ pub struct TypeInsertionStyle {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TextEdit {
     pub layer: u64,
-    /// Id of the document being edited (layer ids can repeat across documents, e.g. one .pcraft
+    /// Id of the document being edited (layer ids can repeat across documents, e.g. one .plyra
     /// opened twice). `None`: the active document.
     #[serde(default)]
     pub document: Option<u64>,

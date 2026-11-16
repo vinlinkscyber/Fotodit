@@ -189,9 +189,9 @@ fn localized_family_names_map_english_families_to_native_names() {
     assert!(local.values().all(|v| !v.is_empty()));
 }
 
-/// A craft-fonts manifest entry for `bytes`, as `build.rs` writes one per manifest line.
-fn craft(family: &'static str, scripts: &'static [&'static str], bytes: Vec<u8>) -> crate::CraftFont {
-    crate::CraftFont { family, style: "Regular", scripts, bytes: bytes.leak() }
+/// A plyra-fonts manifest entry for `bytes`, as `build.rs` writes one per manifest line.
+fn craft(family: &'static str, scripts: &'static [&'static str], bytes: Vec<u8>) -> crate::PlyraFont {
+    crate::PlyraFont { family, style: "Regular", scripts, bytes: bytes.leak() }
 }
 
 /// A TrueType collection of single-face fonts.
@@ -218,10 +218,10 @@ fn collection(faces: &[Vec<u8>]) -> Vec<u8> {
 
 /// Single-face craft fonts of every script register under their manifest family names, whatever
 /// family their `name` tables give, and the ones the fallback lists name are in the fallback
-/// stack. The Hans and Arab families are fallback-list names, and no craft-fonts manifest uses
+/// stack. The Hans and Arab families are fallback-list names, and no plyra-fonts manifest uses
 /// any of the three, so `FontDb::new` does not register them from the build's own craft fonts.
 #[test]
-fn craft_fonts_of_every_script_register_under_their_manifest_families() {
+fn plyra_fonts_of_every_script_register_under_their_manifest_families() {
     let fonts = [
         craft("WenQuanYi Micro Hei", &["Hans", "Latn"], localized_font(&INTER_REGULAR, "WenQuanYi Micro Hei", "WenQuanYi Micro Hei")),
         // The `name` tables of these two give the family "Numeric Test".
@@ -230,7 +230,7 @@ fn craft_fonts_of_every_script_register_under_their_manifest_families() {
     ];
     let mut db = FontDb::new();
     assert!(fonts.iter().all(|f| !db.has_family(f.family)));
-    db.register_craft_fonts(&fonts);
+    db.register_plyra_fonts(&fonts);
     let families = db.families();
     for f in &fonts {
         assert!(families.iter().any(|n| n == f.family), "{} registered under its manifest family: {families:?}", f.family);
@@ -247,7 +247,7 @@ fn craft_font_collections_keep_their_face_families() {
     let faces = [localized_font(&INTER_REGULAR, "Craft Test A", "クラフト A"), localized_font(&INTER_SEMIBOLD, "Craft Test B", "クラフト B")];
     let fonts = [craft("Craft Test Collection", &["Jpan", "Latn"], collection(&faces))];
     let mut db = FontDb::new();
-    db.register_craft_fonts(&fonts);
+    db.register_plyra_fonts(&fonts);
     assert!(db.has_family("Craft Test A") && db.has_family("Craft Test B"), "{:?}", db.families());
     assert!(!db.has_family("Craft Test Collection"));
 }

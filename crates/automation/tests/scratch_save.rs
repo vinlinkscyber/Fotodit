@@ -1,4 +1,4 @@
-//! A scripted `.pcraft` save refuses to write previews or a full-size composite rendered from
+//! A scripted `.plyra` save refuses to write previews or a full-size composite rendered from
 //! scratch tiles that could not be read. Its own test binary: the scratch store is per process.
 #![cfg(not(target_arch = "wasm32"))]
 
@@ -55,7 +55,7 @@ fn native_save_refuses_previews_rendered_from_unreadable_scratch() {
     file.write_all(&vec![0; good.len()]).unwrap();
     file.sync_all().unwrap();
 
-    let on = fotodit_io::ExportOptions { pcraft_full_composite: true, ..Default::default() };
+    let on = fotodit_io::ExportOptions { plyra_full_composite: true, ..Default::default() };
     // A flat export refused after its provisional result (the unreadable tile is only noticed
     // while reading) keeps that result's renderer notes queued for the caller.
     let mut renderer = QueuedDiagnosticsRenderer(Vec::new());
@@ -63,14 +63,14 @@ fn native_save_refuses_previews_rendered_from_unreadable_scratch() {
     assert!(matches!(err, IoError::Unsupported(_)), "{err:?}");
     assert!(renderer.0.iter().any(|d| d.contains("single-layer export copies")), "refused export must re-queue its notes: {:?}", renderer.0);
     // Refused while rendering the previews, before the bundle is assembled.
-    let err = files::save_bytes(&doc, "Scratch.pcraft", None, &on).unwrap_err();
+    let err = files::save_bytes(&doc, "Scratch.plyra", None, &on).unwrap_err();
     assert!(matches!(err, AutomationError::Io(_)), "{err:?}");
     // A failed native encode must leave the renderer's queued diagnostics for the caller.
     let mut renderer = QueuedDiagnosticsRenderer(vec!["queued native save diagnostic".into()]);
-    let err = files::save_bytes_with_renderer(&doc, "Scratch.pcraft", None, &on, Some(&mut renderer)).unwrap_err();
+    let err = files::save_bytes_with_renderer(&doc, "Scratch.plyra", None, &on, Some(&mut renderer)).unwrap_err();
     assert!(matches!(err, AutomationError::Io(_)), "{err:?}");
     assert_eq!(renderer.0, ["queued native save diagnostic"], "a failed native save must leave queued diagnostics on the renderer");
-    let path = dir.join("Scratch.pcraft");
+    let path = dir.join("Scratch.plyra");
     let err = files::save(&doc, &path, None, &on, None).unwrap_err();
     assert!(matches!(err, AutomationError::Io(_)), "{err:?}");
     assert!(!path.exists());
@@ -82,7 +82,7 @@ fn native_save_refuses_previews_rendered_from_unreadable_scratch() {
         tile.try_bytes().unwrap();
     }
     assert!(spill::check_integrity().is_ok());
-    let (bytes, _) = files::save_bytes(&doc, "Scratch.pcraft", None, &on).unwrap();
+    let (bytes, _) = files::save_bytes(&doc, "Scratch.plyra", None, &on).unwrap();
     assert_eq!(fotodit_format::load_from_bytes(&bytes).unwrap().layers, doc.layers);
     drop((doc, file));
     spill::configure(None, 0).unwrap();

@@ -55,7 +55,7 @@ impl Fixture {
         let LayerContent::Smart(sm) = &mut doc.layer_mut(layer).unwrap().content else { panic!("smart object") };
         sm.smart_filters[0].params = path_params(lookup, &self.outside(if lookup { "white.cube" } else { "white.png" }));
         let bytes = fotodit_format::save_to_bytes(&doc, &Default::default()).unwrap();
-        std::fs::write(self.root().join("stored.pcraft"), bytes).unwrap();
+        std::fs::write(self.root().join("stored.plyra"), bytes).unwrap();
         (doc, layer)
     }
 }

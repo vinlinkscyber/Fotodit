@@ -146,7 +146,7 @@ fn styles_survive_typing_and_save() {
     s.execute("type.edit", json!({"layer": id, "replace": {"start": 2, "end": 2, "text": "cd"}})).unwrap();
     let t = layer(&s, id);
     assert_eq!(run_at(&t, 3).style_sheet, Some(cs));
-    // .pcraft round trip keeps the styles and references.
+    // .plyra round trip keeps the styles and references.
     let doc = s.active().unwrap().doc.clone();
     let bytes = fotodit_format::save_to_bytes(&doc, &fotodit_format::SaveOptions::default()).unwrap();
     let back = fotodit_format::load_from_bytes(&bytes).unwrap();

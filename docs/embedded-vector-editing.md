@@ -14,7 +14,7 @@ parent as well. Raster/PSD/PSB internal editing retains its existing behavior.
 
 AI, PDF and EPS save-back retains the native file name and saved native bytes. A separate,
 source-hash-bound SVG is a display preview, never a replacement for the embedded native file.
-It is retained in `.pcraft` and a private PSD `pcVP` layer block; other PSD readers may ignore
+It is retained in `.plyra` and a private PSD `pcVP` layer block; other PSD readers may ignore
 that block and use the layer's cached pixels. Undo restores both the original source and preview.
 No original file on disk is edited. Test on a PSD copy.
 

@@ -13,7 +13,7 @@ desktop UI       CLI       JSON control       MCP
                           |
        document model + operations + compositors
                           |
-             PSD / raster / .pcraft I/O
+             PSD / raster / .plyra I/O
 ```
 
 The enforced dependency direction runs from format-independent foundation crates through the document and operation layers to composition, I/O, the engine, and finally UI/automation. `cargo xtask layers` checks this rule.
@@ -26,7 +26,7 @@ The complete design narrative and dependency diagram remain in [`docs/architectu
 - `fotodit-engine::Session` owns open documents, active state, history, and command dispatch.
 - `fotodit-compose` is the CPU reference compositor; `fotodit-gpu` accelerates supported interactive paths.
 - `fotodit-io` maps between documents and PSD or flat formats.
-- `fotodit-format` reads and writes the native `.pcraft` bundle.
+- `fotodit-format` reads and writes the native `.plyra` bundle.
 - `fotodit-ui-egui` is a thin shell over engine commands.
 - `fotodit-automation` exposes the headless engine and the live-GUI bridge.
 

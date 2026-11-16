@@ -5,7 +5,7 @@ order: 30
 verified: 0.8.2
 ---
 
-Open **Help › Report an Issue…**. It takes you to the [Fotodit issue tracker](https://github.com/plyra/Fotodit/issues) on GitHub. You can also ask in [Discord]().
+Open **Help › Report an Issue…**. It takes you to the [Fotodit issue tracker](https://github.com/plyra/Fotodit/issues) on GitHub. You can also ask in Discord.
 
 ## What to include
 

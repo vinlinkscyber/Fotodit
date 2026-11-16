@@ -874,7 +874,7 @@ pub fn install_fonts_with(ctx: &egui::Context, cjk: crate::cjk_fonts::Sources) {
     if let Some(mono) = mono {
         fonts.families.entry(FontFamily::Monospace).or_default().insert(0, mono);
     }
-    // The optional craft-fonts input carries Japanese, Simplified Chinese, Korean, Arabic, Thai and
+    // The optional plyra-fonts input carries Japanese, Simplified Chinese, Korean, Arabic, Thai and
     // other faces. They are not registered into this static stack: `cjk_fonts` installs a
     // per-character font provider for them, so a broad Simplified Chinese face is not put in the
     // family stack ahead of the Japanese or Korean face, and a locale without a Traditional Chinese
@@ -910,7 +910,7 @@ pub fn install_fonts_with(ctx: &egui::Context, cjk: crate::cjk_fonts::Sources) {
     {
         ctx.add_plugin(UiFontSizePlugin { applied: size, defer_after_install: true });
     }
-    // CJK, Thai, Arabic, Indic and other script fallback fonts (craft-fonts' Japanese ones if built in, then
+    // CJK, Thai, Arabic, Indic and other script fallback fonts (plyra-fonts' Japanese ones if built in, then
     // the system's) are registered on demand (cjk_fonts.rs).
     crate::cjk_fonts::install_with(ctx, cjk);
 }

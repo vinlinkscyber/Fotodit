@@ -1433,10 +1433,10 @@ fn bad_guide_positions_are_refused_without_a_guide() {
     assert_eq!(s.active().unwrap().history.can_undo(), undo_before, "a refused guide records no history step");
 }
 
-/// Guides keep their exact place (#2918): 1 cm at 300 ppi through New Guide and .pcraft, and
+/// Guides keep their exact place (#2918): 1 cm at 300 ppi through New Guide and .plyra, and
 /// a 1/32 px PSD position past 2^19 px, where f32 has no 1/32 steps left.
 #[test]
-fn guides_keep_sub_pixel_positions_through_pcraft_and_psd() {
+fn guides_keep_sub_pixel_positions_through_plyra_and_psd() {
     let (cm, far) = (300.0 / 2.54, 600_000.031_25);
     let mut s = session();
     s.execute("view.newGuide", json!({"orientation": "horizontal", "position": cm})).unwrap();
@@ -1447,8 +1447,8 @@ fn guides_keep_sub_pixel_positions_through_pcraft_and_psd() {
     let exact = |g: &fotodit_doc::Guides| (wide(g.horizontal[0]), wide(g.vertical[0]));
     let doc = &s.active().unwrap().doc;
     assert_eq!(exact(&doc.guides), (cm, far));
-    let pcraft = fotodit_format::save_to_bytes(doc, &Default::default()).unwrap();
-    assert_eq!(exact(&fotodit_format::load_from_bytes(&pcraft).unwrap().guides), (cm, far));
+    let plyra = fotodit_format::save_to_bytes(doc, &Default::default()).unwrap();
+    assert_eq!(exact(&fotodit_format::load_from_bytes(&plyra).unwrap().guides), (cm, far));
     let psd = fotodit_io::export(doc, "psd", &Default::default()).unwrap().bytes;
     let back = fotodit_io::import("g.psd", &psd).unwrap().document.guides;
     assert_eq!(wide(back.vertical[0]), far, "1032 stores 1/32 px");

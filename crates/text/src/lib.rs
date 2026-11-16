@@ -3,8 +3,8 @@
 //! * [`fonts::FontDb`]: bundled fonts (Inter, JetBrains Mono; always available, including on the
 //!   web), optional system fonts from platform directory scans plus Fontconfig's Linux file list,
 //!   user font data, TrueType collections, PostScript-name lookup. Builds made with the optional
-//!   craft-fonts input
-//!   (`CRAFT_FONTS_DIR`, see [`craft_fonts`]) also carry its fonts of every script (a single-face
+//!   plyra-fonts input
+//!   (`PLYRA_FONTS_DIR`, see [`plyra_fonts`]) also carry its fonts of every script (a single-face
 //!   file under its manifest family name); the ones the fallback lists name are fallbacks.
 //! * [`layout`]: shaping and line layout with [parley] (HarfRust shaping, bidi, line breaking),
 //!   point and paragraph (box) text, per-run styles, Photoshop leading/indent/spacing rules.
@@ -19,7 +19,7 @@
 
 pub mod area;
 pub mod cjk;
-pub mod craft_fonts;
+pub mod plyra_fonts;
 mod embolden;
 pub mod engine_data;
 pub mod font_class;
@@ -40,7 +40,7 @@ pub mod warp;
 use fotodit_color::PixelFormat;
 use fotodit_doc::TextLayer;
 
-pub use craft_fonts::{CRAFT_FONTS, CraftFont};
+pub use plyra_fonts::{PLYRA_FONTS, PlyraFont};
 pub use font_class::{FamilyTraits, FontClass, FontFormat};
 pub use fonts::{FaceInfo, FontDb, ResolvedFont};
 pub use layout::{

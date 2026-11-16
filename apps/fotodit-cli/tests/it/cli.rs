@@ -226,12 +226,12 @@ fn server_validation_does_not_consume_stdio_or_create_files() {
 }
 
 #[test]
-fn convert_png_pcraft_png_is_lossless() {
+fn convert_png_plyra_png_is_lossless() {
     let d = tmp("convert");
-    let (a, b, c) = (d.join("a.png"), d.join("b.pcraft"), d.join("c.png"));
+    let (a, b, c) = (d.join("a.png"), d.join("b.plyra"), d.join("c.png"));
     write_png(&a, 37, 23, 7);
     ok(bin().args(["convert"]).arg(&a).arg(&b));
-    assert!(fotodit_format::is_pcraft(&std::fs::read(&b).unwrap()));
+    assert!(fotodit_format::is_plyra(&std::fs::read(&b).unwrap()));
     ok(bin().args(["convert"]).arg(&b).arg(&c));
     let x = fotodit_codecs::decode(&std::fs::read(&a).unwrap()).unwrap();
     let y = fotodit_codecs::decode(&std::fs::read(&c).unwrap()).unwrap();
@@ -313,7 +313,7 @@ fn info_and_convert_report_decode_warnings() {
 #[test]
 fn run_commands_and_save() {
     let d = tmp("run");
-    let out_pc = d.join("r.pcraft");
+    let out_pc = d.join("r.plyra");
     let out = ok(bin()
         .args(["run", "--new", r#"{"width":40,"height":30,"name":"Run"}"#])
         .args(["--cmd", "layer.new.layer", "--params", r#"{"name":"Ink"}"#])
@@ -329,7 +329,7 @@ fn run_commands_and_save() {
     let info = ok(bin().arg("info").arg(&out_pc)).stdout;
     let v: Value = serde_json::from_str(&info).unwrap();
     // Saving a native document gives the reopened bundle its output filename.
-    assert_eq!(v["name"], "r.pcraft");
+    assert_eq!(v["name"], "r.plyra");
     let names: Vec<&str> = v["layers"].as_array().unwrap().iter().filter_map(|l| l["name"].as_str()).collect();
     assert_eq!(names, ["Ink", "Background"]);
     // Continue from the saved file and export PNG.
@@ -370,10 +370,10 @@ fn run_continues_after_batch_file_errors_and_keeps_partial_results() {
     let good = d.join("good.png");
     let bad = d.join("bad.png");
     let batch_out = d.join("batch");
-    let caller_out = d.join("caller.pcraft");
+    let caller_out = d.join("caller.plyra");
     write_png(&good, 6, 4, 3);
     std::fs::write(&bad, b"not a PNG").unwrap();
-    let params = json!({"input":[good,bad],"output":batch_out,"format":"pcraft","steps":[
+    let params = json!({"input":[good,bad],"output":batch_out,"format":"plyra","steps":[
         ["layer.renameLayer",{"name":"Batch output"}]
     ]})
     .to_string();
@@ -390,12 +390,12 @@ fn run_continues_after_batch_file_errors_and_keeps_partial_results() {
     let result = &rows[0]["result"];
     let files = result["files"].as_array().unwrap();
     assert_eq!(files.len(), 1);
-    assert_eq!(Path::new(files[0].as_str().unwrap()).canonicalize().unwrap(), batch_out.join("good.pcraft").canonicalize().unwrap());
+    assert_eq!(Path::new(files[0].as_str().unwrap()).canonicalize().unwrap(), batch_out.join("good.plyra").canonicalize().unwrap());
     assert_eq!(result["errors"].as_array().unwrap().len(), 1);
     assert_eq!(result["errors"][0]["file"], json!(bad));
     assert!(result["errors"][0]["error"].as_str().is_some_and(|message| !message.is_empty()));
-    assert!(batch_out.join("good.pcraft").is_file());
-    assert!(!batch_out.join("bad.pcraft").exists());
+    assert!(batch_out.join("good.plyra").is_file());
+    assert!(!batch_out.join("bad.plyra").exists());
     assert_eq!(rows[2]["command"], "document.inspect");
     assert!(rows[2]["result"]["layers"].as_array().unwrap().iter().any(|layer| layer["name"] == "After batch"));
     assert!(caller_out.is_file());
@@ -510,7 +510,7 @@ fn batch_applies_actions_to_directory() {
         .arg(&inp)
         .arg("--out")
         .arg(&outp)
-        .args(["--format", "pcraft", "--error-log"])
+        .args(["--format", "plyra", "--error-log"])
         .arg(&log))
     .stdout;
     assert!(out.contains("2 succeeded, 0 failed"), "{out}");
@@ -521,7 +521,7 @@ fn batch_applies_actions_to_directory() {
     let body = String::from_utf16(&pairs.iter().map(|pair| u16::from_le_bytes(*pair)).collect::<Vec<_>>()).unwrap();
     assert_eq!(body, "Batch Start\r\n\r\nBatch End\r\n");
     for n in ["one", "two"] {
-        let info = ok(bin().arg("info").arg(outp.join(format!("{n}.pcraft")))).stdout;
+        let info = ok(bin().arg("info").arg(outp.join(format!("{n}.plyra")))).stdout;
         let v: Value = serde_json::from_str(&info).unwrap();
         assert_eq!(v["layers"][0]["name"], "Batch");
     }
@@ -1252,10 +1252,10 @@ fn tiff_output_is_flat_unless_tiff_layers_is_given() {
 }
 
 #[test]
-fn pcraft_output_has_no_full_composite_unless_asked() {
-    let d = tmp("pcraft-full-composite");
+fn plyra_output_has_no_full_composite_unless_asked() {
+    let d = tmp("plyra-full-composite");
     let full = |path: &std::path::Path| fotodit_format::read_full_composite(&std::fs::read(path).unwrap()).unwrap().is_some();
-    for (name, flag, expect) in [("plain.pcraft", None, false), ("full.pcraft", Some("--pcraft-full-composite"), true)] {
+    for (name, flag, expect) in [("plain.plyra", None, false), ("full.plyra", Some("--plyra-full-composite"), true)] {
         let out = d.join(name);
         let mut cmd = bin();
         cmd.args(["run", "--new", r#"{"width":16,"height":16}"#]);
@@ -1265,8 +1265,8 @@ fn pcraft_output_has_no_full_composite_unless_asked() {
         ok(cmd.arg("--out").arg(&out));
         assert_eq!(full(&out), expect, "{name}");
     }
-    let converted = d.join("converted.pcraft");
-    ok(bin().arg("convert").arg(d.join("plain.pcraft")).arg(&converted).arg("--pcraft-full-composite"));
+    let converted = d.join("converted.plyra");
+    ok(bin().arg("convert").arg(d.join("plain.plyra")).arg(&converted).arg("--plyra-full-composite"));
     assert!(full(&converted));
     std::fs::remove_dir_all(d).unwrap();
 }
@@ -1687,7 +1687,7 @@ fn control_token_env_vars_are_the_flags_fallbacks() {
 #[test]
 fn run_skips_deselect_with_nothing_selected() {
     let folder = tmp("deselect-run");
-    let native = folder.join("out.pcraft").to_string_lossy().to_string();
+    let native = folder.join("out.plyra").to_string_lossy().to_string();
     let Invoke { code, stdout, stderr } = invoke(&[
         "run",
         "--new",

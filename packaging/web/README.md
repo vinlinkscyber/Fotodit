@@ -43,7 +43,7 @@ the default Rust version is the stable release CI used when the `Dockerfile` was
 `TRUNK_VERSION`. `RUST_VERSION`, `TRUNK_VERSION`, and `NGINX_VERSION` can be overridden with
 `--build-arg`. To stamp the About dialog with the commit and date instead of "dev build", pass
 `--build-arg FOTODIT_BUILD_SHA=$(git rev-parse HEAD) --build-arg FOTODIT_BUILD_DATE=$(date -u +%F)`.
-The web build does not embed the optional `craft-fonts` checkout.
+The web build does not embed the optional `plyra-fonts` checkout.
 
 The Docker build uses thin LTO and one Cargo build job to reduce peak memory, while keeping
 the web profile's size optimizations and `wasm-opt -Oz`. Its Wasm size may differ from the
@@ -162,7 +162,7 @@ it is picked or a document's text needs it, so starting the app costs one small 
 
 1. Put the font files (`.ttf`, `.otf`, `.ttc`) anywhere under `fonts/` next to `index.html`.
 2. List them in `fonts/manifest.txt`, one file per line, in the format of
-   [craft-fonts](https://github.com/plyra/craft-fonts)' own `fonts/manifest.txt`:
+   plyra-fonts' own `fonts/manifest.txt`:
 
    ```text
    # family | style | file (relative to the site root) | scripts | licence | licence file | sha256 | source
@@ -178,7 +178,7 @@ it is picked or a document's text needs it, so starting the app costs one small 
    the weights of its `wght` axis.
 3. Put each font's licence next to it; the SIL Open Font License, for one, requires that.
 
-A craft-fonts checkout is already laid out this way, and so is any folder with a
+A plyra-fonts checkout is already laid out this way, and so is any folder with a
 `fonts/manifest.txt` and the files it lists: `FOTODIT_WEB_FONTS_DIR=<that folder>
 packaging/web/package.sh` copies the manifest, the fonts and their licences into the zip, keeping
 their paths. Without `fonts/manifest.txt` (a 404) nothing changes.

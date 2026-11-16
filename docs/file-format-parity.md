@@ -29,7 +29,7 @@ XL are missing (gap G10). Remaining: 300–500 h including PSD fidelity.
 | TIFF | R/W | yes | yes | 8/16/32f, Gray/RGB/CMYK, YCbCr read as RGB (JPEG-compressed with subsampled chroma, or uncompressed without subsampling; #10316), BigTIFF, every IFD, banded parallel decode; flat pages up to 300,000 px a side open a group of rows at a time into the layer, with no full-size copy, and are refused with an error when the machine lacks the memory (Linux: free RAM and swap, cgroup limits; #8169); layered TIFF both byte orders, including Photoshop mixed-order type blocks on read (#4758/#4771) and TySh text descriptors written in PSD order (#9098) and Photoshop's 14-byte `LMsk` block (#9095); TIFF Options on Save As and Save a Copy (Image Compression None/LZW/ZIP, Save Image Pyramid, Save Transparency, Discard Layers and Save a Copy; scripts pass `tiffCompression`, `tiffTransparency`, `tiffPyramid`, `tiffLayers`; #8827), no JPEG compression, Pixel Order or Byte Order (the encoder writes interleaved samples in the machine's byte order); undecodable type keeps saved pixels (FILE-215-7); alpha and spot channels as extra samples (at most 16) with Photoshop's names, ink colours and solidity, spot ink stored 0 = solid (#7415); Save Transparency on keeps the transparency as the first extra sample ahead of the channels (a layered file marks it with `MTrn`, as Photoshop does), off mattes on white; unset, it is kept only without alpha or spot channels |
 | JPEG | R/W | yes | yes | 8-bit Gray/RGB/CMYK, ICC/EXIF/XMP; Save keeps the opened file's quality (estimated from its quantisation tables, #2399); File › Save, Save As and Save a Copy ask JPEG Options: Quality 0–12, starting at the opened file's quality or else the Export preference, and Baseline ("Standard") / Baseline Optimized / Progressive; scripts pass `quality`/`jpegFormat`, the CLI `--jpeg-format` (FILE-215-19). Baseline Optimized fits the Huffman tables only at 4:4:4 (Gray, CMYK) or progressive: RGB is written 4:2:0, which zune-jpeg 0.5.15 decodes wrongly with fitted tables, as in Save for Web. No Matte, progressive Scans (3–5) or size preview |
 | PNG | R/W | yes | yes | 8/16-bit, ICC/text; APNG first frame only; alpha channels on open (#2225); palette PNGs open in Indexed Color mode with their transparent entry (#4804); Save keeps a stereo PNG's `sTER` pairing (#6063) |
-| GIF | R/W | yes | yes | File › Open keeps the first frame; New Video Layer from File and Video Frames to Layers take every frame, with the timeline rate from the delays (#572). Per-frame delays and keeping the frames in `.pcraft` are not done |
+| GIF | R/W | yes | yes | File › Open keeps the first frame; New Video Layer from File and Video Frames to Layers take every frame, with the timeline rate from the delays (#572). Per-frame delays and keeping the frames in `.plyra` are not done |
 | BMP | R/W | yes | yes | 8-bit; palette BMPs open in Indexed Color mode and Indexed Color documents save as palette BMPs (no transparency) |
 | WebP | R/W | yes | yes | Lossless and our own lossy VP8 encoder; ICC/EXIF/XMP; Save keeps an opened file lossy (at its quality) or lossless (#2399); Save for Web (Legacy) writes it too, lossy at its Quality or lossless, a format Photoshop's legacy dialog lacks (#6391). File › Open keeps an animation's first frame; New Video Layer from File and Video Frames to Layers take every frame, with the timeline rate from the durations (#1198) |
 | AVIF | R/W | no (#463) | optional feature, off by default | |
@@ -87,7 +87,7 @@ D5100 colour profile. Counts and the G14 estimate are unchanged.
 
 | Format | Read | Write | Notes |
 |---|---|---|---|
-| `.pcraft` (native) | yes | yes | Incremental, autosave, crash recovery, atomic save |
+| `.plyra` (native) | yes | yes | Incremental, autosave, crash recovery, atomic save |
 | Affinity `.af`, `.afphoto`, `.afdesign`, `.afpub` | yes | no | See below |
 | Paint.NET `.pdn` | yes | no | [pdn.md](pdn.md) |
 | OpenRaster `.ora` | yes | yes | [ora.md](ora.md) |
@@ -110,7 +110,7 @@ written files, so `.af` export stays unsupported.
 
 2026-10-10: current `.af` artboard properties (`phrp`/`aprp`) are recognized alongside the
 legacy flag, including converted curve boards. Synthetic two-board regressions check separate
-bounds, overflow clipping, `.pcraft`/PSD board and pixel round trips, and moving one board with its
+bounds, overflow clipping, `.plyra`/PSD board and pixel round trips, and moving one board with its
 children through undo/redo. Nested boards remain masked groups; rotated/curved board outlines
 still import at their bounding rectangle.
 
@@ -142,7 +142,7 @@ remaining gaps in #1606 stay tracked with per-sample corpus ceilings.
 
 ## Embedded vectors in PSD smart objects (2026-10-22)
 
-Embedded SVG and PDF-compatible AI/PDF/EPS payloads can use an explicit VectorCraft editor choice, including nested PSB contents. AI/PDF/EPS working copies retain their format on save-back; a separate source-bound SVG display preview does not replace the native payload. Placement, shared instances, masks and Undo/Redo use existing smart-object transactions, with native bytes and previews persisted through .pcraft and PSD/PSB saves. Unsupported editor features may still change; standalone EPS/DCS import and lossless Adobe round-trip compatibility remain unverified. See [workflow, safety and validation limits](embedded-vector-editing.md). No corpus floor or parity percentage is changed.
+Embedded SVG and PDF-compatible AI/PDF/EPS payloads can use an explicit VectorCraft editor choice, including nested PSB contents. AI/PDF/EPS working copies retain their format on save-back; a separate source-bound SVG display preview does not replace the native payload. Placement, shared instances, masks and Undo/Redo use existing smart-object transactions, with native bytes and previews persisted through .plyra and PSD/PSB saves. Unsupported editor features may still change; standalone EPS/DCS import and lossless Adobe round-trip compatibility remain unverified. See [workflow, safety and validation limits](embedded-vector-editing.md). No corpus floor or parity percentage is changed.
 
 ## Revision history
 

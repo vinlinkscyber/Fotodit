@@ -740,12 +740,12 @@ fn workspace_psd_saves_embed_no_file_a_linked_smart_object_names() {
     let state = session.active_mut().unwrap();
     let LayerContent::Smart(smart) = &mut std::sync::Arc::make_mut(&mut state.doc).layers[0].content else { panic!("smart object") };
     smart.source = SmartSource::Linked { path: outside.to_string_lossy().into_owned() };
-    std::fs::write(root.join("in.pcraft"), fotodit_engine::smart_cmds::encode_source(&state.doc).unwrap()).unwrap();
+    std::fs::write(root.join("in.plyra"), fotodit_engine::smart_cmds::encode_source(&state.doc).unwrap()).unwrap();
     // A trusted export embeds the linked file, as before.
     assert!(has_marker(&fotodit_io::export(&state.doc, "psd", &Default::default()).unwrap().bytes));
 
     let mut h = Headless::with_workspace(crate::AuthorizedWorkspace::new(Some(&root), Some(&root)).unwrap());
-    h.handle("doc.open", json!({"path": "in.pcraft"})).unwrap();
+    h.handle("doc.open", json!({"path": "in.plyra"})).unwrap();
     let saved = h.handle("doc.save", json!({"path": "out.psd"})).unwrap();
     let warnings = saved["warnings"].to_string();
     assert!(warnings.contains("written as pixels"), "{warnings}");
@@ -772,10 +772,10 @@ fn allowed_filters_do_not_rerender_a_smart_object_from_its_linked_file() {
     let state = session.active_mut().unwrap();
     let LayerContent::Smart(smart) = &mut std::sync::Arc::make_mut(&mut state.doc).layers[0].content else { panic!("smart object") };
     smart.source = SmartSource::Linked { path: outside.to_string_lossy().into_owned() };
-    std::fs::write(root.join("p.pcraft"), fotodit_engine::smart_cmds::encode_source(&state.doc).unwrap()).unwrap();
+    std::fs::write(root.join("p.plyra"), fotodit_engine::smart_cmds::encode_source(&state.doc).unwrap()).unwrap();
 
     let mut h = Headless::with_workspace(crate::AuthorizedWorkspace::new(Some(&root), Some(&root)).unwrap());
-    h.handle("doc.open", json!({"path": "p.pcraft"})).unwrap();
+    h.handle("doc.open", json!({"path": "p.plyra"})).unwrap();
     h.handle("engine.execute", json!({"command": "filter.blur.gaussianBlur", "params": {"radius": 0.5}})).unwrap();
     let doc = &h.session.active().unwrap().doc;
     let LayerContent::Smart(smart) = &doc.layers[0].content else { panic!("smart object") };
@@ -804,10 +804,10 @@ fn workspace_layer_exports_keep_linked_smart_objects_as_pixels() {
     let state = session.active_mut().unwrap();
     let LayerContent::Smart(smart) = &mut std::sync::Arc::make_mut(&mut state.doc).layers[0].content else { panic!("smart object") };
     smart.source = SmartSource::Linked { path: outside.to_string_lossy().into_owned() };
-    std::fs::write(root.join("in.pcraft"), fotodit_engine::smart_cmds::encode_source(&state.doc).unwrap()).unwrap();
+    std::fs::write(root.join("in.plyra"), fotodit_engine::smart_cmds::encode_source(&state.doc).unwrap()).unwrap();
 
     let mut h = Headless::with_workspace(crate::AuthorizedWorkspace::new(Some(&root), Some(&root)).unwrap());
-    h.handle("doc.open", json!({"path": "in.pcraft"})).unwrap();
+    h.handle("doc.open", json!({"path": "in.plyra"})).unwrap();
     let out = root.join("layers");
     for format in ["psd", "psb"] {
         let exported = h.handle("doc.exportLayers", json!({"dir": out.to_string_lossy(), "format": format})).unwrap();

@@ -120,7 +120,7 @@ fn all_registered_languages_render_camera_raw_and_switch_without_resetting_view_
 }
 
 /// UI languages whose script has no face in the pinned central font manifest yet (code, ISO 15924).
-/// Tamil arrives with storytold/craft-fonts#63; drop the row once the pin ships it.
+/// Tamil arrives with storytold/plyra-fonts#63; drop the row once the pin ships it.
 const AWAITING_CENTRAL_FONT: &[(&str, &str)] = &[("ta", "Taml")];
 
 /// Check central font fixtures independently of the language-switching UI assertions.
@@ -129,15 +129,15 @@ fn assert_required_camera_raw_fonts() {
     // or because a Windows runner happens to have Japanese fonts: every non-Latin script this
     // test renders comes from a real face in the central manifest. The all-language loop then
     // checks the actual translated labels under egui_kittest's strict missing-glyph policy.
-    if std::env::var_os("CRAFT_FONTS_REQUIRED").is_some() {
+    if std::env::var_os("PLYRA_FONTS_REQUIRED").or_else(|| std::env::var_os("CRAFT_FONTS_REQUIRED")).is_some() {
         for (code, script) in AWAITING_CENTRAL_FONT {
             assert!(
-                !fotodit_text::craft_fonts::CRAFT_FONTS.iter().any(|f| !f.bytes.is_empty() && f.scripts.contains(script)),
+                !fotodit_text::plyra_fonts::PLYRA_FONTS.iter().any(|f| !f.bytes.is_empty() && f.scripts.contains(script)),
                 "the central manifest now ships {script}: remove {code} from AWAITING_CENTRAL_FONT so its glyphs are checked strictly"
             );
         }
         for (family, script) in [("BIZ UDPGothic", "Jpan"), ("Noto Sans CJK SC", "Hans"), ("NanumGothic", "Kore"), ("Noto Sans Devanagari", "Deva")] {
-            let faces: Vec<_> = fotodit_text::craft_fonts::CRAFT_FONTS
+            let faces: Vec<_> = fotodit_text::plyra_fonts::PLYRA_FONTS
                 .iter()
                 .filter(|f| f.family == family && f.style == "Regular" && f.scripts.contains(&script))
                 .collect();

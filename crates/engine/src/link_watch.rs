@@ -345,7 +345,7 @@ mod tests {
     #[test]
     fn a_reopened_document_lists_no_file_missing_before_it_closed() {
         let d = dir("reopen");
-        let (path, saved) = (d.join("art.png"), d.join("doc.pcraft"));
+        let (path, saved) = (d.join("art.png"), d.join("doc.plyra"));
         std::fs::write(&path, png(10, 10, "#ff0000")).unwrap();
         let (mut s, _) = placed(&path);
         s.execute("file.saveACopy", json!({"path": saved.to_string_lossy()})).unwrap();
@@ -356,7 +356,7 @@ mod tests {
         s.close(0);
         std::fs::write(&path, png(10, 10, "#0000ff")).unwrap();
         let bytes = std::fs::read(&saved).unwrap();
-        crate::file_cmds::open_bytes_as(&mut s, "doc.pcraft", &bytes, None, Some(saved.to_string_lossy().into_owned())).unwrap();
+        crate::file_cmds::open_bytes_as(&mut s, "doc.plyra", &bytes, None, Some(saved.to_string_lossy().into_owned())).unwrap();
         assert_eq!(s.active().unwrap().doc.id, id, "the saved document keeps its id");
         assert!(s.missing_links().is_empty(), "nothing looked at since it opened");
     }
@@ -384,7 +384,7 @@ mod tests {
     fn a_scan_finished_after_close_cannot_change_a_reopened_document() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("art.png");
-        let saved = directory.path().join("doc.pcraft");
+        let saved = directory.path().join("doc.plyra");
         std::fs::write(&path, png(10, 10, "#ff0000")).unwrap();
         let (mut s, layer) = placed(&path);
         s.execute("file.saveACopy", json!({"path": saved.to_string_lossy()})).unwrap();
@@ -394,7 +394,7 @@ mod tests {
         s.link_scan = Some(scan.clone());
         s.close(0);
         let bytes = std::fs::read(&saved).unwrap();
-        crate::file_cmds::open_bytes_as(&mut s, "doc.pcraft", &bytes, None, Some(saved.to_string_lossy().into_owned())).unwrap();
+        crate::file_cmds::open_bytes_as(&mut s, "doc.plyra", &bytes, None, Some(saved.to_string_lossy().into_owned())).unwrap();
         assert_eq!(s.active().unwrap().doc.id, id);
         *scan.lock().unwrap() = Some((id.0, vec![(stored, vec![layer], None)]));
         assert!(s.poll_link_scan().is_none());
