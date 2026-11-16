@@ -41,6 +41,7 @@ const PANELS: &[(&str, &str, Group)] = &[
     ("channels", "Channels", Group::Layers),
     ("paths", "Paths", Group::Layers),
     ("brushes", "Brushes", Group::Brushes),
+    ("assistant", "Assistant", Group::Assistant),
 ];
 
 /// Fotodit's wording of craft-ui's docking labels, translated through `tl!`. The others keep

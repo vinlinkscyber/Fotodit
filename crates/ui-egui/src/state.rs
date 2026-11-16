@@ -40,7 +40,9 @@ pub struct Panels {
     /// Window › Character / Paragraph: the Character | Paragraph dock group (#150).
     #[serde(default)]
     pub character: bool,
-    /// The toolbar's header chevron: two columns even when one fits (#1197).
+    /// The Assistant dock group.
+    #[serde(default = "yes")]
+    pub assistant: bool,    /// The toolbar's header chevron: two columns even when one fits (#1197).
     #[serde(default)]
     pub toolbar_double: bool,
     /// The right-hand panel dock. ⇧Tab hides and shows it, as in Photoshop (#1313).

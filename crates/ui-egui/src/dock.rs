@@ -37,11 +37,13 @@ pub enum Group {
     Layers,
     /// Brushes presets.
     Brushes,
+    /// Assistant natural-language chat.
+    Assistant,
 }
 
 impl Group {
     /// Photoshop Essentials order, top to bottom.
-    pub const ALL: [Group; 7] = [Group::Color, Group::Properties, Group::Character, Group::Navigator, Group::History, Group::Layers, Group::Brushes];
+    pub const ALL: [Group; 8] = [Group::Color, Group::Properties, Group::Character, Group::Navigator, Group::History, Group::Layers, Group::Brushes, Group::Assistant];
 
     pub fn key(self) -> &'static str {
         match self {
@@ -52,6 +54,7 @@ impl Group {
             Group::History => "history",
             Group::Layers => "layers",
             Group::Brushes => "brushes",
+            Group::Assistant => "assistant",
         }
     }
 
@@ -66,6 +69,7 @@ impl Group {
             Group::History => 200.0,
             Group::Layers => 320.0,
             Group::Brushes => 200.0,
+            Group::Assistant => 300.0,
         }
     }
 
@@ -80,6 +84,7 @@ impl Group {
             Group::History => 130.0,
             Group::Layers => 200.0,
             Group::Brushes => 150.0,
+            Group::Assistant => 180.0,
         }
     }
 
@@ -113,6 +118,7 @@ impl Group {
             Group::History => &["History", "Actions", "Layer Comps"],
             Group::Layers => &["Layers", "Channels", "Paths"],
             Group::Brushes => &["Brushes"],
+            Group::Assistant => &["Assistant"],
         }
     }
 
@@ -122,7 +128,7 @@ impl Group {
     /// areas shared the wheel, and where the outer content overflowed by one physical pixel (at
     /// 125 % scaling for some window heights) the footer and list moved a pixel as you scrolled (#6238).
     pub fn scrolls_itself(self, tab: usize) -> bool {
-        matches!((self, tab), (Group::Layers, 0..=2) | (Group::History, 0) | (Group::History, 1) | (Group::Navigator, 0))
+        matches!((self, tab), (Group::Layers, 0..=2) | (Group::History, 0) | (Group::History, 1) | (Group::Navigator, 0) | (Group::Assistant, 0))
     }
 
     pub(crate) fn tab_mut(self, tabs: &mut DockTabs) -> &mut usize {
@@ -134,6 +140,7 @@ impl Group {
             Group::History => &mut tabs.history,
             Group::Layers => &mut tabs.layers,
             Group::Brushes => &mut tabs.brushes,
+            Group::Assistant => &mut tabs.assistant,
         }
     }
 
@@ -151,6 +158,7 @@ impl Group {
             Group::History => panels.history,
             Group::Layers => panels.layers,
             Group::Brushes => panels.brushes,
+            Group::Assistant => panels.assistant,
         }
     }
 
@@ -163,6 +171,7 @@ impl Group {
             Group::History => &mut panels.history,
             Group::Layers => &mut panels.layers,
             Group::Brushes => &mut panels.brushes,
+            Group::Assistant => &mut panels.assistant,
         }
     }
 }
