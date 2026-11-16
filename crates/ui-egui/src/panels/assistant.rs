@@ -4,12 +4,16 @@
 
 use super::{FotoditApp, Tokens};
 
-/// Deep navy chrome from the approved design.
-const PANEL_BG: egui::Color32 = egui::Color32::from_rgb(17, 21, 44);
-const CHIP_BG: egui::Color32 = egui::Color32::from_rgb(28, 34, 66);
-const CHIP_BG_HOVER: egui::Color32 = egui::Color32::from_rgb(38, 46, 86);
+/// Deep navy chrome from the approved design; shared with the home screen's AI rail.
+pub(crate) const PANEL_BG: egui::Color32 = egui::Color32::from_rgb(17, 21, 44);
+pub(crate) const CHIP_BG: egui::Color32 = egui::Color32::from_rgb(28, 34, 66);
+pub(crate) const CHIP_BG_HOVER: egui::Color32 = egui::Color32::from_rgb(38, 46, 86);
 const ASSISTANT_BUBBLE: egui::Color32 = egui::Color32::from_rgb(32, 39, 74);
-const ACCENT: egui::Color32 = egui::Color32::from_rgb(63, 110, 246);
+pub(crate) const ACCENT: egui::Color32 = egui::Color32::from_rgb(63, 110, 246);
+/// Muted label colour on the navy chrome.
+pub(crate) const TEXT_SOFT: egui::Color32 = egui::Color32::from_rgb(160, 168, 200);
+/// Body text colour on the navy chrome.
+pub(crate) const TEXT_ON_NAVY: egui::Color32 = egui::Color32::from_rgb(225, 229, 245);
 
 /// One chat exchange: what the user asked, and what the app answered.
 #[derive(Clone)]
@@ -48,6 +52,17 @@ const QUICK_ACTIONS: &[&str] = &[
 
 fn state_id() -> egui::Id {
     egui::Id::new("assistant-panel-state")
+}
+
+/// Put a prompt into the panel's draft (used by the home screen's AI rail) and switch it
+/// to the Chat tab, ready for the user to review and send.
+pub(crate) fn seed_prompt(ctx: &egui::Context, prompt: &str) {
+    ctx.data_mut(|d| {
+        let mut state = d.get_temp::<AssistantState>(state_id()).unwrap_or_default();
+        state.draft = prompt.to_string();
+        state.tab = Tab::Chat;
+        d.insert_temp(state_id(), state);
+    });
 }
 
 /// Demo mode (FOTODIT_ASSISTANT_DEMO=1, used by the screenshot workflow): seed a sample
