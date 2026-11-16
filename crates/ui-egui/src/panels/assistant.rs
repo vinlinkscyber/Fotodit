@@ -21,11 +21,55 @@ fn state_id() -> egui::Id {
     egui::Id::new("assistant-panel-state")
 }
 
+/// Demo mode (FOTODIT_ASSISTANT_DEMO=1, used by the screenshot workflow): seed a sample
+/// conversation and float a large preview window so the layout is reviewable on its own.
+fn demo_enabled() -> bool {
+    std::env::var_os("FOTODIT_ASSISTANT_DEMO").is_some()
+}
+
+fn seed_demo(state: &mut AssistantState) {
+    if state.transcript.is_empty() {
+        state.transcript.push(Exchange {
+            user: "make it brighter and remove the background".into(),
+            assistant: "Done - exposure lifted a touch and the subject is isolated on transparency. Say \"undo\" if that's not what you meant.".into(),
+        });
+        state.transcript.push(Exchange {
+            user: "actually make it a bit warmer too".into(),
+            assistant: "Warmth nudged up on the same edit. Anything else?".into(),
+        });
+    }
+}
+
 pub(crate) fn assistant_panel(app: &mut FotoditApp, ui: &mut egui::Ui) {
     let _ = app;
-    let t = Tokens::get(ui.ctx());
+    let demo = demo_enabled();
     let mut state = ui.ctx().data_mut(|d| d.get_temp::<AssistantState>(state_id()).unwrap_or_default());
+    if demo {
+        seed_demo(&mut state);
+    }
 
+    chat_body(ui, &mut state);
+
+    ui.ctx().data_mut(|d| d.insert_temp(state_id(), state.clone()));
+
+    if demo {
+        let mut state = state;
+        egui::Window::new("Assistant")
+            .default_pos([80.0, 90.0])
+            .default_size([380.0, 620.0])
+            .resizable(true)
+            .collapsible(false)
+            .show(ui.ctx(), |ui| {
+                chat_body(ui, &mut state);
+            });
+        ui.ctx().data_mut(|d| d.insert_temp(state_id(), state));
+    }
+}
+
+/// The chat itself: scrolling transcript with the input row pinned below. Shared by the
+/// dock panel and the demo preview window.
+fn chat_body(ui: &mut egui::Ui, state: &mut AssistantState) {
+    let t = Tokens::get(ui.ctx());
     let footer_height = 40.0;
     egui::ScrollArea::vertical()
         .id_salt("assistant-transcript")
@@ -66,8 +110,6 @@ pub(crate) fn assistant_panel(app: &mut FotoditApp, ui: &mut egui::Ui) {
             response.request_focus();
         }
     });
-
-    ui.ctx().data_mut(|d| d.insert_temp(state_id(), state));
 }
 
 /// One chat bubble: the user's right-aligned in the accent colour, the assistant's on the card.

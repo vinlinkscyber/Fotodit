@@ -39,7 +39,7 @@ jobs:
           export WGPU_BACKEND=gl
           convert -size 1200x800 gradient:steelblue-firebrick -colors 32 /tmp/sample.png
           xvfb-run -a -s "-screen 0 1600x1000x24" bash -c '
-            ./target/debug/fotodit /tmp/sample.png &
+            FOTODIT_ASSISTANT_DEMO=1 ./target/debug/fotodit /tmp/sample.png &
             APP=$!
             sleep 30
             import -window root /tmp/fotodit-1.png
