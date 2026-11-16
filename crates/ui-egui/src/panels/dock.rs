@@ -19,8 +19,8 @@ pub fn dock_area(app: &mut FotoditApp, ui: &mut egui::Ui) {
     if app.ui.panels.assistant {
         crate::direction::start_panel("assistant_rail")
             .resizable(true)
-            .default_size(336.0)
-            .size_range(280.0..=520.0)
+            .default_size(304.0)
+            .size_range(240.0..=520.0)
             .frame(egui::Frame::NONE)
             .show(ui, |ui| {
                 let r = ui.max_rect();

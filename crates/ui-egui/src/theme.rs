@@ -27,9 +27,12 @@ use std::sync::Arc;
 pub enum ThemeKind {
     /// Photoshop-style Spectrum dark: flat charcoal panels, tab strips, blue accents (darkest brightness).
     Pro,
-    /// Photoshop's default (second) interface brightness: #535353 panels, #282828 canvas (default).
-    #[default]
+    /// Photoshop's default (second) interface brightness: #535353 panels, #282828 canvas.
     ProMedium,
+    /// Navy-glass variant of the Pro layout: deep navy surfaces, layered blue-glass cards,
+    /// electric-blue accents, crisp white icons (default).
+    #[default]
+    ProNavy,
     /// Photoshop's third interface brightness: #B8B8B8 panels (#2661).
     ProLightGray,
     /// Photoshop's fourth (lightest) interface brightness: #F0F0F0 panels (#2661).
@@ -55,9 +58,10 @@ pub enum ThemeKind {
 }
 
 impl ThemeKind {
-    pub const ALL: [ThemeKind; 14] = [
+    pub const ALL: [ThemeKind; 15] = [
         ThemeKind::Pro,
         ThemeKind::ProMedium,
+        ThemeKind::ProNavy,
         ThemeKind::ProLightGray,
         ThemeKind::ProLight,
         ThemeKind::Studio,
@@ -75,6 +79,7 @@ impl ThemeKind {
         match self {
             ThemeKind::Pro => "Pro (Dark)",
             ThemeKind::ProMedium => "Pro (Medium Gray)",
+            ThemeKind::ProNavy => "Pro (Navy Glass)",
             ThemeKind::ProLightGray => "Pro (Light Gray)",
             ThemeKind::ProLight => "Pro (Light)",
             ThemeKind::Studio => "Studio (Dark)",
@@ -95,6 +100,7 @@ impl ThemeKind {
         match self {
             ThemeKind::Pro => "pro",
             ThemeKind::ProMedium => "proMedium",
+            ThemeKind::ProNavy => "proNavy",
             ThemeKind::ProLightGray => "proLightGray",
             ThemeKind::ProLight => "proLight",
             ThemeKind::Studio => "studio",
@@ -111,7 +117,7 @@ impl ThemeKind {
     }
     /// Photoshop-grammar layout (tab strips, flat panels): the four Pro brightness levels.
     pub fn is_pro(self) -> bool {
-        matches!(self, ThemeKind::Pro | ThemeKind::ProMedium | ThemeKind::ProLightGray | ThemeKind::ProLight)
+        matches!(self, ThemeKind::Pro | ThemeKind::ProMedium | ThemeKind::ProNavy | ThemeKind::ProLightGray | ThemeKind::ProLight)
     }
     /// Whether this theme belongs to the dark appearance family.
     pub fn is_dark(self) -> bool {
@@ -120,6 +126,7 @@ impl ThemeKind {
             ThemeKind::Studio
                 | ThemeKind::Pro
                 | ThemeKind::ProMedium
+                | ThemeKind::ProNavy
                 | ThemeKind::SolarizedDark
                 | ThemeKind::AdwaitaDark
                 | ThemeKind::BreezeDark
@@ -138,6 +145,7 @@ impl ThemeKind {
         match s.to_ascii_lowercase().replace([' ', '_', '-', '(', ')'], "").as_str() {
             "pro" | "prodark" | "photoshop" | "dark" => Some(ThemeKind::Pro),
             "promedium" | "promediumgray" | "medium" | "mediumgray" => Some(ThemeKind::ProMedium),
+            "pronavy" | "navy" | "navyglass" | "blueglass" => Some(ThemeKind::ProNavy),
             "prolightgray" | "lightgray" | "mediumlight" => Some(ThemeKind::ProLightGray),
             "prolight" | "prolightest" | "lightest" | "light" => Some(ThemeKind::ProLight),
             "studio" | "studiodark" => Some(ThemeKind::Studio),
@@ -222,6 +230,32 @@ impl Tokens {
     pub fn for_kind(kind: ThemeKind) -> Self {
         match kind {
             // Sampled from Photoshop 2026's default brightness (raw display values).
+            // Navy glass: the Pro grammar on deep navy surfaces with layered blue-glass
+            // cards and electric-blue accents. White icons, restrained violet kept to the
+            // assistant chrome; no lavender wash over the app surfaces.
+            ThemeKind::ProNavy => Tokens {
+                kind,
+                chrome: Color32::from_rgb(10, 17, 46),
+                canvas: Color32::from_rgb(11, 16, 35),
+                canvas_dot: Color32::from_rgb(11, 16, 35),
+                dock: Color32::from_rgb(9, 15, 42),
+                card: Color32::from_rgb(15, 24, 56),
+                card_border: Color32::from_rgb(29, 42, 85),
+                field: Color32::from_rgb(19, 28, 63),
+                field_border: Color32::from_rgb(42, 56, 102),
+                hover: Color32::from_rgb(26, 37, 86),
+                pressed: Color32::from_rgb(34, 48, 100),
+                text: Color32::from_rgb(234, 237, 248),
+                text_dim: Color32::from_rgb(185, 194, 220),
+                text_faint: Color32::from_rgb(126, 137, 172),
+                icon: Color32::from_rgb(244, 247, 255),
+                accent_soft: Color32::from_rgb(29, 63, 134),
+                separator: Color32::from_rgb(26, 35, 72),
+                tab_strip: Color32::from_rgb(13, 21, 50),
+                row_selected: Color32::from_rgb(35, 64, 148),
+                histogram_bg: Color32::from_rgb(11, 18, 44),
+                ..Tokens::for_kind(ThemeKind::Pro)
+            },
             ThemeKind::ProMedium => Tokens {
                 kind,
                 chrome: Color32::from_rgb(83, 83, 83),
