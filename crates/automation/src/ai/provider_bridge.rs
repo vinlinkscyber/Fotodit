@@ -34,7 +34,7 @@ use super::{AiContext, AiError, EditingPlan};
 /// The five supported external AI providers.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub enum ProviderId {
-    /// Google Gemini (gemini-3.5-flash / imagen)
+    /// Google Gemini (gemini-3.1-flash-lite / imagen)
     Gemini,
     /// OpenRouter multi-model router (gpt-4.1-mini, claude-sonnet-4.6, etc.)
     OpenRouter,
@@ -154,7 +154,7 @@ impl ProviderConfig {
             cohere_api_key: get_config_var("COHERE_API_KEY").or_else(|| baked_config_var!("COHERE_API_KEY")),
             pollinations_api_key: get_config_var("POLLINATIONS_API_KEY").or_else(|| baked_config_var!("POLLINATIONS_API_KEY")),
             lajiwa_api_key: get_config_var("LAJIWA_API_KEY").or_else(|| baked_config_var!("LAJIWA_API_KEY")),
-            gemini_model: get_config_var("GEMINI_MODEL").or_else(|| Some("gemini-3.5-flash".into())),
+            gemini_model: get_config_var("GEMINI_MODEL").or_else(|| Some("gemini-3.1-flash-lite".into())),
             openrouter_model: get_config_var("OPENROUTER_MODEL").or_else(|| Some("openai/gpt-4.1-mini".into())),
             cohere_model: get_config_var("COHERE_MODEL").or_else(|| Some("command-a-plus-05-2026".into())),
             pollinations_image_model: get_config_var("POLLINATIONS_IMAGE_MODEL").or_else(|| Some("tongyi-mai/z-image-turbo".into())),
@@ -653,7 +653,7 @@ impl AiProviderBridge {
         timeout: Duration,
     ) -> Result<EditingPlan, AiError> {
         let key = self.balancer.config().gemini_api_key.as_deref().ok_or_else(|| AiError::PlanningError("Missing Gemini API key".into()))?;
-        let model = self.balancer.config().gemini_model.as_deref().unwrap_or("gemini-3.5-flash");
+        let model = self.balancer.config().gemini_model.as_deref().unwrap_or("gemini-3.1-flash-lite");
         let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent");
 
         let system_instruction = "You are Fotodit's AI Editing Planner. Return strict JSON with {title, rationale, steps: [{command, params, description}]}.";
