@@ -41,11 +41,10 @@ fn plan(commands: &[&str]) -> EditingPlan {
         title: "Offline boundary test".into(),
         rationale: "Exercise the host dispatcher without a provider".into(),
         category: IntentCategory::PhotoEnhancement,
-        steps: commands.iter().map(|command| PlanStep {
-            command: (*command).to_string(),
-            params: json!({"marker": command}),
-            description: (*command).to_string(),
-        }).collect(),
+        steps: commands
+            .iter()
+            .map(|command| PlanStep { command: (*command).to_string(), params: json!({"marker": command}), description: (*command).to_string() })
+            .collect(),
         creates_document: false,
         target_size: None,
     }
@@ -58,10 +57,7 @@ fn execution_routes_commands_and_parameters_through_host_trait_object() {
     let result = ExecutionEngine::execute_plan_in(erased, &plan(&["first", "second"])).unwrap();
     assert!(result.is_success);
     assert_eq!(result.executed_steps, 2);
-    assert_eq!(host.calls, vec![
-        ("first".into(), json!({"marker": "first"})),
-        ("second".into(), json!({"marker": "second"})),
-    ]);
+    assert_eq!(host.calls, vec![("first".into(), json!({"marker": "first"})), ("second".into(), json!({"marker": "second"})),]);
 }
 
 #[test]
@@ -69,8 +65,7 @@ fn failed_step_uses_same_host_for_existing_undo_attempts() {
     let mut host = MockSession { fail_command: Some("fail"), ..Default::default() };
     let error = ExecutionEngine::execute_plan_in(&mut host, &plan(&["first", "second", "fail", "never"])).unwrap_err();
     assert!(matches!(error, AiError::ExecutionError { step: 2, .. }));
-    assert_eq!(host.calls.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
-        vec!["first", "second", "fail", "edit.undo", "edit.undo"]);
+    assert_eq!(host.calls.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), vec!["first", "second", "fail", "edit.undo", "edit.undo"]);
     assert_eq!(host.calls[3].1, json!({}));
 }
 
@@ -159,11 +154,12 @@ fn borrowed_adapter_changes_original_document_not_a_second_session_and_supports_
     {
         let mut host = BorrowedTestSession { session: &mut original };
         let plan = EditingPlan {
-            title: "Invert".into(), rationale: "Offline command routing".into(),
+            title: "Invert".into(),
+            rationale: "Offline command routing".into(),
             category: IntentCategory::PhotoEnhancement,
-            steps: vec![PlanStep {
-                command: "image.adjustments.invert".into(), params: json!({}), description: "Invert active document".into(),
-            }], creates_document: false, target_size: None,
+            steps: vec![PlanStep { command: "image.adjustments.invert".into(), params: json!({}), description: "Invert active document".into() }],
+            creates_document: false,
+            target_size: None,
         };
         ExecutionEngine::execute_plan_in(&mut host, &plan).unwrap();
         let after = host.inspect_active().unwrap().unwrap();
