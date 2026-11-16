@@ -1,10 +1,8 @@
 <p align="center">
-  <a href="https://getartcraft.com/">
-    <picture>
+  <picture>
       <source media="(prefers-color-scheme: dark)" srcset="docs/brand/plyra-logo-white.svg">
       <img alt="Plyra" src="docs/brand/plyra-logo.svg" width="200">
     </picture>
-  </a>
 </p>
 
 <p align="center">
@@ -34,9 +32,7 @@
 </p>
 
 <p align="center">
-  <a href="https://getartcraft.com/apps/fotodit"><b>Fotodit on getartcraft.com</b></a> ·
-  <a href="https://getartcraft.com/">Plyra</a> ·
-  <a href="https://getartcraft.com/apps">All Crafting Apps</a>
+  <b>Fotodit</b> by Plyra
 </p>
 
 <br>
@@ -60,7 +56,6 @@
   <a href="#under-the-hood">Under the hood</a> ·
   <a href="#get-started">Get started</a> ·
   <a href="#downloads">Downloads</a> ·
-  <a href="#the-crafting-apps">Crafting Apps</a> ·
   <a href="https://discord.gg/plyra">Discord</a>
 </p>
 
@@ -206,7 +201,7 @@ Every screenshot here is the real app at work on public-domain art, rendered off
     </td>
     <td width="33%" valign="top">
       <h4>🗂️ Formats</h4>
-      PSD and PSB, layered TIFF (Photoshop's layer data in the TIFF, read and written in either byte order), <a href="docs/pdn.md">Paint.NET PDN3 (read, with editable layers and all 14 blend modes)</a>, <a href="docs/ora.md">OpenRaster (read and write, with layers, groups and blend modes, for Krita, MyPaint and GIMP)</a>, <a href="docs/xcf.md">GIMP XCF (read, with layers, groups, masks, blend modes, channels and the selection)</a>, <a href="docs/kra.md">Krita .kra (read, with paint layers, groups, blend modes and transparency masks)</a>, SVG (opens as shape layers, places as a vector Smart Object), plus flat PNG, JPEG, TIFF, WebP (lossy and lossless), GIF, BMP, TGA, ICO, QOI, PNM, OpenEXR, Radiance HDR and FITS (astronomy images: 8/16-bit and 32-bit float, gray or RGB, header kept), and the native <code>.pcraft</code> format. Flat formats retain the depths they support: PNG keeps 8/16-bit samples, TIFF keeps 8/16-bit and 32-bit float samples, and OpenEXR keeps half/float samples; JPEG, WebP and the other 8-bit formats reduce higher-depth samples with an export warning. See the <a href="crates/codecs/README.md#capability-matrix-default-build">codec capability matrix</a> for each format. HEIC photos from iPhone and Mac are read-only (included in official builds; optional <code>--features heif</code> for source builds). AVIF is write-only with the optional <code>avif</code> build feature; AVIF decoding and JPEG XL are unavailable. Affinity documents (<code>.af</code>, <code>.afdesign</code>, <code>.afphoto</code>, <code>.afpub</code>) open natively, read only, with artboards, layers, vectors, text, images and masks; effects, adjustments and other unsupported parts are listed in a warning, and Affinity export is unavailable.
+      PSD and PSB, layered TIFF (Photoshop's layer data in the TIFF, read and written in either byte order), <a href="docs/pdn.md">Paint.NET PDN3 (read, with editable layers and all 14 blend modes)</a>, <a href="docs/ora.md">OpenRaster (read and write, with layers, groups and blend modes, for Krita, MyPaint and GIMP)</a>, <a href="docs/xcf.md">GIMP XCF (read, with layers, groups, masks, blend modes, channels and the selection)</a>, <a href="docs/kra.md">Krita .kra (read, with paint layers, groups, blend modes and transparency masks)</a>, SVG (opens as shape layers, places as a vector Smart Object), plus flat PNG, JPEG, TIFF, WebP (lossy and lossless), GIF, BMP, TGA, ICO, QOI, PNM, OpenEXR, Radiance HDR and FITS (astronomy images: 8/16-bit and 32-bit float, gray or RGB, header kept), and the native <code>.plyra</code> format. Flat formats retain the depths they support: PNG keeps 8/16-bit samples, TIFF keeps 8/16-bit and 32-bit float samples, and OpenEXR keeps half/float samples; JPEG, WebP and the other 8-bit formats reduce higher-depth samples with an export warning. See the <a href="crates/codecs/README.md#capability-matrix-default-build">codec capability matrix</a> for each format. HEIC photos from iPhone and Mac are read-only (included in official builds; optional <code>--features heif</code> for source builds). AVIF is write-only with the optional <code>avif</code> build feature; AVIF decoding and JPEG XL are unavailable. Affinity documents (<code>.af</code>, <code>.afdesign</code>, <code>.afphoto</code>, <code>.afpub</code>) open natively, read only, with artboards, layers, vectors, text, images and masks; effects, adjustments and other unsupported parts are listed in a warning, and Affinity export is unavailable.
     </td>
     <td width="33%" valign="top">
       <h4>🪄 The everyday essentials</h4>
@@ -266,12 +261,7 @@ cargo run --release -p fotodit -- image.psd   # the desktop app
 cargo test --workspace                           # the test suite
 ```
 
-Japanese fonts for the UI and Type tool come from [craft-fonts](https://github.com/plyra/craft-fonts), an optional build input (desktop release builds always include it). Without it Fotodit uses your system's CJK fonts:
-
-```sh
-git clone https://github.com/plyra/craft-fonts ../craft-fonts
-CRAFT_FONTS_DIR="$PWD/../craft-fonts" cargo run --release -p fotodit
-```
+Japanese fonts for the UI and Type tool come from Plyra's optional fonts package (desktop release builds always include it). Without it Fotodit uses your system's CJK fonts: check out the fonts repository next to this one and point `PLYRA_FONTS_DIR` at it, then `cargo run --release -p fotodit`.
 
 New contributors and AI agents: start with [`AGENTS.md`](AGENTS.md), then [`docs/`](docs/).
 
@@ -343,7 +333,7 @@ sha256-verified. Fetch them with `cargo xtask corpus --all` and run the tests wi
 
 ## Downloads
 
-**New to Fotodit?** Download it from the [Fotodit page on getartcraft.com](https://getartcraft.com/apps/fotodit). That's the easiest way to install it.
+**New to Fotodit?** Download it from the Fotodit download page. That's the easiest way to install it.
 
 **Want a specific build or format?** On GitHub, the [latest release](https://github.com/plyra/fotodit/releases/latest) has every build listed below, and [all releases](https://github.com/plyra/fotodit/releases) have earlier versions and their notes. `<ver>` in the file names is the version number, and `SHA256SUMS.txt` lists a checksum for every file.
 
@@ -388,34 +378,17 @@ RISC-V (riscv64): `fotodit-<ver>-linux-riscv64.tar.gz` only, built against Ubunt
 |---|---|---|
 | Static site | `fotodit-web-<ver>.zip` | Runs in a modern browser; host it on any static server |
 
-## The Crafting Apps
+## The Plyra Apps
 
-Fotodit is one of the **Crafting Apps**: free, open-source creative tools from the
-[Plyra](https://getartcraft.com/) team, each written from scratch in Rust and each able to
+Fotodit is one of the **Plyra Apps**: free, open-source creative tools from the
+Plyra team, each written from scratch in Rust and each able to
 stand on its own.
 
-| | App | What it's for | Code | Learn more |
-|:-:|---|---|---|---|
-| <img src="https://raw.githubusercontent.com/plyra/fotodit/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.fotodit.png" alt="" width="32" height="32"> | **Fotodit** | Image editing: layers, masks, type and real PSD files | [GitHub](https://github.com/plyra/fotodit) | [Website](https://getartcraft.com/apps/fotodit) |
-| <img src="https://raw.githubusercontent.com/plyra/vectorcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.vectorcraft.png" alt="" width="32" height="32"> | **VectorCraft** | Vector illustration | [GitHub](https://github.com/plyra/vectorcraft) | [Website](https://getartcraft.com/apps/vectorcraft) |
-| <img src="https://raw.githubusercontent.com/plyra/filmcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.filmcraft.png" alt="" width="32" height="32"> | **FilmCraft** | Video editing, color and sound | [GitHub](https://github.com/plyra/filmcraft) | [Website](https://getartcraft.com/apps/filmcraft) |
-| <img src="https://raw.githubusercontent.com/plyra/lightcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.lightcraft.png" alt="" width="32" height="32"> | **LightCraft** | Photo library and raw development | [GitHub](https://github.com/plyra/lightcraft) | [Website](https://getartcraft.com/apps/lightcraft) |
-| <img src="https://raw.githubusercontent.com/plyra/pdfcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.pdfcraft.png" alt="" width="32" height="32"> | **PdfCraft** | Reading, organizing and protecting PDFs | [GitHub](https://github.com/plyra/pdfcraft) | [Website](https://getartcraft.com/apps/pdfcraft) |
-| <img src="https://raw.githubusercontent.com/plyra/effectcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.effectcraft.png" alt="" width="32" height="32"> | **EffectCraft** | Motion graphics and visual effects | [GitHub](https://github.com/plyra/effectcraft) | [Website](https://getartcraft.com/apps/effectcraft) |
-| <img src="https://raw.githubusercontent.com/plyra/designcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.designcraft.png" alt="" width="32" height="32"> | **DesignCraft** | Page layout and publishing | [GitHub](https://github.com/plyra/designcraft) | [Website](https://getartcraft.com/apps/designcraft) |
-| <img src="https://raw.githubusercontent.com/plyra/figcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.figcraft.png" alt="" width="32" height="32"> | **FigCraft** | Interface design and prototyping | [GitHub](https://github.com/plyra/figcraft) | [Website](https://getartcraft.com/apps/figcraft) |
-| <img src="https://raw.githubusercontent.com/plyra/wordcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.wordcraft.png" alt="" width="32" height="32"> | **WordCraft** | Word processing and documents | [GitHub](https://github.com/plyra/wordcraft) | [Website](https://getartcraft.com/apps/wordcraft) |
-| <img src="https://raw.githubusercontent.com/plyra/soundcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.soundcraft.png" alt="" width="32" height="32"> | **SoundCraft** | Audio recording and editing | [GitHub](https://github.com/plyra/soundcraft) | [Website](https://getartcraft.com/apps/soundcraft) |
-| <img src="https://raw.githubusercontent.com/plyra/deckcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.deckcraft.png" alt="" width="32" height="32"> | **DeckCraft** | Presentations and slide decks | [GitHub](https://github.com/plyra/deckcraft) | [Website](https://getartcraft.com/apps/deckcraft) |
-| <img src="https://raw.githubusercontent.com/plyra/cadcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.cadcraft.png" alt="" width="32" height="32"> | **CADCraft** | Computer-aided design | [GitHub](https://github.com/plyra/cadcraft) | [Website](https://getartcraft.com/apps/cadcraft) |
-| <img src="https://raw.githubusercontent.com/plyra/gridcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.gridcraft.png" alt="" width="32" height="32"> | **GridCraft** | Spreadsheets and data | [GitHub](https://github.com/plyra/gridcraft) | [Website](https://getartcraft.com/apps/gridcraft) |
-| <img src="https://raw.githubusercontent.com/plyra/texturecraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.texturecraft.png" alt="" width="32" height="32"> | **TextureCraft** | 3D texture painting | [GitHub](https://github.com/plyra/texturecraft) | [Website](https://getartcraft.com/apps/texturecraft) |
-| <img src="https://raw.githubusercontent.com/plyra/craft-anything/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.craft-anything.png" alt="" width="32" height="32"> | **Craft Anything** | See how any software works, then build your own | [GitHub](https://github.com/plyra/craft-anything) | [Website](https://getartcraft.com/apps/craft-anything) |
-| <img src="https://raw.githubusercontent.com/tangency-labs/solidcraft/main/assets/icons/app/linux/exports/hicolor/64x64/apps/io.tangencylabs.solidcraft.png" alt="" width="32" height="32"> | **SolidCraft** | Parametric 3D CAD by Tangency Labs (community app) | [GitHub](https://github.com/tangency-labs/solidcraft) | |
+| App | What it's for |
+|---|---|
+| **Fotodit** | Image editing: layers, masks, type and real PSD files |
 
-And [**Plyra**](https://getartcraft.com/) itself, our AI image and video studio for artists who want real control.
-
-The Crafting Apps share the same conventions: clean-room and pure Rust, native on macOS, Windows and Linux, in the browser via WebAssembly, and fully drivable by agents.
+The Plyra Apps share the same conventions: clean-room and pure Rust, native on macOS, Windows and Linux, in the browser via WebAssembly, and fully drivable by agents.
 
 <br>
 
@@ -434,9 +407,7 @@ The Crafting Apps share the same conventions: clean-room and pure Rust, native o
 
 <p align="center">
   <a href="https://discord.gg/plyra"><b>discord.gg/plyra</b></a> ·
-  <a href="https://getartcraft.com/">getartcraft.com</a> ·
-  <a href="https://getartcraft.com/apps">The Crafting Apps</a> ·
-  <a href="https://getartcraft.com/apps/fotodit">Fotodit</a>
+  <b>Plyra</b> · <b>The Plyra Apps</b> · <b>Fotodit</b>
 </p>
 
 ---
@@ -459,8 +430,8 @@ Forks and modified versions must remove them.
 <sub>Adobe, Photoshop, Illustrator, Premiere Pro, Lightroom, Acrobat, After Effects and InDesign are trademarks or registered trademarks of Adobe Inc. in the United States and/or other countries. Fotodit is an independent, open-source project and is not affiliated with, sponsored by or endorsed by Adobe Inc.; these names are used only to describe the workflows it is compatible with.</sub>
 
 <p align="center">
-  <a href="https://getartcraft.com/"><img alt="Plyra" src="docs/brand/plyra-mark.svg" width="28"></a><br>
-  <sub>Made by the <a href="https://getartcraft.com/">Plyra</a> team and community.</sub>
+  <img alt="Plyra" src="docs/brand/plyra-mark.svg" width="28"><br>
+  <sub>Made by the Plyra team and community.</sub>
 </p>
 
 ## Star history
