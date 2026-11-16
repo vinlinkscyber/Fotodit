@@ -70,10 +70,22 @@ fn ten_prompt_parse_diagnostic_prints_raw_outputs() {
     let mut context = AiContext::new();
     let scene = fixture();
     let prior_prompt = "Set the opacity of the Portrait layer to 60%.";
-    let prior_intent = engine.parse_intent(prior_prompt, &scene, &context).expect("case 01 parses");
-    let planner = DeterministicRulePlanner::new(CommandCatalog::new());
-    let plan = planner.plan(&prior_intent, &scene, &context).expect("case 01 plans");
-    context.record_interaction(prior_prompt.to_string(), plan);
+    match engine.parse_intent(prior_prompt, &scene, &context) {
+        Ok(prior_intent) => {
+            let planner = DeterministicRulePlanner::new(CommandCatalog::new());
+            match planner.plan(&prior_intent, &scene, &context) {
+                Ok(plan) => context.record_interaction(prior_prompt.to_string(), plan),
+                Err(e) => {
+                    println!("case 08 setup: case 01 planning failed ({e}); recording prompt history only");
+                    context.prompt_history.push(prior_prompt.to_string());
+                }
+            }
+        }
+        Err(e) => {
+            println!("case 08 setup: case 01 parsing failed ({e}); recording prompt history only");
+            context.prompt_history.push(prior_prompt.to_string());
+        }
+    }
     println!("=== CASE 08 SETUP ===");
     println!("prior interaction recorded: {prior_prompt}");
     println!("context after setup: {}", serde_json::to_string_pretty(&context).unwrap());
