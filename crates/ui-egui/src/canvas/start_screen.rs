@@ -249,26 +249,25 @@ fn template_card(app: &mut FotoditApp, ui: &mut egui::Ui, template: &Template, w
         ui.painter().text(badge.center(), egui::Align2::CENTER_CENTER, tl!("NEW"), crate::theme::semibold(9.0), egui::Color32::WHITE);
     }
 
-    let icon_box = Rect::from_center_size(egui::pos2(rect.center().x, rect.top() + 34.0), egui::vec2(30.0, 30.0));
-    crate::icons::paint(ui, icon_box, template.icon, 26.0, ACCENT);
+    let icon_box = Rect::from_center_size(egui::pos2(rect.right() - 22.0, rect.top() + 22.0), egui::vec2(22.0, 22.0));
+    crate::icons::paint(ui, icon_box, template.icon, 18.0, ACCENT);
 
-    let name = if template.dims.is_empty() { template.name.to_string() } else { format!("{} {}", template.name, template.dims) };
+    // Left-aligned stack like the reference: name, then dims, then the tag. The tag wraps
+    // inside the card instead of overflowing into its neighbour.
+    let wrap = (w - 20.0).max(40.0);
     ui.painter().text(
-        egui::pos2(rect.center().x, rect.top() + 66.0),
-        egui::Align2::CENTER_CENTER,
+        egui::pos2(rect.left() + 10.0, rect.top() + 58.0),
+        egui::Align2::LEFT_CENTER,
         template.name,
-        crate::theme::semibold(12.5),
+        crate::theme::semibold(12.0),
         TEXT_ON_NAVY,
     );
-    let sub = if template.dims.is_empty() { template.tag } else { name.split(' ').last().unwrap_or(template.dims) };
-    ui.painter().text(egui::pos2(rect.center().x, rect.top() + 84.0), egui::Align2::CENTER_CENTER, sub, crate::theme::medium(11.0), TEXT_SOFT);
-    ui.painter().text(
-        egui::pos2(rect.center().x, rect.top() + 100.0),
-        egui::Align2::CENTER_CENTER,
-        if template.dims.is_empty() { "" } else { template.tag },
-        crate::theme::medium(11.0),
-        TEXT_SOFT,
-    );
+    if !template.dims.is_empty() {
+        ui.painter().text(egui::pos2(rect.left() + 10.0, rect.top() + 76.0), egui::Align2::LEFT_CENTER, template.dims, crate::theme::medium(10.5), TEXT_SOFT);
+    }
+    let tag_y = if template.dims.is_empty() { rect.top() + 76.0 } else { rect.top() + 92.0 };
+    let tag = ui.painter().layout(template.tag.to_string(), crate::theme::medium(10.5), TEXT_SOFT, wrap);
+    ui.painter().add(egui::Shape::galley(egui::pos2(rect.left() + 10.0, tag_y - tag.size().y / 2.0), tag, TEXT_SOFT));
 
     if resp.clicked() {
         if let Some((w, h)) = template.size {
@@ -319,23 +318,33 @@ fn render_ai_rail(app: &mut FotoditApp, ui: &mut egui::Ui, width: f32) {
             ui.add_space(8.0);
 
             let mut draft = ui.ctx().data_mut(|d| d.get_temp::<String>(home_ai_id()).unwrap_or_default());
-            ui.horizontal(|ui| {
-                let edit = egui::TextEdit::singleline(&mut draft)
-                    .hint_text(egui::RichText::new(tl!("Describe what you want...")).color(TEXT_SOFT))
-                    .desired_width((ui.available_width() - 42.0).max(80.0));
-                let response = ui.add(edit);
-                let enter = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                let sendable = !draft.trim().is_empty();
-                let (send_rect, send_click) = ui.allocate_exact_size(egui::vec2(34.0, 30.0), Sense::click());
-                let send_click = send_click.on_hover_cursor(egui::CursorIcon::PointingHand);
-                ui.painter().rect_filled(send_rect, 8.0, if sendable { ACCENT } else { CARD_LINE });
-                crate::icons::paint(ui, send_rect, "send", 14.0, egui::Color32::WHITE);
-                if (send_click.clicked() || enter) && sendable {
-                    crate::panels::assistant::seed_prompt(ui.ctx(), draft.trim());
-                    app.ui.panels.assistant = true;
-                    draft.clear();
-                }
-            });
+            egui::Frame::NONE
+                .fill(CARD_BG)
+                .corner_radius(egui::CornerRadius::same(10))
+                .stroke(egui::Stroke::new(1.0, CARD_LINE))
+                .inner_margin(egui::Margin::symmetric(10, 5))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        let edit = egui::TextEdit::singleline(&mut draft)
+                            .hint_text(egui::RichText::new(tl!("Describe what you want...")).color(TEXT_SOFT).size(13.5))
+                            .desired_width((ui.available_width() - 40.0).max(80.0))
+                            .frame(egui::Frame::NONE);
+                        let response = ui.add(edit);
+                        let enter = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        let sendable = !draft.trim().is_empty();
+                        let (send_rect, send_click) = ui.allocate_exact_size(egui::vec2(32.0, 30.0), Sense::click());
+                        let send_click = send_click.on_hover_cursor(egui::CursorIcon::PointingHand);
+                        // Bright accent even while empty, matching the panel's composer; sending stays gated below.
+                        ui.painter().rect_filled(send_rect, 8.0, ACCENT);
+                        crate::icons::paint(ui, send_rect, "send", 14.0, egui::Color32::WHITE);
+                        if (send_click.clicked() || enter) && sendable {
+                            crate::panels::assistant::seed_prompt(ui.ctx(), draft.trim());
+                            app.ui.panels.assistant = true;
+                            draft.clear();
+                        }
+                    });
+                });
             ui.ctx().data_mut(|d| d.insert_temp(home_ai_id(), draft));
         });
 }

@@ -30,9 +30,9 @@ pub(crate) const TEXT_SOFT: egui::Color32 = egui::Color32::from_rgb(158, 168, 20
 /// Body text colour on the navy chrome.
 pub(crate) const TEXT_ON_NAVY: egui::Color32 = egui::Color32::from_rgb(232, 236, 250);
 /// Gradient stops for the panel chrome, top to bottom: dark navy base, never flat matte.
-const CHROME_TOP: egui::Color32 = egui::Color32::from_rgb(12, 19, 48);
+const CHROME_TOP: egui::Color32 = egui::Color32::from_rgb(15, 23, 56);
 const CHROME_MID: egui::Color32 = egui::Color32::from_rgb(11, 18, 44);
-const CHROME_BOTTOM: egui::Color32 = egui::Color32::from_rgb(9, 15, 42);
+const CHROME_BOTTOM: egui::Color32 = egui::Color32::from_rgb(7, 12, 36);
 /// Corner radius of the panel enclosure.
 const RIM_RADIUS: f32 = 18.0;
 
@@ -94,31 +94,35 @@ fn panel_surface(ui: &egui::Ui, rect: egui::Rect) {
         painter.rect_stroke(rect.expand(grow), RIM_RADIUS + grow, egui::Stroke::new(1.5, egui::Color32::from_rgba_unmultiplied(96, 80, 200, 14 - i * 4)), egui::StrokeKind::Outside);
     }
     rounded_gradient(painter, rect, RIM_RADIUS);
-    // Purple light pooled tight around the header band (upper left).
+    // Purple light pooled tight around the header band (upper left), kept faint so the
+    // glass reads navy-blue, never a purple wash.
     let purple_pool = egui::pos2(rect.left() + 52.0, rect.top() + 30.0);
-    for i in 0..5 {
-        painter.circle_filled(purple_pool, 96.0 - i as f32 * 16.0, egui::Color32::from_rgba_unmultiplied(150, 90, 255, 5));
+    for i in 0..4 {
+        painter.circle_filled(purple_pool, 96.0 - i as f32 * 20.0, egui::Color32::from_rgba_unmultiplied(150, 90, 255, 3));
     }
-    // Blue light pooled at the lower-right corner, smaller and dimmer than the old wash.
+    // Blue depth pooled at the lower-right corner, smaller and dimmer than the old wash.
     let blue_pool = egui::pos2(rect.right() - 18.0, rect.bottom() - 44.0);
     for i in 0..6 {
-        painter.circle_filled(blue_pool, 150.0 - i as f32 * 20.0, egui::Color32::from_rgba_unmultiplied(12, 36, 153, 13));
+        painter.circle_filled(blue_pool, 150.0 - i as f32 * 20.0, egui::Color32::from_rgba_unmultiplied(12, 36, 153, 10));
     }
-    // Electric-blue edge illumination: a short bright run at the lower-right corner that
-    // fades as it climbs the right edge and walks the bottom edge to the left.
+    // Electric-blue edge illumination, localized at the lower-left like the reference: a
+    // bright corner glow, a run climbing the left edge, and a run walking the bottom edge
+    // to the right, both fading out.
     let edge = |alpha: u8| egui::Color32::from_rgba_unmultiplied(ACCENT.r(), ACCENT.g(), ACCENT.b(), alpha);
-    let corner = egui::pos2(rect.right() - RIM_RADIUS * 0.6, rect.bottom() - RIM_RADIUS * 0.6);
-    for i in 0..5 {
+    let glow = egui::pos2(rect.left() + 12.0, rect.bottom() - 12.0);
+    for i in 0..3 {
+        painter.circle_filled(glow, 34.0 - i as f32 * 10.0, egui::Color32::from_rgba_unmultiplied(ACCENT.r(), ACCENT.g(), ACCENT.b(), 16));
+    }
+    for i in 0..6 {
         let y = rect.bottom() - RIM_RADIUS - 14.0 - i as f32 * 26.0;
-        let alpha = 72 - i * 12;
-        painter.line_segment([egui::pos2(rect.right() - 1.5, y + 22.0), egui::pos2(rect.right() - 1.5, y)], egui::Stroke::new(2.0, edge(alpha)));
+        let alpha = 96u8.saturating_sub(i * 14);
+        painter.line_segment([egui::pos2(rect.left() + 1.5, y + 22.0), egui::pos2(rect.left() + 1.5, y)], egui::Stroke::new(2.0, edge(alpha)));
     }
-    for i in 0..5 {
-        let x = rect.right() - RIM_RADIUS - 14.0 - i as f32 * 26.0;
-        let alpha = 72 - i * 12;
-        painter.line_segment([egui::pos2(x + 22.0, rect.bottom() - 1.5), egui::pos2(x, rect.bottom() - 1.5)], egui::Stroke::new(2.0, edge(alpha)));
+    for i in 0..6 {
+        let x = rect.left() + RIM_RADIUS + 14.0 + i as f32 * 26.0;
+        let alpha = 96u8.saturating_sub(i * 14);
+        painter.line_segment([egui::pos2(x - 22.0, rect.bottom() - 1.5), egui::pos2(x, rect.bottom() - 1.5)], egui::Stroke::new(2.0, edge(alpha)));
     }
-    let _ = corner;
     // Fine violet rim, stroke only, not a luminous perimeter.
     painter.rect_stroke(rect, RIM_RADIUS, egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(RIM.r(), RIM.g(), RIM.b(), 108)), egui::StrokeKind::Inside);
 }
@@ -216,6 +220,32 @@ pub(crate) fn assistant_panel(app: &mut FotoditApp, ui: &mut egui::Ui) {
     });
 }
 
+/// The header's pin control: a solid angled pin (head upper-right, point lower-left),
+/// painted in primitives so the shared outline `pin` icon stays untouched elsewhere.
+fn paint_pin(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let s = rect.width() / 20.0;
+    let c = rect.center();
+    let axis = egui::vec2(-0.7071, 0.7071); // down-left along the pin's shaft
+    let head = c - axis * 3.6 * s;
+    let tip = c + axis * 6.2 * s;
+    let perp = egui::vec2(-axis.y, axis.x);
+    // Shaft: tapered quad from under the head to the point.
+    let base = c + axis * 0.8 * s;
+    painter.add(egui::Shape::convex_polygon(
+        vec![base + perp * 1.5 * s, base - perp * 1.5 * s, tip + perp * 0.2 * s, tip - perp * 0.2 * s],
+        color,
+        egui::Stroke::NONE,
+    ));
+    // Brim: a flattened disk where the head meets the shaft.
+    painter.add(egui::Shape::convex_polygon(
+        vec![head + axis * 1.6 * s + perp * 3.6 * s, head + axis * 1.6 * s - perp * 3.6 * s, head + axis * 3.0 * s - perp * 2.6 * s, head + axis * 3.0 * s + perp * 2.6 * s],
+        color,
+        egui::Stroke::NONE,
+    ));
+    // Head: solid round cap.
+    painter.circle_filled(head, 3.1 * s, color);
+}
+
 /// Panel surface + header + tabs, with the active tab's body inside. In the dock, `app`
 /// is present and the header's collapse control hides the group (reopen from the Window menu).
 fn panel_chrome(ui: &mut egui::Ui, state: &mut AssistantState, mut app: Option<&mut FotoditApp>) {
@@ -252,7 +282,7 @@ fn header(ui: &mut egui::Ui, state: &mut AssistantState, app: Option<&mut Fotodi
             if pin.hovered() {
                 ui.painter().rect_filled(pin_rect, 6.0, CHIP_BG_HOVER);
             }
-            crate::icons::paint(ui, pin_rect, "pin", 14.0, if state.pinned { ICON_WHITE } else { TEXT_SOFT });
+            paint_pin(ui.painter(), pin_rect, if state.pinned { ICON_WHITE } else { TEXT_SOFT });
             if pin.clicked() {
                 state.pinned = !state.pinned;
             }
@@ -407,23 +437,24 @@ fn input_row(ui: &mut egui::Ui, state: &mut AssistantState) {
         .fill(COMPOSER_BG)
         .corner_radius(egui::CornerRadius::same(16))
         .stroke(egui::Stroke::new(1.0, CHIP_BORDER))
-        .inner_margin(egui::Margin::symmetric(12, 12))
+        .inner_margin(egui::Margin::symmetric(10, 11))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                let (attach_rect, attach) = ui.allocate_exact_size(egui::vec2(26.0, 38.0), egui::Sense::click());
+                ui.spacing_mut().item_spacing.x = 6.0;
+                let (attach_rect, attach) = ui.allocate_exact_size(egui::vec2(22.0, 38.0), egui::Sense::click());
                 let attach = attach.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tl!("Attach an image (coming soon)"));
-                crate::icons::paint(ui, attach_rect, "paperclip", 17.0, TEXT_SOFT);
+                crate::icons::paint(ui, attach_rect, "paperclip", 16.0, TEXT_SOFT);
 
-                let width = ui.available_width() - 46.0;
+                let width = ui.available_width() - 42.0;
                 let edit = egui::TextEdit::singleline(&mut state.draft)
-                    .hint_text(egui::RichText::new(tl!("Describe what you want...")).color(TEXT_SOFT).size(14.0))
+                    .hint_text(egui::RichText::new(tl!("Describe what you want...")).color(TEXT_SOFT).size(13.5))
                     .font(egui::FontId::proportional(14.0))
                     .desired_width(width.max(60.0))
                     .frame(egui::Frame::NONE);
                 let response = ui.add(edit);
                 let enter = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 let sendable = !state.draft.trim().is_empty();
-                let (send_rect, send_click) = ui.allocate_exact_size(egui::vec2(38.0, 38.0), egui::Sense::click());
+                let (send_rect, send_click) = ui.allocate_exact_size(egui::vec2(36.0, 36.0), egui::Sense::click());
                 let send_click = send_click.on_hover_cursor(egui::CursorIcon::PointingHand);
                 // Bright electric-blue send with a white plane, matching the reference even
                 // while empty; an empty draft still cannot be sent (gated below).
@@ -438,17 +469,21 @@ fn input_row(ui: &mut egui::Ui, state: &mut AssistantState) {
                 }
             });
         });
-    // Violet accent along the composer's upper-left edge, per the reference.
+    // Violet accent along the composer's upper-left edge, per the reference: one
+    // continuous lit run - top edge, around the corner arc, down the left edge.
     let rect = inner.response.rect;
     let _ = (top, width);
-    ui.painter().line_segment(
-        [egui::pos2(rect.left() + 18.0, rect.top() + 0.5), egui::pos2(rect.left() + 64.0, rect.top() + 0.5)],
-        egui::Stroke::new(1.5, COMPOSER_EDGE),
-    );
-    ui.painter().line_segment(
-        [egui::pos2(rect.left() + 0.5, rect.top() + 16.0), egui::pos2(rect.left() + 0.5, rect.top() + 34.0)],
-        egui::Stroke::new(1.5, egui::Color32::from_rgba_unmultiplied(COMPOSER_EDGE.r(), COMPOSER_EDGE.g(), COMPOSER_EDGE.b(), 120)),
-    );
+    let r = 16.0_f32;
+    let corner = egui::pos2(rect.left() + r, rect.top() + r);
+    let mut run: Vec<egui::Pos2> = vec![egui::pos2(rect.left() + 64.0, rect.top() + 0.5), egui::pos2(corner.x, rect.top() + 0.5)];
+    for i in 1..5 {
+        let a = (-90.0 - 90.0 * i as f32 / 4.0).to_radians();
+        run.push(corner + egui::vec2(r * a.cos(), r * a.sin()));
+    }
+    run.push(egui::pos2(rect.left() + 0.5, rect.top() + 40.0));
+    let bloom = egui::Color32::from_rgba_unmultiplied(COMPOSER_EDGE.r(), COMPOSER_EDGE.g(), COMPOSER_EDGE.b(), 46);
+    ui.painter().add(egui::Shape::line(run.clone(), egui::Stroke::new(3.5, bloom)));
+    ui.painter().add(egui::Shape::line(run, egui::Stroke::new(1.5, COMPOSER_EDGE)));
 }
 
 /// Record an exchange. The engine hookup replaces the placeholder reply when wired.
