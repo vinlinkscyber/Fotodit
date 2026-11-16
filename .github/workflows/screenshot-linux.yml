@@ -64,6 +64,12 @@ jobs:
             xdotool mousemove --sync 655 687 click 1
             sleep 4
             import -window root /tmp/fotodit-reopen-2.png
+            # Panel-behavior proof: open the Window menu to show the Assistant entry
+            # and its checkmark (menu position measured from a maximized window).
+            xdotool mousemove --sync 462 28 click 1
+            sleep 2
+            import -window root /tmp/fotodit-menu-window.png
+            xdotool key Escape || true
             kill $APP || true
           '
           xvfb-run -a -s "-screen 0 1600x900x24" bash -c '
