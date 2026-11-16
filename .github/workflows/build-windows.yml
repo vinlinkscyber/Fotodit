@@ -27,6 +27,17 @@ jobs:
       - name: Artifact sizes
         shell: bash
         run: ls -l target/release/fotodit.exe target/release/fotodit-cli.exe
+      - name: Smoke test the CLI
+        shell: bash
+        run: |
+          set -e
+          cd "$RUNNER_TEMP"
+          B64="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+          printf %s "$B64" | base64 -d > smoke.png
+          "$GITHUB_WORKSPACE/target/release/fotodit-cli.exe" convert smoke.png smoke.plyra
+          "$GITHUB_WORKSPACE/target/release/fotodit-cli.exe" info smoke.plyra
+          "$GITHUB_WORKSPACE/target/release/fotodit-cli.exe" convert smoke.plyra smoke-back.png
+          ls -l smoke.png smoke.plyra smoke-back.png
       - uses: actions/upload-artifact@v4
         with:
           name: fotodit-windows-x64
