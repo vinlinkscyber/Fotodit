@@ -14,6 +14,7 @@
 
 pub mod command_intelligence;
 pub mod creative_design;
+mod enhancement_preflight;
 pub mod evaluation;
 pub mod execution;
 pub mod live;
