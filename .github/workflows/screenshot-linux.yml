@@ -42,7 +42,8 @@ jobs:
             APP=$!
             sleep 30
             import -window root /tmp/fotodit-1.png
-            xdotool key --delay 200 Return
+            xdotool search --name Fotodit windowactivate --sync || true
+            xdotool mousemove --sync 655 687 click 1
             sleep 4
             import -window root /tmp/fotodit-2.png
             sleep 2
