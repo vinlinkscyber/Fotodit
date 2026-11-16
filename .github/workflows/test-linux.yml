@@ -1,0 +1,38 @@
+name: test-linux
+
+# Runs the automation test suite on a headless Linux runner so pass/fail output
+# exists as a reviewable artifact.
+on:
+  workflow_dispatch:
+  push:
+    branches: [chore/optimization-efficiency]
+    paths: [crates/**, Cargo.lock, .github/workflows/test-linux.yml]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: never
+
+jobs:
+  test:
+    name: Automation tests (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libasound2-dev libudev-dev
+      - name: Run automation tests
+        run: |
+          set -o pipefail
+          cargo test --locked -p fotodit-automation 2>&1 | tee test-output.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: automation-test-output
+          path: test-output.txt
