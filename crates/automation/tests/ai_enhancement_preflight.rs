@@ -46,9 +46,10 @@ fn refuses(document: Option<Value>, plan: &EditingPlan, reason: &str) {
 fn binds_active_id_and_sharpens_before_adjustments() {
     let host = fixture();
     let plan = planned(&host);
-    assert_eq!(plan.steps.iter().map(|s| s.command.as_str()).collect::<Vec<_>>(), vec![
-        "filter.sharpen.unsharpMask", "layer.newAdjustmentLayer.curves", "layer.newAdjustmentLayer.vibrance",
-    ]);
+    assert_eq!(
+        plan.steps.iter().map(|s| s.command.as_str()).collect::<Vec<_>>(),
+        vec!["filter.sharpen.unsharpMask", "layer.newAdjustmentLayer.curves", "layer.newAdjustmentLayer.vibrance",]
+    );
     assert_eq!(plan.steps[0].params["layer"], inspect(&host)["activeLayer"]);
 }
 
@@ -134,12 +135,34 @@ fn no_document_no_active_missing_and_malformed_metadata_refuse_without_dispatch(
     for field in ["hasSelection", "quickMask", "channels", "layerMaskView"] {
         let mut doc = inspect(&host);
         doc.as_object_mut().unwrap().remove(field);
-        refuses(Some(doc), &plan, if field == "channels" { "channel" } else if field == "hasSelection" { "selection" } else if field == "quickMask" { "Quick Mask" } else { "mask" });
+        refuses(
+            Some(doc),
+            &plan,
+            if field == "channels" {
+                "channel"
+            } else if field == "hasSelection" {
+                "selection"
+            } else if field == "quickMask" {
+                "Quick Mask"
+            } else {
+                "mask"
+            },
+        );
     }
     for field in ["target", "selectedColors", "layerMaskView"] {
         let mut doc = inspect(&host);
         doc["channels"].as_object_mut().unwrap().remove(field);
-        refuses(Some(doc), &plan, if field == "layerMaskView" { "mask" } else if field == "selectedColors" { "all-colors" } else { "target" });
+        refuses(
+            Some(doc),
+            &plan,
+            if field == "layerMaskView" {
+                "mask"
+            } else if field == "selectedColors" {
+                "all-colors"
+            } else {
+                "target"
+            },
+        );
     }
 }
 
