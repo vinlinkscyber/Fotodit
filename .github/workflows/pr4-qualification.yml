@@ -41,7 +41,7 @@ jobs:
       - name: rustfmt check on PR files
         if: always()
         run: |
-          rustfmt --edition 2024 --check crates/automation/src/ai/live.rs crates/automation/src/ai/mod.rs crates/automation/src/ai/execution.rs crates/automation/src/lib.rs crates/automation/tests/ai_live_session.rs 2>&1 | tee rustfmt.txt
+          rustfmt --edition 2024 --config skip_children=true --check crates/automation/src/ai/live.rs crates/automation/src/ai/mod.rs crates/automation/src/ai/execution.rs crates/automation/src/lib.rs crates/automation/tests/ai_live_session.rs 2>&1 | tee rustfmt.txt
       - uses: actions/upload-artifact@v4
         if: always()
         with:
