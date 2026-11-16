@@ -1,7 +1,7 @@
 name: screenshot-linux
 
 # Captures the GUI on a headless Linux display so the app's look can be reviewed
-# without a local machine.
+# without a local machine. Manual trigger only.
 on:
   workflow_dispatch:
   push:
@@ -52,7 +52,7 @@ jobs:
             kill $APP || true
           '
           xvfb-run -a -s "-screen 0 1600x1000x24" bash -c '
-            ./target/debug/fotodit &
+            FOTODIT_ASSISTANT_DEMO=1 ./target/debug/fotodit &
             APP=$!
             sleep 30
             import -window root /tmp/fotodit-home-1.png
