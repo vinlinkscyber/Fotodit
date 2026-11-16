@@ -12,6 +12,25 @@ const ASSISTANT_BUBBLE: egui::Color32 = egui::Color32::from_rgb(32, 39, 74);
 pub(crate) const ACCENT: egui::Color32 = egui::Color32::from_rgb(63, 110, 246);
 /// Muted label colour on the navy chrome.
 pub(crate) const TEXT_SOFT: egui::Color32 = egui::Color32::from_rgb(160, 168, 200);
+/// Gradient stops for the panel chrome, top to bottom, from the approved design.
+const CHROME_TOP: egui::Color32 = egui::Color32::from_rgb(19, 24, 55);
+const CHROME_BOTTOM: egui::Color32 = egui::Color32::from_rgb(13, 16, 38);
+
+/// Paint a soft vertical gradient over `rect` (thin strips; egui has no gradient fills).
+fn gradient_fill(ui: &egui::Ui, rect: egui::Rect, top: egui::Color32, bottom: egui::Color32) {
+    let steps = 24;
+    let h = rect.height() / steps as f32;
+    for i in 0..steps {
+        let t = i as f32 / (steps - 1) as f32;
+        let strip = egui::Rect::from_min_size(rect.min + egui::vec2(0.0, h * i as f32), egui::vec2(rect.width(), h + 1.0));
+        ui.painter().rect_filled(strip, 0.0, lerp_color(top, bottom, t));
+    }
+}
+
+fn lerp_color(a: egui::Color32, b: egui::Color32, t: f32) -> egui::Color32 {
+    let l = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t) as u8;
+    egui::Color32::from_rgb(l(a.r(), b.r()), l(a.g(), b.g()), l(a.b(), b.b()))
+}
 /// Body text colour on the navy chrome.
 pub(crate) const TEXT_ON_NAVY: egui::Color32 = egui::Color32::from_rgb(225, 229, 245);
 
@@ -43,11 +62,11 @@ impl Default for AssistantState {
 }
 
 /// Canned one-tap edits from the approved design; each is a real natural-language prompt.
-const QUICK_ACTIONS: &[&str] = &[
-    "Remove the background",
-    "Enhance image quality",
-    "Adjust colors",
-    "Add text",
+const QUICK_ACTIONS: &[(&str, &str)] = &[
+    ("eraser-background", "Remove the background"),
+    ("wand-sparkles", "Enhance image quality"),
+    ("palette", "Adjust colors"),
+    ("type", "Add text"),
 ];
 
 fn state_id() -> egui::Id {
@@ -118,9 +137,10 @@ pub(crate) fn assistant_panel(app: &mut FotoditApp, ui: &mut egui::Ui) {
 /// Navy frame + header + tabs, with the active tab's body inside. In the dock, `app`
 /// is present and the header's close control hides the group (reopen from the Window menu).
 fn panel_chrome(ui: &mut egui::Ui, state: &mut AssistantState, mut app: Option<&mut FotoditApp>) {
+    let area = ui.available_rect_before_wrap();
+    gradient_fill(ui, area, CHROME_TOP, CHROME_BOTTOM);
     egui::Frame::NONE
-        .fill(PANEL_BG)
-        .inner_margin(egui::Margin::symmetric(10, 8))
+        .inner_margin(egui::Margin::symmetric(12, 10))
         .show(ui, |ui| {
             header(ui, app.as_mut().map(|a| &mut **a));
             ui.add_space(6.0);
@@ -136,13 +156,10 @@ fn panel_chrome(ui: &mut egui::Ui, state: &mut AssistantState, mut app: Option<&
 /// Monogram + title + close control, like the reference design's header.
 fn header(ui: &mut egui::Ui, app: Option<&mut FotoditApp>) {
     ui.horizontal(|ui| {
-        egui::Frame::NONE
-            .fill(ACCENT)
-            .corner_radius(egui::CornerRadius::same(6))
-            .inner_margin(egui::Margin::symmetric(7, 3))
-            .show(ui, |ui| {
-                ui.label(egui::RichText::new("AI").color(egui::Color32::WHITE).strong().size(12.0));
-            });
+        let tile = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(24.0, 24.0));
+        ui.painter().rect_filled(tile, 7.0, ACCENT);
+        crate::icons::paint(ui, tile, "sparkles", 15.0, egui::Color32::WHITE);
+        ui.add_space(30.0);
         ui.label(egui::RichText::new(tl!("AI Assistant")).color(egui::Color32::WHITE).strong().size(15.0));
         if let Some(app) = app {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -182,25 +199,34 @@ fn tab_label(ui: &mut egui::Ui, state: &mut AssistantState, tab: Tab, label: &st
     }
 }
 
-/// One-tap canned edits, styled as the dark rounded chips in the reference design.
-fn chip(ui: &mut egui::Ui, label: &str) -> egui::Response {
-    let button = egui::Button::new(egui::RichText::new(label).color(egui::Color32::from_rgb(210, 216, 240)).size(13.0))
-        .fill(CHIP_BG)
-        .corner_radius(egui::CornerRadius::same(8))
-        .min_size(egui::vec2(ui.available_width(), 34.0));
-    let _ = CHIP_BG_HOVER;
-    ui.add(button)
+/// One-tap canned edits: dark rounded chip with a line icon, as in the reference design.
+fn chip(ui: &mut egui::Ui, icon: &str, label: &str) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 38.0), egui::Sense::click());
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let fill = if response.hovered() { CHIP_BG_HOVER } else { CHIP_BG };
+    ui.painter().rect_filled(rect, 9.0, fill);
+    ui.painter().rect_stroke(rect, 9.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(46, 55, 100)), egui::StrokeKind::Inside);
+    let icon_box = egui::Rect::from_center_size(egui::pos2(rect.left() + 24.0, rect.center().y), egui::vec2(20.0, 20.0));
+    crate::icons::paint(ui, icon_box, icon, 17.0, ACCENT);
+    ui.painter().text(
+        egui::pos2(rect.left() + 42.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(13.0),
+        egui::Color32::from_rgb(214, 219, 240),
+    );
+    response
 }
 
 fn quick_actions_body(ui: &mut egui::Ui, state: &mut AssistantState) {
-    for &action in QUICK_ACTIONS {
-        if chip(ui, action).clicked() {
+    for &(icon, action) in QUICK_ACTIONS {
+        if chip(ui, icon, action).clicked() {
             send(state, action.to_string());
         }
-        ui.add_space(6.0);
+        ui.add_space(8.0);
     }
     ui.add_space(2.0);
-    if chip(ui, &tl!("More options…")).clicked() {
+    if chip(ui, "circle-dashed", &tl!("More options…")).clicked() {
         state.tab = Tab::Chat;
     }
 }
@@ -216,11 +242,11 @@ fn chat_body(ui: &mut egui::Ui, state: &mut AssistantState) {
             if state.transcript.is_empty() {
                 greeting(ui);
                 ui.add_space(10.0);
-                for &action in QUICK_ACTIONS {
-                    if chip(ui, action).clicked() {
+                for &(icon, action) in QUICK_ACTIONS {
+                    if chip(ui, icon, action).clicked() {
                         send(state, action.to_string());
                     }
-                    ui.add_space(6.0);
+                    ui.add_space(8.0);
                 }
             }
             for exchange in &state.transcript {
@@ -236,13 +262,10 @@ fn chat_body(ui: &mut egui::Ui, state: &mut AssistantState) {
 /// The empty-state greeting bubble with the AI monogram avatar, from the reference design.
 fn greeting(ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
-        egui::Frame::NONE
-            .fill(ACCENT)
-            .corner_radius(egui::CornerRadius::same(11))
-            .inner_margin(egui::Margin::symmetric(6, 4))
-            .show(ui, |ui| {
-                ui.label(egui::RichText::new("AI").color(egui::Color32::WHITE).strong().size(11.0));
-            });
+        let tile = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(24.0, 24.0));
+        ui.painter().rect_filled(tile, 12.0, ACCENT);
+        crate::icons::paint(ui, tile, "sparkles", 14.0, egui::Color32::WHITE);
+        ui.add_space(30.0);
         egui::Frame::NONE
             .fill(ASSISTANT_BUBBLE)
             .corner_radius(egui::CornerRadius::same(10))
@@ -255,33 +278,41 @@ fn greeting(ui: &mut egui::Ui) {
     });
 }
 
-/// Draft field with an attach-style "+" affordance and the accent send button.
+/// The input bar: one rounded container with "+" at the left and the accent send button
+/// inside at the right, as in the reference design.
 fn input_row(ui: &mut egui::Ui, state: &mut AssistantState) {
-    ui.horizontal(|ui| {
-        let attach = egui::Button::new(egui::RichText::new("+").size(16.0).color(egui::Color32::from_rgb(160, 168, 200)))
-            .fill(CHIP_BG)
-            .corner_radius(egui::CornerRadius::same(8))
-            .min_size(egui::vec2(30.0, 30.0));
-        ui.add(attach).on_hover_text(tl!("Attach an image (coming soon)"));
+    egui::Frame::NONE
+        .fill(CHIP_BG)
+        .corner_radius(egui::CornerRadius::same(10))
+        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(46, 55, 100)))
+        .inner_margin(egui::Margin::symmetric(6, 5))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let attach = egui::Button::new(egui::RichText::new("+").size(16.0).color(TEXT_SOFT))
+                    .fill(egui::Color32::TRANSPARENT)
+                    .min_size(egui::vec2(26.0, 26.0));
+                ui.add(attach).on_hover_text(tl!("Attach an image (coming soon)"));
 
-        let width = ui.available_width() - 40.0;
-        let edit = egui::TextEdit::singleline(&mut state.draft)
-            .hint_text(tl!("Describe what you want..."))
-            .desired_width(width.max(60.0));
-        let response = ui.add(edit);
-        let enter = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        let sendable = !state.draft.trim().is_empty();
-        let send_button = egui::Button::new(egui::RichText::new("→").size(16.0).color(egui::Color32::WHITE))
-            .fill(ACCENT)
-            .corner_radius(egui::CornerRadius::same(8))
-            .min_size(egui::vec2(32.0, 30.0));
-        if (ui.add_enabled(sendable, send_button).clicked() || enter) && sendable {
-            let asked = state.draft.trim().to_string();
-            state.draft.clear();
-            send(state, asked);
-            response.request_focus();
-        }
-    });
+                let width = ui.available_width() - 38.0;
+                let edit = egui::TextEdit::singleline(&mut state.draft)
+                    .hint_text(egui::RichText::new(tl!("Describe what you want...")).color(TEXT_SOFT))
+                    .desired_width(width.max(60.0))
+                    .frame(egui::Frame::NONE);
+                let response = ui.add(edit);
+                let enter = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let sendable = !state.draft.trim().is_empty();
+                let send_button = egui::Button::new(egui::RichText::new("→").size(15.0).color(egui::Color32::WHITE))
+                    .fill(ACCENT)
+                    .corner_radius(egui::CornerRadius::same(8))
+                    .min_size(egui::vec2(30.0, 26.0));
+                if (ui.add_enabled(sendable, send_button).clicked() || enter) && sendable {
+                    let asked = state.draft.trim().to_string();
+                    state.draft.clear();
+                    send(state, asked);
+                    response.request_focus();
+                }
+            });
+        });
 }
 
 /// Record an exchange. The engine hookup replaces the placeholder reply when wired.
