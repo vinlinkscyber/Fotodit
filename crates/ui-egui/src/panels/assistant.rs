@@ -152,10 +152,10 @@ fn panel_surface(ui: &egui::Ui, rect: egui::Rect) {
     // reference: one wide soft glow centered just past the bottom edge, flanked by a
     // smaller lift at the lower left and a cool rise up the lower right - a luminous
     // wash, not edge lines.
-    radial_pool(painter, egui::pos2(rect.left() + rect.width() * 0.47, rect.bottom() + 50.0), 300.0, ACCENT, 150);
-    radial_pool(painter, egui::pos2(rect.left() + 55.0, rect.bottom() - 20.0), 170.0, ACCENT, 75);
-    radial_pool(painter, egui::pos2(rect.right() - 30.0, rect.bottom() - 80.0), 150.0, egui::Color32::from_rgb(30, 90, 255), 70);
-    radial_pool(painter, egui::pos2(rect.right() - 10.0, rect.bottom()), 170.0, ACCENT, 70);
+    radial_pool(painter, egui::pos2(rect.left() + rect.width() * 0.68, rect.bottom() + 60.0), 280.0, ACCENT, 85);
+    radial_pool(painter, egui::pos2(rect.left() + 60.0, rect.bottom() + 30.0), 150.0, ACCENT, 55);
+    radial_pool(painter, egui::pos2(rect.right() + 2.0, rect.bottom() - 100.0), 190.0, egui::Color32::from_rgb(30, 100, 255), 125);
+    radial_pool(painter, egui::pos2(rect.right() - 2.0, rect.bottom() - 30.0), 150.0, ACCENT, 105);
     // Glossy cool sheen along the upper-left rim: glass catching light, very faint.
     edge_run(painter, egui::pos2(rect.left() + RIM_RADIUS + 12.0, rect.top() + 1.0), egui::pos2(rect.left() + rect.width() * 0.55, rect.top() + 1.0), 2.0, egui::Color32::from_rgb(190, 210, 255), 24);
     // Fine violet rim, stroke only, not a luminous perimeter.
@@ -504,21 +504,54 @@ fn input_row(ui: &mut egui::Ui, state: &mut AssistantState, app: Option<&mut Fot
                 }
             });
         });
-    // Violet accent along the composer's upper-left edge, per the reference: one
-    // continuous lit run - the full top edge, around the corner arc, down the left edge.
+    // The reference's composer lip: a soft, thin light along the top edge - violet at the
+    // upper-left corner, warming toward blue and brighter at the send end - with a short,
+    // fading wrap down the left edge. Segmented so both ends taper to nothing instead of the
+    // old opaque L-run's abrupt endpoint, and a dark inset strip just under the lip reads as
+    // depth rather than outline. A small glow pools around the send button.
     let rect = inner.response.rect;
     let _ = (top, width);
     let r = 16.0_f32;
-    let corner = egui::pos2(rect.left() + r, rect.top() + r);
-    let mut run: Vec<egui::Pos2> = vec![egui::pos2(rect.right() - r, rect.top() + 0.5), egui::pos2(corner.x, rect.top() + 0.5)];
-    for i in 1..5 {
-        let a = (-90.0 - 90.0 * i as f32 / 4.0).to_radians();
-        run.push(corner + egui::vec2(r * a.cos(), r * a.sin()));
+    let p = ui.painter();
+    // Dark inset strip under the top edge.
+    for i in 0..6 {
+        let a = (46.0 * (1.0 - i as f32 / 6.0)) as u8;
+        let y = rect.top() + 2.0 + i as f32;
+        p.hline(rect.left() + r..=rect.right() - r, y, egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(2, 4, 14, a)));
     }
-    run.push(egui::pos2(rect.left() + 0.5, rect.bottom() - r));
-    let bloom = egui::Color32::from_rgba_unmultiplied(COMPOSER_EDGE.r(), COMPOSER_EDGE.g(), COMPOSER_EDGE.b(), 72);
-    ui.painter().add(egui::Shape::line(run.clone(), egui::Stroke::new(5.5, bloom)));
-    ui.painter().add(egui::Shape::line(run, egui::Stroke::new(1.5, COMPOSER_EDGE)));
+    // Lip: 24 segments across the top, violet -> blue, alpha rising to the right, sine-tapered ends.
+    let segs = 24;
+    let x0 = rect.left() + r;
+    let x1 = rect.right() - r;
+    let y = rect.top() + 0.5;
+    for i in 0..segs {
+        let t = i as f32 / (segs - 1) as f32;
+        let xa = x0 + (x1 - x0) * t;
+        let xb = x0 + (x1 - x0) * (i + 1) as f32 / (segs - 1) as f32 + 0.5;
+        let taper = if t < 0.15 { (std::f32::consts::FRAC_PI_2 * t / 0.15).sin() } else if t > 0.9 { (std::f32::consts::FRAC_PI_2 * (1.0 - t) / 0.1).sin() } else { 1.0 };
+        let cr = COMPOSER_EDGE.r() as f32 + (90.0 - COMPOSER_EDGE.r() as f32) * t;
+        let cg = COMPOSER_EDGE.g() as f32 + (130.0 - COMPOSER_EDGE.g() as f32) * t;
+        let cb = COMPOSER_EDGE.b() as f32 + (255.0 - COMPOSER_EDGE.b() as f32) * t;
+        let a = (56.0 + 114.0 * t) * taper;
+        let core = egui::Color32::from_rgba_unmultiplied(cr as u8, cg as u8, cb as u8, a as u8);
+        let halo = egui::Color32::from_rgba_unmultiplied(cr as u8, cg as u8, cb as u8, (a / 3.0) as u8);
+        p.line_segment([egui::pos2(xa, y), egui::pos2(xb, y)], egui::Stroke::new(4.5, halo));
+        p.line_segment([egui::pos2(xa, y), egui::pos2(xb, y)], egui::Stroke::new(1.2, core));
+    }
+    // Short violet wrap down the left edge, fading out: soft lip, not an L-rim.
+    for i in 0..6 {
+        let t = i as f32 / 5.0;
+        let yy = rect.top() + r * t;
+        let a = (64.0 * (1.0 - t)) as u8;
+        p.line_segment([egui::pos2(rect.left() + 0.5, yy), egui::pos2(rect.left() + 0.5, yy + r / 5.0 + 0.5)], egui::Stroke::new(3.5, egui::Color32::from_rgba_unmultiplied(COMPOSER_EDGE.r(), COMPOSER_EDGE.g(), COMPOSER_EDGE.b(), a / 3)));
+        p.line_segment([egui::pos2(rect.left() + 0.5, yy), egui::pos2(rect.left() + 0.5, yy + r / 5.0 + 0.5)], egui::Stroke::new(1.2, egui::Color32::from_rgba_unmultiplied(COMPOSER_EDGE.r(), COMPOSER_EDGE.g(), COMPOSER_EDGE.b(), a)));
+    }
+    // Light pooled at the send button: soft blue halo against the enclosure side.
+    let send_c = egui::pos2(rect.right() - 10.0 - 18.0 - 6.0, rect.center().y);
+    for i in (0..5).rev() {
+        let rr = 34.0 - i as f32 * 5.0;
+        p.circle(send_c, rr, egui::Color32::from_rgba_unmultiplied(30, 100, 255, 6 + i as u8 * 2), egui::Stroke::NONE);
+    }
 }
 
 /// Record an exchange. With an installed backend the prompt runs through the host's AI
