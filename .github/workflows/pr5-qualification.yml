@@ -1,0 +1,58 @@
+name: pr5-qualification
+
+# Temporary CI qualification for PR #5 (automation enhancement preflight, stacked on the
+# live-session adapter). Runs the exact bounded offline commands, the full package suite
+# with no fail-fast, and a scoped rustfmt check.
+on:
+  push:
+    branches: [ci/qualify-pr-5]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: never
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libasound2-dev libudev-dev
+      - name: Fetch dependencies (warm offline cache)
+        run: cargo fetch --locked
+      - name: Enhancement preflight tests (exact command)
+        run: |
+          set -o pipefail
+          cargo test --offline --locked -p fotodit-automation --test ai_enhancement_preflight 2>&1 | tee ai-enhancement-preflight.txt
+      - name: Live-session adapter tests (exact command)
+        if: always()
+        run: |
+          set -o pipefail
+          cargo test --offline --locked -p fotodit-automation --test ai_live_session 2>&1 | tee ai-live-session.txt
+      - name: Full automation package suite (no fail-fast)
+        if: always()
+        run: |
+          set -o pipefail
+          cargo test --locked --no-fail-fast -p fotodit-automation 2>&1 | tee full-suite.txt
+      - name: rustfmt check on PR files
+        if: always()
+        run: |
+          rustfmt --edition 2024 --config skip_children=true --check crates/automation/src/ai/enhancement_preflight.rs crates/automation/src/ai/execution.rs crates/automation/src/ai/mod.rs crates/automation/src/ai/planner.rs crates/automation/tests/ai_enhancement_preflight.rs crates/automation/tests/ai_live_session.rs 2>&1 | tee rustfmt.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pr5-qualification-output
+          path: |
+            ai-enhancement-preflight.txt
+            ai-live-session.txt
+            full-suite.txt
+            rustfmt.txt
