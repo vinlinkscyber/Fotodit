@@ -26,7 +26,7 @@ jobs:
       - name: Install display and capture tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb imagemagick x11-apps \
+          sudo apt-get install -y xvfb imagemagick x11-apps xdotool \
             libxkbcommon-x11-0 libxcb-xkb1 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
             libxcb-randr0 libxcb-render-util0 \
             libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
@@ -42,8 +42,11 @@ jobs:
             APP=$!
             sleep 30
             import -window root /tmp/fotodit-1.png
-            sleep 3
+            xdotool key --delay 200 Return
+            sleep 4
             import -window root /tmp/fotodit-2.png
+            sleep 2
+            import -window root /tmp/fotodit-3.png
             kill $APP || true
           '
       - uses: actions/upload-artifact@v4
