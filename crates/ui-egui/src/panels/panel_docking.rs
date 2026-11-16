@@ -88,7 +88,7 @@ fn permissions(id: &String) -> Permissions {
 
 /// The width of the dock column in a layout built from the native dock.
 fn default_width(pro: bool) -> f32 {
-    if pro { 290.0 } else { 300.0 }
+    if pro { 348.0 } else { 300.0 }
 }
 
 /// The window id of the Studio themes' floating Properties group in a layout built each frame:

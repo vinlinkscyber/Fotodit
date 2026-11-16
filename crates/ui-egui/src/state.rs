@@ -108,7 +108,7 @@ impl Default for Panels {
             dock: true,
             hidden_by_tab: None,
             full_screen_chrome: false,
-            rail: true,
+            rail: false,
             menu_bar: true,
             gradient_editor: false,
             context_task_bar: true,
