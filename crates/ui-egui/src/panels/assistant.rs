@@ -425,8 +425,9 @@ fn input_row(ui: &mut egui::Ui, state: &mut AssistantState) {
                 let sendable = !state.draft.trim().is_empty();
                 let (send_rect, send_click) = ui.allocate_exact_size(egui::vec2(38.0, 38.0), egui::Sense::click());
                 let send_click = send_click.on_hover_cursor(egui::CursorIcon::PointingHand);
-                // Bright electric-blue send with a white plane; muted only while empty.
-                let send_fill = if sendable { ACCENT } else { egui::Color32::from_rgb(38, 52, 104) };
+                // Bright electric-blue send with a white plane, matching the reference even
+                // while empty; an empty draft still cannot be sent (gated below).
+                let send_fill = ACCENT;
                 ui.painter().rect_filled(send_rect, 12.0, send_fill);
                 crate::icons::paint(ui, send_rect, "send", 17.0, egui::Color32::WHITE);
                 if (send_click.clicked() || enter) && sendable {
