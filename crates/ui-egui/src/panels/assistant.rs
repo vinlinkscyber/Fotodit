@@ -4,6 +4,7 @@
 use super::{FotoditApp, Tokens};
 
 /// One chat exchange: what the user asked, and what the app answered.
+#[derive(Clone)]
 struct Exchange {
     user: String,
     assistant: String,

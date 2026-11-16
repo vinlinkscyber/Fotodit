@@ -103,6 +103,7 @@ impl Default for Panels {
             brush_settings: false,
             brushes: false,
             character: false,
+            assistant: true,
             toolbar_double: false,
             dock: true,
             hidden_by_tab: None,
