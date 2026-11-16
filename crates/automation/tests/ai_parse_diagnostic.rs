@@ -2,7 +2,7 @@
 //! parser return for each case against the specified synthetic fixture. Diagnostic only:
 //! it asserts nothing about parser quality; the printed output is the evidence.
 
-use fotodit_automation::ai::{AiPlanner, DeterministicRulePlanner, NaturalLanguageEngine, VisualElement, VisualScene};
+use fotodit_automation::ai::{AiPlanner, CommandCatalog, DeterministicRulePlanner, NaturalLanguageEngine, VisualElement, VisualScene};
 use fotodit_automation::AiContext;
 use std::time::Instant;
 
@@ -71,7 +71,8 @@ fn ten_prompt_parse_diagnostic_prints_raw_outputs() {
     let scene = fixture();
     let prior_prompt = "Set the opacity of the Portrait layer to 60%.";
     let prior_intent = engine.parse_intent(prior_prompt, &scene, &context).expect("case 01 parses");
-    let plan = DeterministicRulePlanner.plan(&prior_intent, &scene, &context).expect("case 01 plans");
+    let planner = DeterministicRulePlanner::new(CommandCatalog::new());
+    let plan = planner.plan(&prior_intent, &scene, &context).expect("case 01 plans");
     context.record_interaction(prior_prompt.to_string(), plan);
     println!("=== CASE 08 SETUP ===");
     println!("prior interaction recorded: {prior_prompt}");
