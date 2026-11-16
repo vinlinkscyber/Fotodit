@@ -27,6 +27,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libxkbcommon-dev libwayland-dev libasound2-dev libudev-dev
+      - name: Fetch dependencies (warm offline cache)
+        run: cargo fetch --locked
       - name: PR test file (exact command)
         run: |
           set -o pipefail
