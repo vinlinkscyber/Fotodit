@@ -50,6 +50,12 @@ impl ExecutionEngine {
         session: &mut S,
         plan: &EditingPlan,
     ) -> Result<ExecutionResult, AiError> {
+        // Early, user-readable state checks, not a safety or authorization boundary.
+        // Every command still goes through the host's authoritative admission path.
+        if plan.category == super::IntentCategory::PhotoEnhancement {
+            let document = session.inspect_active()?.ok_or(AiError::NoDocumentOpen)?;
+            super::enhancement_preflight::validate(&document, plan)?;
+        }
         let mut executed = Vec::new();
         let total_steps = plan.steps.len();
 

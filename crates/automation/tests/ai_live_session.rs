@@ -40,7 +40,7 @@ fn plan(commands: &[&str]) -> EditingPlan {
     EditingPlan {
         title: "Offline boundary test".into(),
         rationale: "Exercise the host dispatcher without a provider".into(),
-        category: IntentCategory::PhotoEnhancement,
+        category: IntentCategory::GeneralEditing,
         steps: commands
             .iter()
             .map(|command| PlanStep { command: (*command).to_string(), params: json!({"marker": command}), description: (*command).to_string() })
@@ -156,7 +156,7 @@ fn borrowed_adapter_changes_original_document_not_a_second_session_and_supports_
         let plan = EditingPlan {
             title: "Invert".into(),
             rationale: "Offline command routing".into(),
-            category: IntentCategory::PhotoEnhancement,
+            category: IntentCategory::GeneralEditing,
             steps: vec![PlanStep { command: "image.adjustments.invert".into(), params: json!({}), description: "Invert active document".into() }],
             creates_document: false,
             target_size: None,
@@ -220,7 +220,7 @@ fn headless_wrapper_and_generic_planning_agree() {
 }
 
 #[test]
-fn successful_generic_process_inspects_host_twice_and_records_context() {
+fn successful_enhancement_process_rechecks_host_before_dispatch_and_records_context() {
     let mut fixture = Session::new();
     fixture.execute("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
     let document = fotodit_engine::inspect::document(fixture.active().unwrap());
@@ -230,7 +230,7 @@ fn successful_generic_process_inspects_host_twice_and_records_context() {
     let prompt = "Make this photograph look professional and enhance clarity";
     let result = ai.process_instruction_in(&mut host, prompt, &mut context).unwrap();
     assert!(result.execution.is_success);
-    assert_eq!(host.inspections.get(), 2);
+    assert_eq!(host.inspections.get(), 3);
     assert_eq!(host.calls.len(), result.plan.steps.len());
     assert_eq!(context.prompt_history, vec![prompt.to_string()]);
     assert_eq!(context.executed_plans, vec![result.plan]);
