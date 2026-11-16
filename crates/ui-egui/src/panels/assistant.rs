@@ -81,7 +81,10 @@ pub(crate) fn assistant_panel(app: &mut FotoditApp, ui: &mut egui::Ui) {
     ui.ctx().data_mut(|d| d.insert_temp(state_id(), state.clone()));
 
     if demo {
-        let mut state = state;
+        // The floating preview shows the empty state (greeting + chips); the docked
+        // panel keeps the seeded transcript so one capture reviews both layouts.
+        let demo_id = egui::Id::new("assistant-demo-state");
+        let mut demo_state = ui.ctx().data_mut(|d| d.get_temp::<AssistantState>(demo_id).unwrap_or_default());
         let mut open = true;
         egui::Window::new("AI Assistant")
             .default_pos([80.0, 90.0])
@@ -90,8 +93,9 @@ pub(crate) fn assistant_panel(app: &mut FotoditApp, ui: &mut egui::Ui) {
             .collapsible(false)
             .open(&mut open)
             .show(ui.ctx(), |ui| {
-                panel_chrome(ui, &mut state, None);
+                panel_chrome(ui, &mut demo_state, None);
             });
+        ui.ctx().data_mut(|d| d.insert_temp(demo_id, demo_state));
         ui.ctx().data_mut(|d| d.insert_temp(state_id(), state));
     }
 }
