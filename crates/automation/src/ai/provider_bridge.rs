@@ -495,6 +495,9 @@ impl HttpTransport for SystemCurlTransport {
         cmd.arg(url);
         cmd.arg("--max-time").arg(format!("{}", timeout.as_secs().max(1)));
 
+        // Keep the HTTP status separate from the arbitrary binary response body.
+        cmd.arg("-w").arg("\n%{http_code}");
+
         for &(k, v) in headers {
             cmd.arg("-H").arg(format!("{k}: {v}"));
         }
@@ -505,8 +508,30 @@ impl HttpTransport for SystemCurlTransport {
             return Err(AiError::PlanningError(format!("curl image request failed: {err_msg}")));
         }
 
-        Ok((200, output.stdout))
+        split_raw_http_response(output.stdout)
     }
+}
+
+// curl appends exactly one newline and three status digits after the binary body.
+// Split from the end so embedded newlines, NULs and non-UTF8 image bytes survive.
+fn split_raw_http_response(mut output: Vec<u8>) -> Result<(u16, Vec<u8>), AiError> {
+    let invalid = || AiError::PlanningError("Missing or invalid curl image HTTP status".into());
+    let suffix = output.len().checked_sub(4).ok_or_else(invalid)?;
+    if output[suffix] != b'\n' {
+        return Err(invalid());
+    }
+    let digits = &output[suffix + 1..];
+    if !digits.iter().all(u8::is_ascii_digit) {
+        return Err(invalid());
+    }
+    let status = u16::from(digits[0] - b'0') * 100
+        + u16::from(digits[1] - b'0') * 10
+        + u16::from(digits[2] - b'0');
+    if !(100..=599).contains(&status) {
+        return Err(invalid());
+    }
+    output.truncate(suffix);
+    Ok((status, output))
 }
 
 /// The unified AI Provider Bridge orchestrating load balancing and dual-pipeline fallback.
@@ -950,6 +975,109 @@ fn strip_markdown_fences(text: &str) -> String {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn raw_http_status_preserves_binary_body_and_error_statuses() -> Result<(), AiError> {
+        for status in [200, 401, 402, 429, 500, 503] {
+            let body = vec![0, 255, 137, b'\n', b'2', b'0', b'0', b'\n'];
+            let mut output = body.clone();
+            output.extend_from_slice(format!("\n{status}").as_bytes());
+            let (actual_status, actual_body) = split_raw_http_response(output)?;
+            assert_eq!(actual_status, status);
+            assert_eq!(actual_body, body);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn raw_http_status_preserves_empty_body() -> Result<(), AiError> {
+        let (status, body) = split_raw_http_response(b"\n200".to_vec())?;
+        assert_eq!(status, 200);
+        assert!(body.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn raw_http_status_rejects_missing_or_invalid_suffix() {
+        for output in [
+            b"".as_slice(),
+            b"200",
+            b"body200",
+            b"body\n20",
+            b"body\n2000",
+            b"body\n2x0",
+            b"body\n000",
+            b"body\n099",
+            b"body\n600",
+            b"body\n200\n",
+        ] {
+            assert!(split_raw_http_response(output.to_vec()).is_err());
+        }
+    }
+
+    // Loopback-only fixture: exercise the real curl command, not MockTransport.
+    // The runner must unset proxy variables (or set NO_PROXY=127.0.0.1).
+    #[test]
+    fn raw_http_status_system_curl_loopback_regression() -> Result<(), Box<dyn std::error::Error>> {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        for status in [200, 401, 402, 429, 500, 503] {
+            let listener = TcpListener::bind("127.0.0.1:0")?;
+            listener.set_nonblocking(true)?;
+            let address = listener.local_addr()?;
+            let body = vec![137, 0, 255, b'\n', b'2', b'0', b'0', b'\n'];
+            let expected = body.clone();
+            let server = std::thread::spawn(move || -> std::io::Result<()> {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            if Instant::now() >= deadline {
+                                return Err(std::io::Error::new(
+                                    std::io::ErrorKind::TimedOut,
+                                    "curl did not connect to loopback fixture",
+                                ));
+                            }
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(error) => return Err(error),
+                    }
+                };
+                stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+                stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+                let mut request = Vec::new();
+                let mut byte = [0];
+                while !request.ends_with(b"\r\n\r\n") && request.len() < 8192 {
+                    if stream.read(&mut byte)? == 0 {
+                        break;
+                    }
+                    request.push(byte[0]);
+                }
+                write!(
+                    stream,
+                    "HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len(),
+                )?;
+                stream.write_all(&body)?;
+                Ok(())
+            });
+            let response = SystemCurlTransport.fetch_raw_bytes(
+                &format!("http://{address}/image"),
+                &[],
+                Duration::from_secs(2),
+            );
+            let served = server
+                .join()
+                .map_err(|_| std::io::Error::other("loopback fixture thread failed"))?;
+            served?;
+            let (actual_status, actual_body) = response?;
+            assert_eq!(actual_status, status);
+            assert_eq!(actual_body, expected);
+        }
+        Ok(())
+    }
 
     struct MockTransport {
         call_count: Arc<AtomicUsize>,
