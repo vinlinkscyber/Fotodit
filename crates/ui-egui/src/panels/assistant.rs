@@ -136,7 +136,7 @@ fn edge_run(painter: &egui::Painter, from: egui::Pos2, to: egui::Pos2, width: f3
 
 /// The enclosure: rounded gradient on a dark navy base, a fine violet rim, small
 /// localized purple (title) and blue (lower-right) light, and a clean electric-blue
-/// illumination that rises along the lower and right edges - glass, not a broad wash.
+/// illumination that rises along the lower and left edges - glass, not a broad wash.
 fn panel_surface(ui: &egui::Ui, rect: egui::Rect) {
     let painter = ui.painter();
     // Barely-there outer halo: two expanding outlines at very low alpha.
@@ -153,9 +153,9 @@ fn panel_surface(ui: &egui::Ui, rect: egui::Rect) {
     // Electric-blue edge illumination, localized at the lower-left like the reference: a
     // smooth corner glow with continuous runs climbing the left edge and walking the
     // bottom edge to the right, both easing out - glass, not rings or dashes.
-    radial_pool(painter, egui::pos2(rect.left() + 12.0, rect.bottom() - 12.0), 46.0, ACCENT, 52);
-    edge_run(painter, egui::pos2(rect.left() + 1.5, rect.bottom() - RIM_RADIUS - 6.0), egui::pos2(rect.left() + 1.5, rect.bottom() - RIM_RADIUS - 168.0), 3.0, ACCENT, 96);
-    edge_run(painter, egui::pos2(rect.left() + RIM_RADIUS + 6.0, rect.bottom() - 1.5), egui::pos2(rect.left() + RIM_RADIUS + 168.0, rect.bottom() - 1.5), 3.0, ACCENT, 96);
+    radial_pool(painter, egui::pos2(rect.left() + 12.0, rect.bottom() - 12.0), 92.0, ACCENT, 64);
+    edge_run(painter, egui::pos2(rect.left() + 1.5, rect.bottom() - RIM_RADIUS - 6.0), egui::pos2(rect.left() + 1.5, rect.bottom() - RIM_RADIUS - 280.0), 4.0, ACCENT, 112);
+    edge_run(painter, egui::pos2(rect.left() + RIM_RADIUS + 6.0, rect.bottom() - 1.5), egui::pos2(rect.left() + RIM_RADIUS + 280.0, rect.bottom() - 1.5), 4.0, ACCENT, 112);
     // Glossy cool sheen along the upper-left rim: glass catching light, very faint.
     edge_run(painter, egui::pos2(rect.left() + RIM_RADIUS + 12.0, rect.top() + 1.0), egui::pos2(rect.left() + rect.width() * 0.55, rect.top() + 1.0), 2.0, egui::Color32::from_rgb(190, 210, 255), 24);
     // Fine violet rim, stroke only, not a luminous perimeter.
@@ -516,8 +516,8 @@ fn input_row(ui: &mut egui::Ui, state: &mut AssistantState, app: Option<&mut Fot
         run.push(corner + egui::vec2(r * a.cos(), r * a.sin()));
     }
     run.push(egui::pos2(rect.left() + 0.5, rect.bottom() - r));
-    let bloom = egui::Color32::from_rgba_unmultiplied(COMPOSER_EDGE.r(), COMPOSER_EDGE.g(), COMPOSER_EDGE.b(), 46);
-    ui.painter().add(egui::Shape::line(run.clone(), egui::Stroke::new(3.5, bloom)));
+    let bloom = egui::Color32::from_rgba_unmultiplied(COMPOSER_EDGE.r(), COMPOSER_EDGE.g(), COMPOSER_EDGE.b(), 72);
+    ui.painter().add(egui::Shape::line(run.clone(), egui::Stroke::new(5.5, bloom)));
     ui.painter().add(egui::Shape::line(run, egui::Stroke::new(1.5, COMPOSER_EDGE)));
 }
 
