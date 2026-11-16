@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::{AiError, EditingPlan};
+use super::{AiError, EditingPlan, LiveEditSession};
 use crate::headless::Headless;
 
 /// Detailed trace of an executed plan step.
@@ -40,11 +40,21 @@ pub struct ExecutionEngine;
 impl ExecutionEngine {
     /// Execute an editing plan step-by-step with automatic transactional rollback on failure.
     pub fn execute_plan(headless: &mut Headless, plan: &EditingPlan) -> Result<ExecutionResult, AiError> {
+        Self::execute_plan_in(headless, plan)
+    }
+
+    /// Execute on the host's admitted command path, including rollback attempts.
+    /// Preserves the existing one-undo-per-successful-step behavior; it is not a
+    /// universal atomic transaction for non-history or cross-document commands.
+    pub fn execute_plan_in<S: LiveEditSession + ?Sized>(
+        session: &mut S,
+        plan: &EditingPlan,
+    ) -> Result<ExecutionResult, AiError> {
         let mut executed = Vec::new();
         let total_steps = plan.steps.len();
 
         for (idx, step) in plan.steps.iter().enumerate() {
-            match headless.command_run(&step.command, step.params.clone()) {
+            match session.command_run(&step.command, step.params.clone()) {
                 Ok(output) => {
                     executed.push(StepExecution {
                         step_index: idx,
@@ -69,7 +79,7 @@ impl ExecutionEngine {
                     // Transactional rollback: undo previous successful steps
                     let mut rollback_count = 0;
                     for _ in 0..idx {
-                        if headless.command_run("edit.undo", json!({})).is_ok() {
+                        if session.command_run("edit.undo", json!({})).is_ok() {
                             rollback_count += 1;
                         }
                     }
