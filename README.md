@@ -1,20 +1,18 @@
 <p align="center">
-  <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="docs/brand/plyra-logo-white.svg">
-      <img alt="Plyra" src="docs/brand/plyra-logo.svg" width="200">
-    </picture>
+  <img src="docs/images/fotodit-banner.jpg" alt="Decorative Fotodit banner artwork: an engraved nine-tailed fox curled around a camera aperture" width="100%">
 </p>
 
 <p align="center">
-  <img src="assets/app-icon/hicolor/256x256/apps/ai.storyteller.fotodit.png" width="128" height="128" alt="Fotodit icon: an engraved nine-tailed fox on a blue tile">
+  <img src="assets/app-icon/hicolor/256x256/apps/com.plyra.fotodit.png" width="128" height="128" alt="Fotodit icon: an engraved nine-tailed fox on a blue tile">
 </p>
 
 <h1 align="center">Fotodit</h1>
 
 <p align="center">
-  <b>Image editing; an open-source, clean-room reimplementation of Adobe Photoshop, rebuilt in pure Rust.</b><br>
-  Layers, masks, adjustment layers, layer styles, type, vectors, brushes and real PSD files,<br>
-  in a native app written entirely in Rust. Open source, offline, and yours.
+  <b>The image editor you can talk to.</b><br>
+  An open-source, clean-room reimplementation of Adobe Photoshop in pure Rust:<br>
+  layers, masks, adjustment layers, type, vectors, brushes and real PSD files,<br>
+  with a natural-language assistant growing on top. Open source, offline, and yours.
 </p>
 
 <p align="center">
@@ -22,20 +20,7 @@
   <img alt="macOS · Windows · Linux · FreeBSD · Web" src="https://img.shields.io/badge/macOS%20%C2%B7%20Windows%20%C2%B7%20Linux%20%C2%B7%20FreeBSD%20%C2%B7%20Web-native-2f7bf5?style=flat-square">
   <img alt="License: MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-3a3a3a?style=flat-square">
   <img alt="Status: early alpha" src="https://img.shields.io/badge/status-early%20alpha-d69e2e?style=flat-square">
-  <br>
-  <a href="https://sonarcloud.io/project/overview?id=storytold_fotodit"><img alt="Scanned by SonarCloud" src="https://img.shields.io/badge/Scanned_by-SonarCloud-4b9fd5?style=flat-square&logo=sonarqubecloud&logoColor=white"></a>
-  <a href="https://coderabbit.ai"><img alt="Reviewed by CodeRabbit" src="https://img.shields.io/coderabbit/prs/github/plyra/fotodit?style=flat-square&label=Reviewed%20by%20CodeRabbit&logo=coderabbit"></a>
 </p>
-
-<p align="center">
-  <a href="https://discord.gg/plyra"><img alt="Join the Plyra community on Discord" src="https://img.shields.io/badge/Join%20us%20on%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" height="40"></a>
-</p>
-
-<p align="center">
-  <b>Fotodit</b> by Plyra
-</p>
-
-<br>
 
 <p align="center">
   <img src="docs/images/fotodit-demo.jpg" alt="Fotodit editing Hokusai's The Great Wave: a caption card with a drop shadow, Title and Credit type layers, Vibrance and Curves adjustment layers, and the Curves editor drawn over the image's histogram" width="100%">
@@ -44,20 +29,21 @@
   <i>The Great Wave off Kanagawa</i>, Katsushika Hokusai, c. 1831</sub>
 </p>
 
-> [!NOTE]
-> **Plyra is a community of artists from all walks of life.** Digital, generative, music,
-> games &mdash; if you make things, you're one of us. **[Come say hi on Discord](https://discord.gg/plyra).**
-
 <p align="center">
   <a href="#features">Features</a> ·
+  <a href="#tell-it-what-you-want">Talk to it</a> ·
   <a href="#everything-in-the-box">Everything in the box</a> ·
   <a href="#psd-without-compromise">PSD</a> ·
   <a href="#built-for-agents">Agents</a> ·
   <a href="#under-the-hood">Under the hood</a> ·
   <a href="#get-started">Get started</a> ·
-  <a href="#downloads">Downloads</a> ·
-  <a href="https://discord.gg/plyra">Discord</a>
+  <a href="#downloads">Downloads</a>
 </p>
+
+<br>
+
+> [!IMPORTANT]
+> **Status:** Fotodit is in early alpha, and we want to be straight about where it stands: much of Photoshop's feature surface exists in some form, but **it is not yet a Photoshop replacement for daily professional work**. The biggest gaps are AI/generative features, 15 missing tools, depth in typography and pro workflows, and plug-in compatibility. Every Photoshop menu item is wired to a command ([`docs/parity-checklist.md`](docs/parity-checklist.md)), but that measures wiring, not behaviour. The honest, dimension-by-dimension picture and where we're going next are in the [roadmap](ROADMAP.md) and [parity assessment](docs/target-app-parity.md). Expect rough edges, and please file issues (include your OS, document size, layer count and a screenshot).
 
 <br>
 
@@ -175,6 +161,31 @@ Every screenshot here is the real app at work on public-domain art, rendered off
 
 <br>
 
+## Tell it what you want
+
+<table>
+  <tr>
+    <td width="42%" valign="top">
+      <img src="docs/images/fotodit-assistant-art.jpg" alt="Decorative artwork: a speech bubble flowing into a brush stroke that paints a tiny landscape" width="100%">
+      <br>
+      <sub>Artwork, not a screenshot: the assistant is under active development.</sub>
+    </td>
+    <td width="58%" valign="top">
+      Describe the edit in plain English. Fotodit's assistant plans it against the same command registry the UI uses, then runs the steps for you.
+      <br><br>
+      <b>Multi-provider by design.</b> A text and planning pipeline (Gemini, Cohere and a lightweight worker) with context-aware load balancing, rate-limit ceilings and circuit-breaker cooldowns, plus a fully offline rule-based planner when every remote provider is unavailable.
+      <br><br>
+      <b>Image generation.</b> Text-to-image through Pollinations with Gemini Imagen as fallback, and a local procedural generator as the last resort. Generated images land as ordinary layers.
+      <br><br>
+      <b>Offline first.</b> Everything outside the AI features runs locally, with no account and no cloud.
+      <br><br>
+      The assistant is early and under active development. Architecture and configuration: <a href="docs/ai-providers.md">docs/ai-providers.md</a>.
+    </td>
+  </tr>
+</table>
+
+<br>
+
 ## Everything in the box
 
 <table>
@@ -255,64 +266,21 @@ The desktop app also offers an authenticated, loopback-only control channel (`fo
 ## Get started
 
 ```sh
-git clone https://github.com/plyra/fotodit
-cd fotodit
+git clone https://github.com/vinlinkscyber/Fotodit
+cd Fotodit
 cargo run --release -p fotodit -- image.psd   # the desktop app
 cargo test --workspace                           # the test suite
 ```
 
-Japanese fonts for the UI and Type tool come from Plyra's optional fonts package (desktop release builds always include it). Without it Fotodit uses your system's CJK fonts: check out the fonts repository next to this one and point `PLYRA_FONTS_DIR` at it, then `cargo run --release -p fotodit`.
+Japanese fonts for the UI and Type tool come from an optional fonts package; without it Fotodit uses your system's CJK fonts. Check out the fonts repository next to this one and point `PLYRA_FONTS_DIR` at it, then `cargo run --release -p fotodit`.
 
 New contributors and AI agents: start with [`AGENTS.md`](AGENTS.md), then [`docs/`](docs/).
 
-Installers for macOS, Windows, Linux, FreeBSD and the web are attached to each [GitHub release](https://github.com/plyra/fotodit/releases). On Linux you can pick an AppImage, a `.deb`, an `.rpm`, a tarball or a Flatpak bundle. The bundle needs the freedesktop runtime from [Flathub](https://flathub.org/setup), which `flatpak` offers to install along with it:
-
-```sh
-flatpak install --user fotodit-<version>-linux-x86_64.flatpak   # or -linux-aarch64
-flatpak run ai.storyteller.fotodit
-```
-
-The Flatpak prints through the host's CUPS socket (File › Print talks IPP to it directly, no `lp` needed); without CUPS, or without a printer, File › Print opens the system print dialog through the print portal. See [printing](docs/printing.md).
-
-The AppImage needs no install: the first run registers its launcher icon and menu entry in `~/.local/share` so the dock shows Fotodit's icon on Wayland. Set `FOTODIT_NO_DESKTOP_INTEGRATION=1` to skip that, and see [`docs/releasing.md`](docs/releasing.md) › Linux to undo it.
-
-To use the bundled CLI, run `./fotodit-<version>-linux-x86_64.AppImage --cli --help`, or `--cli mcp` to start the MCP server on stdio. CLI launches skip desktop integration. A symlink named `fotodit-cli` also selects the CLI; see [`docs/development.md`](docs/development.md#headless-cli).
-
-On a Wayland session, files dropped on the window don't open yet: winit 0.30, the windowing library under egui, has no Wayland drag and drop (#386). Use File › Open, or copy the image in your file manager and paste it with Ctrl+V. To drag and drop, start Fotodit under XWayland: `WAYLAND_DISPLAY= fotodit`, `WAYLAND_DISPLAY= ./fotodit-<version>-linux-x86_64.AppImage`, or `flatpak run --nosocket=wayland --socket=x11 ai.storyteller.fotodit`. On Wayland, Fotodit shows the command for your install in a notice until you dismiss it. Preferences › Performance › Linux display server = X11 does the same on every launch. With a fractional display scale (125%, 150%, 175%) an XWayland window is drawn at a lower resolution and enlarged by the compositor, so the interface is blurred there; native Wayland stays sharp (#1072).
-
-On macOS, the command-line tool comes as `fotodit-cli-<version>-macos-universal.zip`. The binary is signed with the same Developer ID as the app and notarized by Apple. A bare binary can't carry a stapled notarization ticket the way the DMG does, so the first time you run it macOS checks the notarization online. You can confirm it yourself:
-
-```sh
-ditto -x -k fotodit-cli-<version>-macos-universal.zip .
-spctl --assess --type install -vv fotodit-cli-<version>-macos-universal/fotodit-cli
-# ... accepted, source=Notarized Developer ID
-```
-
-On FreeBSD 14 (x86_64), the release has a tarball laid out like `/usr/local`. Install the runtime libraries, then unpack it there:
-
-```sh
-pkg install libxkbcommon wayland libX11 libXcursor libXrandr libXi libxcb mesa-libs vulkan-loader gtk3 fontconfig freetype2 alsa-lib
-tar -xzf fotodit-<version>-freebsd-x86_64.tar.gz --strip-components 1 -C /usr/local
-fotodit
-```
+On a Wayland session, files dropped on the window don't open yet (winit 0.30 has no Wayland drag and drop): use File › Open or paste with Ctrl+V, or start Fotodit under XWayland with `WAYLAND_DISPLAY= fotodit`.
 
 Maintainers: [`docs/releasing.md`](docs/releasing.md) explains how releases are built, signed and published.
 
-> [!IMPORTANT]
-> **Status:** Fotodit is in early alpha, and we want to be straight about where it stands: much of Photoshop's feature surface exists in some form, but **it is not yet a Photoshop replacement for daily professional work**. The biggest gaps are AI/generative features, 15 missing tools, depth in typography and pro workflows, and plug-in compatibility. Every Photoshop menu item is wired to a command ([`docs/parity-checklist.md`](docs/parity-checklist.md)), but that measures wiring, not behaviour. The honest, dimension-by-dimension picture and where we're going next are in the [roadmap](ROADMAP.md) and [parity assessment](docs/target-app-parity.md). Expect rough edges, and please file issues (include your OS, document size, layer count and a screenshot). You can also tell us what broke on [Discord](https://discord.gg/plyra).
 
-## Community packages
-
-These installers are maintained by community members, not by the Fotodit team.
-
-On Gentoo, the [::snakebyte overlay](https://github.com/switch87/snakebyte-overlay) packages the Linux release as `media-gfx/fotodit-bin`:
-
-```sh
-eselect repository add snakebyte git https://github.com/switch87/snakebyte-overlay.git
-emaint sync -r snakebyte
-echo 'media-gfx/fotodit-bin ~amd64' >> /etc/portage/package.accept_keywords/fotodit
-emerge --ask media-gfx/fotodit-bin
-```
 
 ## Documentation
 
@@ -326,114 +294,34 @@ Security architecture, threat modeling, parser hardening, fuzzing, and vulnerabi
 
 ## Test corpora
 
-Fotodit is tested against real files: our own Photoshop-authored oracle PSDs in
-[fotodit-corpus](https://github.com/plyra/fotodit-corpus) plus the psd-tools, ag-psd and PngSuite sets, pinned and
+Fotodit is tested against real files: our own Photoshop-authored oracle PSD corpus plus the psd-tools, ag-psd and PngSuite sets, pinned and
 sha256-verified. Fetch them with `cargo xtask corpus --all` and run the tests with
 `cargo xtask test-corpus` (details in [docs/development.md](docs/development.md#test-corpora)).
 
 ## Downloads
 
-**New to Fotodit?** Download it from the Fotodit download page. That's the easiest way to install it.
+Fotodit is in early alpha and does not publish installers yet.
 
-**Want a specific build or format?** On GitHub, the [latest release](https://github.com/plyra/fotodit/releases/latest) has every build listed below, and [all releases](https://github.com/plyra/fotodit/releases) have earlier versions and their notes. `<ver>` in the file names is the version number, and `SHA256SUMS.txt` lists a checksum for every file.
-
-### Windows
-
-| Build | Installer | Portable |
-|---|---|---|
-| x64 (64-bit Intel/AMD) | `fotodit-<ver>-windows-x64.msi` | `fotodit-<ver>-windows-x64-portable.zip` |
-| arm64 (Snapdragon and other ARM PCs) | `fotodit-<ver>-windows-arm64.msi` | `fotodit-<ver>-windows-arm64-portable.zip` |
-| x86 (32-bit) | `fotodit-<ver>-windows-x86.msi` | `fotodit-<ver>-windows-x86-portable.zip` |
-
-Installers and executables are code-signed.
-
-### macOS
-
-| Build | File | Notes |
-|---|---|---|
-| App, universal (Apple silicon + Intel) | `fotodit-<ver>-macos-universal.dmg` | Signed and notarized |
-| Command-line tool, universal | `fotodit-cli-<ver>-macos-universal.zip` | Signed and notarized |
-
-### Linux
-
-| Format | x86_64 | aarch64 (ARM64) | Notes |
-|---|---|---|---|
-| AppImage | `fotodit-<ver>-linux-x86_64.AppImage` | `fotodit-<ver>-linux-aarch64.AppImage` | Runs anywhere; updates itself with [AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate) (`.zsync` files) |
-| Flatpak | `fotodit-<ver>-linux-x86_64.flatpak` | `fotodit-<ver>-linux-aarch64.flatpak` | Sandboxed; `flatpak install --user <file>` |
-| Debian/Ubuntu | `fotodit-<ver>-linux-x86_64.deb` | `fotodit-<ver>-linux-aarch64.deb` | |
-| Fedora/RHEL/openSUSE | `fotodit-<ver>-linux-x86_64.rpm` | `fotodit-<ver>-linux-aarch64.rpm` | |
-| Tarball | `fotodit-<ver>-linux-x86_64.tar.gz` | `fotodit-<ver>-linux-aarch64.tar.gz` | Unpack anywhere |
-
-RISC-V (riscv64): `fotodit-<ver>-linux-riscv64.tar.gz` only, built against Ubuntu 24.04 (needs glibc 2.39+).
-
-### FreeBSD
-
-| Build | File |
-|---|---|
-| x86_64 | `fotodit-<ver>-freebsd-x86_64.tar.gz` |
-
-### Web (WebAssembly)
-
-| Build | File | Notes |
-|---|---|---|
-| Static site | `fotodit-web-<ver>.zip` | Runs in a modern browser; host it on any static server |
-
-## The Plyra Apps
-
-Fotodit is one of the **Plyra Apps**: free, open-source creative tools from the
-Plyra team, each written from scratch in Rust and each able to
-stand on its own.
-
-| App | What it's for |
-|---|---|
-| **Fotodit** | Image editing: layers, masks, type and real PSD files |
-
-The Plyra Apps share the same conventions: clean-room and pure Rust, native on macOS, Windows and Linux, in the browser via WebAssembly, and fully drivable by agents.
-
-<br>
-
-<p align="center">
-  <a href="https://discord.gg/plyra"><img alt="Join the Plyra community on Discord" src="https://img.shields.io/badge/Join%20us%20on%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" height="40"></a>
-</p>
-
-<h3 align="center">Come make things with us</h3>
-
-<p align="center">
-  Our Discord is where artists of every kind hang out: people who paint, shoot, draw, cut film,
-  set type, and people still figuring out what they like to make. Share what you're working on,
-  ask for help, tell us what's broken, or tell us what you wish these tools could do.
-  Whatever your medium and however long you've been at it, you're welcome here.
-</p>
-
-<p align="center">
-  <a href="https://discord.gg/plyra"><b>discord.gg/plyra</b></a> ·
-  <b>Plyra</b> · <b>The Plyra Apps</b> · <b>Fotodit</b>
-</p>
+- **Windows x64:** the latest successful [build workflow run](https://github.com/vinlinkscyber/Fotodit/actions/workflows/build-windows.yml) attaches a `fotodit-windows-x64` artifact: a portable zip with `fotodit.exe` and `fotodit-cli.exe`. Unzip and run, no install needed. The binaries are unsigned, so Windows shows an "unrecognized app" warning; choose **More info → Run anyway**. Downloading Actions artifacts requires a GitHub login.
+- **macOS, Linux, FreeBSD and WebAssembly:** build from source (see Get started). The engine and UI are pure Rust and compile for all of them.
 
 ---
 
 ## License and credits
 
-Fotodit is dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
-Copyright (c) 2026 Plyra Team and the Fotodit contributors. Required notices are in [NOTICE](NOTICE).
+Fotodit is dual-licensed under MIT or Apache-2.0, at your option.
+Copyright (c) 2026 Plyra Team and the Fotodit contributors.
 
-Bundled fonts, icons, images and other assets keep their own open licenses; each one is listed
-with its author, source and license in [ATTRIBUTION.md](ATTRIBUTION.md).
+Bundled fonts, icons, images and other assets keep their own open licenses.
 
 Every artwork shown is in the public domain (Wikimedia Commons, NASA, U.S. National Archives); sources are listed in [`docs/images/SOURCES.md`](docs/images/SOURCES.md).
-
-The Plyra name, wordmark and logos in [`docs/brand/`](docs/brand/) are trademarks of the
-Plyra Team and are not covered by this license. They may be used only unmodified, and only as
-part of this repository and Fotodit, under [`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt).
-Forks and modified versions must remove them.
 
 <sub>Adobe, Photoshop, Illustrator, Premiere Pro, Lightroom, Acrobat, After Effects and InDesign are trademarks or registered trademarks of Adobe Inc. in the United States and/or other countries. Fotodit is an independent, open-source project and is not affiliated with, sponsored by or endorsed by Adobe Inc.; these names are used only to describe the workflows it is compatible with.</sub>
 
 <p align="center">
-  <img alt="Plyra" src="docs/brand/plyra-mark.svg" width="28"><br>
-  <sub>Made by the Plyra team and community.</sub>
+  <sub>Made by the Fotodit team and contributors.</sub>
 </p>
 
 ## Star history
 
-[![Star History Chart](https://api.star-history.com/svg?repos=plyra/fotodit&type=Date&legend=top-left)](https://www.star-history.com/?repos=plyra%2Ffotodit&type=date&legend=top-left)
+[![Star History Chart](https://api.star-history.com/svg?repos=vinlinkscyber/Fotodit&type=Date&legend=top-left)](https://www.star-history.com/?repos=vinlinkscyber%2FFotodit&type=date&legend=top-left)

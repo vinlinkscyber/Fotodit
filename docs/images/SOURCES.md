@@ -12,6 +12,9 @@
 | `fotodit-type.jpg` | Fotodit UI screenshot (offscreen snapshot) with *Among the Sierra Nevada, California*, Albert Bierstadt, 1868 | Artwork: public domain, [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Albert_Bierstadt_-_Among_the_Sierra_Nevada,_California_-_Google_Art_Project.jpg). UI: this project. |
 | `fotodit-export-light.jpg` | Fotodit UI screenshot (offscreen snapshot) with *The Kiss*, Gustav Klimt, 1907–1908 | Artwork: public domain, [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Gustav_Klimt_016.jpg). UI: this project. |
 
+| `fotodit-banner.jpg` | Decorative banner artwork (engraved nine-tailed fox around a camera aperture), AI-generated for this repository | Generated artwork, not an app screenshot. |
+| `fotodit-assistant-art.jpg` | Decorative spot illustration for the natural-language assistant section, AI-generated for this repository | Generated artwork, not an app screenshot. |
+
 Screenshots must use famous public-domain artwork (or content made in the app), never personal photos.
 
 # Other bundled data
