@@ -24,11 +24,11 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    uses: plyra/craft-common-actions/.github/workflows/refresh-contributors.yml@main
+    uses: storytold/craft-common-actions/.github/workflows/refresh-contributors.yml@main
   release:
     needs: credits
     # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
-    uses: plyra/craft-common-actions/.github/workflows/release.yml@main
+    uses: storytold/craft-common-actions/.github/workflows/release.yml@main
     with:
       app-name: fotodit
       app-title: Fotodit
