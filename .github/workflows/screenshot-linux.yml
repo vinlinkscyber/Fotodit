@@ -1,7 +1,7 @@
 name: screenshot-linux
 
 # Captures the GUI on a headless Linux display so the app's look can be reviewed
-# without a local machine. Manual trigger only.
+# without a local machine. Manual trigger only. Re-run for the navy-glass theme default and dock width build.
 on:
   workflow_dispatch:
   push:
@@ -37,17 +37,51 @@ jobs:
       - name: Launch and capture
         run: |
           export WGPU_BACKEND=gl
-          xvfb-run -a -s "-screen 0 1600x1000x24" bash -c '
-            ./target/debug/fotodit &
+          convert -size 1200x800 gradient:steelblue-firebrick -colors 32 /tmp/sample.png
+          # Fixed 1600x900 root and an app window pinned to it (there is no window
+          # manager under xvfb to resize winit from outside) so captures compare 1:1
+          # with the 1600x900 reference frame.
+          xvfb-run -a -s "-screen 0 1600x900x24" bash -c '
+            FOTODIT_ASSISTANT_DEMO=1 FOTODIT_WINDOW_SIZE=1600x900 ./target/debug/fotodit /tmp/sample.png &
             APP=$!
             sleep 30
-            import -window root /tmp/fotodit-1.png
             xdotool search --name Fotodit windowactivate --sync || true
+            sleep 2
+            import -window root /tmp/fotodit-1.png
             xdotool mousemove --sync 655 687 click 1
             sleep 4
             import -window root /tmp/fotodit-2.png
             sleep 2
             import -window root /tmp/fotodit-3.png
+            kill $APP || true
+            sleep 3
+            # Independent close/reopen: a fresh process must come back to the same look.
+            FOTODIT_ASSISTANT_DEMO=1 FOTODIT_WINDOW_SIZE=1600x900 ./target/debug/fotodit /tmp/sample.png &
+            APP=$!
+            sleep 30
+            xdotool search --name Fotodit windowactivate --sync || true
+            sleep 2
+            import -window root /tmp/fotodit-reopen-1.png
+            xdotool mousemove --sync 655 687 click 1
+            sleep 4
+            import -window root /tmp/fotodit-reopen-2.png
+            # Panel-behavior proof: open the Window menu to show the Assistant entry
+            # and its checkmark (menu position measured from a maximized window).
+            xdotool mousemove --sync 462 28 click 1
+            sleep 2
+            import -window root /tmp/fotodit-menu-window.png
+            xdotool key Escape || true
+            kill $APP || true
+          '
+          xvfb-run -a -s "-screen 0 1600x900x24" bash -c '
+            FOTODIT_ASSISTANT_DEMO=1 FOTODIT_WINDOW_SIZE=1600x900 ./target/debug/fotodit &
+            APP=$!
+            sleep 30
+            xdotool search --name Fotodit windowactivate --sync || true
+            sleep 2
+            import -window root /tmp/fotodit-home-1.png
+            sleep 3
+            import -window root /tmp/fotodit-home-2.png
             kill $APP || true
           '
       - uses: actions/upload-artifact@v4

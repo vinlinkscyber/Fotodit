@@ -6,6 +6,12 @@ use super::{
 impl FotoditApp {
     /// Run an engine command, reporting errors in the status bar.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        self.run_with_completion(id, params, jobs_ui::Completion::Default)
+    }
+
+    /// [`run`] with an explicit completion contract: `Required` keeps every admission check
+    /// but runs the command inline, for callers that need a completed value now.
+    pub(crate) fn run_with_completion(&mut self, id: &str, params: Value, completion: jobs_ui::Completion) -> Result<Value, String> {
         if let Some(result) = delete_layer_prompt::intercept(self, id, &params) {
             return result;
         }
@@ -17,7 +23,7 @@ impl FotoditApp {
         if gate.is_some() {
             self.session.authorize = gate;
         }
-        let result = self.run_command(id, params);
+        let result = self.run_command_with(id, params, completion);
         if gate.is_some() {
             self.session.authorize = None;
         }
@@ -35,13 +41,17 @@ impl FotoditApp {
     }
 
     pub(crate) fn run_command(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        self.run_command_with(id, params, jobs_ui::Completion::Default)
+    }
+
+    pub(crate) fn run_command_with(&mut self, id: &str, params: Value, completion: jobs_ui::Completion) -> Result<Value, String> {
         self.run_depth += 1;
-        let r = self.run_command_at_depth(id, params);
+        let r = self.run_command_at_depth(id, params, completion);
         self.run_depth -= 1;
         r
     }
 
-    fn run_command_at_depth(&mut self, id: &str, params: Value) -> Result<Value, String> {
+    fn run_command_at_depth(&mut self, id: &str, params: Value, completion: jobs_ui::Completion) -> Result<Value, String> {
         if !vector_ui::cancel_stale(self) {
             return Err(self.ui.status.clone());
         }
@@ -61,13 +71,21 @@ impl FotoditApp {
         if fotodit_engine::PRECHECKED.contains(&id) && self.ui.transform.is_some() {
             // Bad params or a command that can't run leave the box as it is.
             self.session.precheck(id, &params).map_err(|e| e.to_string())?;
+            // A completed-value caller gets the refusal BEFORE the commit is launched:
+            // starting asynchronous work it cannot observe would break its step sequencing,
+            // history binding and rollback view.
+            if completion == jobs_ui::Completion::Required {
+                return Err(tl!("Free Transform is still being applied; try again when it has finished.").into());
+            }
             transform_tool::commit(self);
             if transform_tool::committing(self).is_some() {
                 // A click stays a click: it runs when the commit lands (#9974). Only a click in the
                 // committing document, one at a time: a script, a control request or an action step
                 // needs its answer now, and a click in another tab wasn't meant for this one.
                 let committing_here = self.transform_preview.as_ref().is_some_and(|pv| self.session.active().is_some_and(|st| st.doc.id == pv.doc.id));
-                let click = !self.automation_input && self.session.authorize.is_none() && self.run_depth == 1;
+                // A completed-value caller (the assistant) is not a click: it needs the
+                // explicit refusal below, never a queued after-commit and a null receipt.
+                let click = !self.automation_input && self.session.authorize.is_none() && self.run_depth == 1 && completion != jobs_ui::Completion::Required;
                 if !click || !committing_here || self.after_transform_commit.is_some() {
                     return Err(tl!("Free Transform is still being applied; try again when it has finished.").into());
                 }
@@ -162,11 +180,19 @@ impl FotoditApp {
             "layer.vectorMask.add" | "layer.vectorMask.fromPath" | "layer.vectorMask.revealAll" | "layer.vectorMask.hideAll" | "layer.vectorMask.currentPath"
         ) && on_active_layer;
         let r = if id == "actions.play" {
+            // Recorded playback runs its own steps; a completed-value caller cannot observe
+            // them as one completed command.
+            if completion == jobs_ui::Completion::Required {
+                return Err("action playback is outside the assistant's completed-command boundary".into());
+            }
             actions::play(self, &params)
         } else if fotodit_engine::actions_cmds::shell_view_command(id) {
+            if completion == jobs_ui::Completion::Required {
+                return Err("recorded shell callbacks are outside the assistant's completed-command boundary".into());
+            }
             actions::run_view(self, id, params)
         } else {
-            jobs_ui::run(self, id, params)
+            jobs_ui::run_with(self, id, params, completion)
         };
         let creates_adjustment_or_fill = id.starts_with("layer.newAdjustmentLayer.") || id.starts_with("layer.newFillLayer.");
         self.sync_command_side_effects(id, &r, creates_active_mask, creates_active_vector_mask, creates_adjustment_or_fill, path_mask);

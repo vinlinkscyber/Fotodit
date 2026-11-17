@@ -576,6 +576,22 @@ fn summary(feats: &[Feature], all_values_median: f64) -> Feature {
 /// pixel, and the label buffer and mask come on top (#933).
 pub const MAX_MEASURE_PIXELS: u64 = 400_000_000;
 
+/// Largest region color stats handles in one pass, and the default `maxPixels`.
+/// This bounds the composite render buffer (16 bytes per pixel, ≤ 256 MiB at the
+/// default) plus one mask byte per pixel; renderer-internal layer/effect intermediates
+/// and wall-clock time are governed by the renderer itself, not separately bounded
+/// here. Automatic AI perception passes a much tighter budget and skips oversized
+/// regions honestly (reporting unknown colors) instead of doing region-sized work
+/// synchronously (#933 pattern, conservative automatic budget).
+pub const MAX_COLOR_STATS_PIXELS: u64 = 16_000_000;
+
+/// Largest canvas pixel digest handles in one pass, and the default `maxPixels`.
+/// Same composite render buffer bound as color statistics (16 bytes per pixel,
+/// ≤ 256 MiB at the cap); the automatic AI caller passes a much tighter budget.
+/// Renderer-internal layer/effect intermediates and wall-clock time are governed
+/// by the renderer itself, not separately bounded here.
+pub const MAX_PIXEL_DIGEST_PIXELS: u64 = 16_000_000;
+
 /// Selection mask (coverage ≥ 0.5) over `r` (`n` pixels), or every pixel when there is no selection.
 fn selection_mask(d: &Document, r: Rect, n: usize) -> Vec<bool> {
     match &d.selection {
@@ -626,6 +642,201 @@ fn selection_rows(d: &Document, needs_gray: bool) -> Result<(Feature, Vec<Featur
         .unwrap_or_default();
     let med = median(&mut all) * range;
     Ok((summary(&feats, med), feats))
+}
+
+// ------------------------------------------------------------------ color stats
+
+/// Composite color statistics for AI perception: 4-bit-per-channel quantized
+/// dominant colors and the mean color over the rendered canvas (or the active
+/// selection), computed from actual pixels at call time. Read-only.
+///
+/// Transparent pixels (alpha < 0.5) are excluded from the color bins and mean,
+/// and reported as `transparentShare`; `domain` says whether the composite
+/// canvas or the active selection was measured, and `sampledPixels` counts the
+/// sampled (not total) pixels, so estimates on large strided canvases are
+/// distinguishable from exact full-canvas values.
+fn color_stats(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "image.analysis.colorStats";
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let d = st.doc.clone();
+    let revision = st.revision;
+    let max_colors = p.get("maxColors").and_then(Value::as_u64).unwrap_or(5).clamp(1, 16) as usize;
+    let (r, domain) = match &d.selection {
+        Some(sel) => (sel.content_bounds().intersect(&d.bounds()), "selection"),
+        None => (Rect::new(0, 0, d.size.width as i32, d.size.height as i32), "canvas"),
+    };
+    if r.is_empty() {
+        return Err(bad(CMD, "the region is empty"));
+    }
+    // Checked u64 area before any usize conversion or allocation: refuse a region over
+    // the pixel budget, rather than overflowing or allocating unbounded memory on a
+    // legal 65536×65536 document (#933 pattern). Callers can tighten the budget with
+    // `maxPixels` (the automatic AI caller does); they cannot raise it past the cap.
+    let max_pixels = p.get("maxPixels").and_then(Value::as_u64).unwrap_or(MAX_COLOR_STATS_PIXELS).clamp(1, MAX_COLOR_STATS_PIXELS);
+    let n = u64::from(r.width()) * u64::from(r.height());
+    let Some(n) = (n <= max_pixels).then(|| usize::try_from(n).ok()).flatten() else {
+        return Err(bad(CMD, format!(
+            "the region is too large for color statistics ({}×{} px; max {} pixels): select a smaller region",
+            r.width(),
+            r.height(),
+            max_pixels
+        )));
+    };
+    let (w, h) = (r.width() as usize, r.height() as usize);
+    // Bound the sampling cost on large canvases to about 1M sampled pixels.
+    let stride = ((n as f64) / 1_000_000.0).sqrt().ceil().max(1.0) as usize;
+    let buf = fotodit_compose::render(&d, r);
+    // Coverage-aware: only pixels with selection coverage ≥ 0.5 count, so hollow,
+    // disjoint or partially covered selections measure the covered pixels, not the
+    // bounding box (the canvas domain counts every pixel).
+    let mask = selection_mask(&d, r, n);
+    let mut bins = [0u64; 4096];
+    let mut sum = [0f64; 3];
+    let mut n_sampled = 0u64;
+    let mut n_opaque = 0u64;
+    for (i, px) in buf.px.iter().enumerate() {
+        if !mask[i] {
+            continue;
+        }
+        let (x, y) = (i % w, i / w);
+        if x % stride != 0 || y % stride != 0 {
+            continue;
+        }
+        n_sampled += 1;
+        if px[3] < 0.5 {
+            continue;
+        }
+        // HDR surfaces can exceed 1.0: clamp before indexing the bins.
+        let (rr, gg, bb) = (px[0].clamp(0.0, 1.0), px[1].clamp(0.0, 1.0), px[2].clamp(0.0, 1.0));
+        bins[((rr * 15.0) as usize) << 8 | ((gg * 15.0) as usize) << 4 | (bb * 15.0) as usize] += 1;
+        sum[0] += f64::from(rr);
+        sum[1] += f64::from(gg);
+        sum[2] += f64::from(bb);
+        n_opaque += 1;
+    }
+    if n_sampled == 0 {
+        // Distinguish "nothing is selected" from "the stride grid missed every selected
+        // pixel" (possible for a sparse selection on a large region).
+        if mask.iter().all(|m| !*m) {
+            return Err(bad(CMD, "the selection is empty"));
+        }
+        return Err(bad(CMD, "no selected pixels in the sample grid: select a larger region"));
+    }
+    let hex = |r: f64, g: f64, b: f64| format!("#{:02X}{:02X}{:02X}", (r * 255.0).round() as u8, (g * 255.0).round() as u8, (b * 255.0).round() as u8);
+    let mut top: Vec<(usize, u64)> = bins.iter().copied().enumerate().filter(|(_, c)| *c > 0).collect();
+    top.sort_by(|a, b| b.1.cmp(&a.1));
+    top.truncate(max_colors);
+    let dominant: Vec<Value> = top
+        .into_iter()
+        .map(|(bin, c)| {
+            let rr = ((bin >> 8) & 15) as f64 / 15.0;
+            let gg = ((bin >> 4) & 15) as f64 / 15.0;
+            let bb = (bin & 15) as f64 / 15.0;
+            json!({"color": hex(rr, gg, bb), "share": round4(c as f64 / n_opaque as f64)})
+        })
+        .collect();
+    Ok(json!({
+        "domain": domain,
+        "width": w,
+        "height": h,
+        "stride": stride,
+        "sampledPixels": n_sampled,
+        "opaquePixels": n_opaque,
+        "transparentShare": round4(1.0 - n_opaque as f64 / n_sampled as f64),
+        "meanColor": if n_opaque > 0 { Value::String(hex(sum[0] / n_opaque as f64, sum[1] / n_opaque as f64, sum[2] / n_opaque as f64)) } else { Value::Null },
+        "dominantColors": dominant,
+        "quantization": "4bit/channel",
+        "revision": revision,
+    }))
+}
+
+// ------------------------------------------------------------------ pixel digest
+
+/// Position-sensitive digest of the rendered full-canvas composite, for
+/// before/after visual evidence ("did this operation observably change the
+/// rendered document?"). Read-only.
+///
+/// Unlike color statistics, the digest mixes sampled RGBA values in scan order
+/// (FNV-1a 64 over the quantized bytes, seeded with the geometry), so pixel
+/// rearrangements that preserve a histogram or dominant colors still change it.
+/// The selection is deliberately IGNORED and every pixel - transparent included
+/// - contributes: the digest is a comparison tool, and a step that only changes
+/// the selection must not move the compared domain.
+///
+/// Claim boundary: the digest covers the SAMPLED, 8-bit-clamped RGBA grid only.
+/// A differing digest proves the sampled quantized composite DATA differs -
+/// which is not proof of a visible appearance change (e.g. RGB differences
+/// under full transparency change the data, not the appearance), and says
+/// nothing about intent or quality. An equal digest means only that no
+/// difference was observed on the sampled quantized grid: stride sampling skips
+/// pixels, HDR values are clamped into the same byte, sub-8-bit differences are
+/// quantized away, and a 64-bit non-cryptographic hash can collide. Digests are
+/// comparable only between identical width/height/stride; callers compare those
+/// fields first and treat a dimension change as an observable change of its
+/// own, never as a digest mismatch. Neither direction says anything about
+/// whether a change was the INTENDED one.
+fn pixel_digest(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "image.analysis.pixelDigest";
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let d = st.doc.clone();
+    let revision = st.revision;
+    let r = Rect::new(0, 0, d.size.width as i32, d.size.height as i32);
+    if r.is_empty() {
+        return Err(bad(CMD, "the canvas is empty"));
+    }
+    // Checked u64 area before any usize conversion or allocation (#933 pattern,
+    // same as color statistics). Callers can tighten the budget with `maxPixels`
+    // (the automatic AI caller does); they cannot raise it past the cap.
+    let max_pixels = p.get("maxPixels").and_then(Value::as_u64).unwrap_or(MAX_PIXEL_DIGEST_PIXELS).clamp(1, MAX_PIXEL_DIGEST_PIXELS);
+    let n = u64::from(r.width()) * u64::from(r.height());
+    let Some(n) = (n <= max_pixels).then(|| usize::try_from(n).ok()).flatten() else {
+        return Err(bad(CMD, format!(
+            "the canvas is too large for a pixel digest ({}×{} px; max {} pixels)",
+            r.width(),
+            r.height(),
+            max_pixels
+        )));
+    };
+    let (w, h) = (r.width() as usize, r.height() as usize);
+    // Same deterministic stride rule as color statistics (about 1M samples), so a
+    // fixed canvas and budget always sample the identical grid.
+    let stride = ((n as f64) / 1_000_000.0).sqrt().ceil().max(1.0) as usize;
+    let buf = fotodit_compose::render(&d, r);
+    // FNV-1a 64 (inline, no new dependency) over the geometry seed and then the
+    // quantized RGBA of every grid pixel in scan order.
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut mix = |byte: u8| {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    };
+    for b in (w as u64).to_le_bytes().into_iter().chain((h as u64).to_le_bytes()).chain((stride as u64).to_le_bytes()) {
+        mix(b);
+    }
+    let quant = |c: f32| (c.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let mut n_sampled = 0u64;
+    for (i, px) in buf.px.iter().enumerate() {
+        let (x, y) = (i % w, i / w);
+        if x % stride != 0 || y % stride != 0 {
+            continue;
+        }
+        n_sampled += 1;
+        mix(quant(px[0]));
+        mix(quant(px[1]));
+        mix(quant(px[2]));
+        mix(quant(px[3]));
+    }
+    Ok(json!({
+        "schema": 1,
+        "hash": "fnv1a64",
+        "quantization": "8bit/channel",
+        "digest": format!("{:016x}", hash),
+        "domain": "canvas",
+        "width": w,
+        "height": h,
+        "stride": stride,
+        "sampledPixels": n_sampled,
+        "revision": revision,
+    }))
 }
 
 // ------------------------------------------------------------------ ruler
@@ -1241,6 +1452,24 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             set_scale,
             true
+        ),
+        spec!(
+            "image.analysis.colorStats",
+            "Color Statistics",
+            ["Image", "Analysis"],
+            r##"{"maxColors":int=5 (1..=16),"maxPixels":int=16000000 (1..=16000000)} → read-only composite dominant colors (4-bit quantized) + mean color"##,
+            has_doc,
+            color_stats,
+            false
+        ),
+        spec!(
+            "image.analysis.pixelDigest",
+            "Pixel Digest",
+            ["Image", "Analysis"],
+            r##"{"maxPixels":int=16000000 (1..=16000000)} → read-only position-sensitive digest of the rendered canvas composite"##,
+            has_doc,
+            pixel_digest,
+            false
         ),
         spec!(
             "image.analysis.selectDataPoints",

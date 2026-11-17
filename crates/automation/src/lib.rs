@@ -33,7 +33,7 @@ pub use server::{Backend, FotoditMcp};
 pub use workspace::AuthorizedWorkspace;
 pub use ai::{
     AiContext, AiEngine, AiError, AiProviderBridge, AiResult, ContextLoadBalancer, ContextProfile,
-    EditingPlan, ProviderConfig, ProviderId,
+    EditingPlan, LiveEditSession, ProviderConfig, ProviderId,
 };
 
 #[cfg(all(feature = "gpu", not(target_arch = "wasm32")))]

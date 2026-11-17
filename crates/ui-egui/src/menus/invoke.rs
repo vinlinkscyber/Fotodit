@@ -7,6 +7,7 @@ pub(crate) fn panel_alias(id: &str) -> Option<&'static str> {
         "history" => "window.toggle.history",
         "properties" | "adjustments" => "window.toggle.properties",
         "color" | "swatches" => "window.toggle.color",
+        "assistant" => "window.toggle.assistant",
         "navigator" | "info" | "histogram" => "window.toggle.navigator",
         "tools" => "window.toggle.toolbar",
         "options" => "window.toggle.options",
@@ -41,20 +42,329 @@ pub(super) fn workspace_name(id: &str) -> Option<&'static str> {
 
 /// Run a command id from any source (menu, shortcut, palette, automation).
 pub fn invoke(app: &mut FotoditApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
+    invoke_with(app, ctx, id, params, crate::jobs_ui::Completion::Default)
+}
+
+/// [`invoke`] for assistant-owned commands: the same admitted path (authorization, discard
+/// interception, menu availability) with a completed-value contract - a job-capable command
+/// runs inline instead of returning a pending job receipt.
+pub fn invoke_completed(app: &mut FotoditApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
+    invoke_with(app, ctx, id, params, crate::jobs_ui::Completion::Required)
+}
+
+fn invoke_with(app: &mut FotoditApp, ctx: &egui::Context, id: &str, params: Value, completion: crate::jobs_ui::Completion) -> Result<Value, String> {
     if app.automation_input
         && let Some(authorize) = app.services.automation_command.as_ref()
     {
         authorize(id, &params)?;
     }
+    if completion == crate::jobs_ui::Completion::Required {
+        // Pre-effect gate: classify the route BEFORE anything runs, so a refusal leaves no
+        // dialog opened, no prompt parked, no job started and nothing queued.
+        ensure_completed_support(app, id, &params)?;
+    }
     if crate::discard_ui::intercept(app, id, &params) {
+        // The unsaved-changes guard stays: under the completed-value contract an
+        // intercepted command is an explicit refusal, never a silent null success.
+        if completion == crate::jobs_ui::Completion::Required {
+            return Err(format!("`{id}` cannot be completed by the assistant: it requires an unsaved-changes decision"));
+        }
         return Ok(Value::Null);
     }
-    let r = invoke_unguarded(app, ctx, id, params)?;
+    let r = invoke_unguarded_with(app, ctx, id, params, completion)?;
+    if completion == crate::jobs_ui::Completion::Required {
+        // Safety net behind the pre-effect gate: a route that still slips a receipt or a
+        // dialog through is an explicit refusal, never a silent null success.
+        if r.get("pending").and_then(Value::as_bool) == Some(true) {
+            return Err(format!("`{id}` cannot be completed by the assistant: this route only offers a background job"));
+        }
+        if r.get("dialog").is_some() {
+            return Err(format!("`{id}` cannot be completed by the assistant: it requires an interactive dialog"));
+        }
+    }
     // The palette's empty-query list (UI-217-7); opening the palette isn't a command to recall.
     if id != "edit.search" {
         crate::palette::note_recent(ctx, id);
     }
     Ok(r)
+}
+
+/// Pre-effect gate for the completed-value contract (`Completion::Required`): `Err` when the
+/// route cannot return a completed value, checked BEFORE any effectful dispatch. A refusal
+/// here leaves no dialog opened, no prompt parked, no job started and nothing queued for
+/// later; the `Completion::Default` path never reaches this.
+fn ensure_completed_support(app: &FotoditApp, id: &str, params: &Value) -> Result<(), String> {
+    // The unsaved-changes prompt asks a person (Save / Don't Save / Cancel); parking the
+    // command behind it is not completion.
+    if crate::discard_ui::would_intercept(app, id, params) {
+        return Err(format!("`{id}` cannot be completed by the assistant: it requires an unsaved-changes decision"));
+    }
+    // A filter on a type layer asks Rasterize / Convert to Smart Object first (#4303).
+    if crate::rasterize_prompt::filter_needs(app, id).is_some() {
+        return Err(format!("`{id}` cannot be completed by the assistant: the type layer needs a rasterize decision first"));
+    }
+    // A Layers-panel trash click asks "Delete layer?", and a mask dropped on the Trash asks
+    // Apply/Delete first. The confirmation is never bypassed: refuse pre-effect instead. The
+    // pure predicates also catch a repeated request, which returns a pending receipt without
+    // opening a dialog, so an output check alone would miss it.
+    if crate::delete_layer_prompt::would_intercept(app, id, params) {
+        return Err(format!("`{id}` cannot be completed by the assistant: it asks for deletion confirmation"));
+    }
+    if crate::mask_trash_prompt::would_intercept(app, id, params) {
+        return Err(format!("`{id}` cannot be completed by the assistant: it asks for mask deletion confirmation"));
+    }
+    if let Some(why) = interactive_route(app, id, params) {
+        return Err(format!("`{id}` cannot be completed by the assistant: {why}"));
+    }
+    // Engine commands reach the ordinary dispatch with the contract threaded through:
+    // job-capable ones run inline (jobs_ui::run_with), the rest complete synchronously.
+    if fotodit_engine::commands::find(id).is_some() {
+        return Ok(());
+    }
+    // Synchronous shell routes that finish in place (tool/panel/view/workspace/window state).
+    if shell_completes(id) {
+        return Ok(());
+    }
+    Err(format!("`{id}` cannot be completed by the assistant: the route is outside the assistant's completed-command boundary"))
+}
+
+/// Routes that open a dialog, an interactive workspace or session, a picker, or a background
+/// side effect instead of completing: `Some(why)` under exactly the conditions the dispatch
+/// would take that turn. Pure: nothing runs.
+fn interactive_route(app: &FotoditApp, id: &str, params: &Value) -> Option<String> {
+    let empty = params.as_object().is_none_or(|o| o.is_empty());
+    let ui_control = params.get("ui").is_some();
+    // Interactive workspaces that claim the command whatever the engine parameters are.
+    if id == "select.selectAndMask" {
+        return Some("it opens the Select and Mask workspace".into());
+    }
+    if matches!(
+        id,
+        "edit.freeTransform"
+            | "edit.freeTransformCopy"
+            | "edit.transform.scale"
+            | "edit.transform.rotate"
+            | "edit.transform.skew"
+            | "edit.transform.distort"
+            | "edit.transform.perspective"
+    ) {
+        return Some("it drives an interactive Free Transform session".into());
+    }
+    if ui_control
+        && matches!(
+            id,
+            "filter.filterGallery"
+                | "filter.liquify"
+                | "filter.vanishingPoint"
+                | "filter.cameraRaw"
+                | "filter.adaptiveWideAngle"
+                | "edit.puppetWarp"
+                | "layer.smartObjects.puppetWarp"
+                | "edit.perspectiveWarp"
+                | "layer.smartObjects.perspectiveWarp"
+                | "edit.contentAwareFill"
+        )
+    {
+        return Some("it controls an interactive workspace".into());
+    }
+    if empty
+        && matches!(
+            id,
+            "filter.filterGallery"
+                | "filter.liquify"
+                | "filter.vanishingPoint"
+                | "filter.cameraRaw"
+                | "filter.adaptiveWideAngle"
+                | "edit.puppetWarp"
+                | "layer.smartObjects.puppetWarp"
+                | "edit.perspectiveWarp"
+                | "layer.smartObjects.perspectiveWarp"
+        )
+    {
+        return Some("it opens an interactive workspace".into());
+    }
+    // Warp sessions begun from the menu, and edits to an active warp grid.
+    if matches!(id, "edit.transform.warp" | "layer.smartObjects.warp") && empty {
+        return Some("it starts an interactive warp session".into());
+    }
+    if matches!(
+        id,
+        "edit.transform.splitWarpCrosswise"
+            | "edit.transform.splitWarpHorizontally"
+            | "edit.transform.splitWarpVertically"
+            | "edit.transform.removeWarpSplit"
+            | "edit.transform.warpGrid"
+    ) && params.get("warp").is_none()
+        && app.ui.transform.as_ref().is_some_and(|t| t.warp.is_some())
+    {
+        return Some("it edits an interactive warp session".into());
+    }
+    // Interactive sessions, deferred clipboard access and background side effects.
+    if id == "type.editText" {
+        return Some("it starts an interactive text editing session".into());
+    }
+    if id == "ui.symmetryTransform" {
+        return Some("it starts an interactive symmetry session".into());
+    }
+    if id == "help.checkForUpdates" {
+        return Some("it starts an interactive update check".into());
+    }
+    if id == "edit.paste" && app.ui.text_edit.is_some() {
+        return Some("a text editing session owns this paste".into());
+    }
+    if id == "edit.checkSpelling" && params.get("action").is_none() && params.get("ui").is_none_or(|u| u.as_bool() != Some(false)) {
+        return Some("it opens the Check Spelling dialog".into());
+    }
+    // Layer › Layer Content Options on a solid/pattern fill layer or a solid-filled shape
+    // opens the colour/pattern dialog; other layer kinds run the engine command below.
+    if id == "layer.layerContentOptions" && layer_content_dialog(app) {
+        return Some("it opens the fill options dialog".into());
+    }
+    // Smart Filter blending options ask without blend/opacity parameters, empty or not.
+    if id == "layer.smartFilter.blendingOptions" && params.get("blend").is_none() && params.get("opacity").is_none() {
+        return Some("its menu route opens a dialog; explicit parameters run it directly".into());
+    }
+    // Commands whose menu route opens a dialog without explicit parameters; with parameters
+    // the engine runs them directly (below).
+    if empty && empty_params_dialog(id) {
+        return Some("its menu route opens a dialog; explicit parameters run it directly".into());
+    }
+    // Dialogs and workers whatever the parameters.
+    if matches!(id, "help.about" | "help.systemInfo" | "file.export.exportAs") {
+        return Some("it opens a dialog".into());
+    }
+    if matches!(id, "file.save" | "file.saveAs") {
+        return Some("saving runs through file dialogs and background workers".into());
+    }
+    if matches!(id, "file.print" | "file.printOneCopy") {
+        return Some("printing runs as a background worker".into());
+    }
+    if id == "file.exit" {
+        return Some("it quits the app".into());
+    }
+    // Mirrors the dispatch's `params.get("path").and_then(Value::as_str)`: a missing, null
+    // or wrong-typed `path` takes the picker arm exactly like an absent one.
+    if id == "file.open" && params.get("path").and_then(Value::as_str).is_none() {
+        return Some("it opens a file picker".into());
+    }
+    if id == "file.import.videoFramesToLayers" && params.get("path").and_then(Value::as_str).is_none() {
+        return Some("it asks for a folder".into());
+    }
+    if id == "file.import.variableDataSets" && params.get("path").and_then(Value::as_str).is_none() {
+        return Some("it asks for a file".into());
+    }
+    if id == "file.export.renderVideo" && params.get("dir").is_none() {
+        return Some("it asks for a folder".into());
+    }
+    if id == "layer.renameLayer" && params.get("name").is_none() {
+        return Some("it starts in-place renaming in the Layers panel".into());
+    }
+    // Action playback and recorded shell callbacks run their own steps outside the contract.
+    if id == "actions.play" || fotodit_engine::actions_cmds::shell_view_command(id) {
+        return Some("action playback runs its own recorded steps outside the completed-command boundary".into());
+    }
+    None
+}
+
+/// Commands whose menu route opens a dialog when called without explicit parameters (with
+/// parameters the engine runs them directly). Mirrors the dispatch's dialog arms.
+fn empty_params_dialog(id: &str) -> bool {
+    crate::filter_dialog::has_dialog(id)
+        || crate::adjust_dialog::has_dialog(id)
+        || crate::sizing::is_sizing(id)
+        || crate::new_group_ui::fronts(id)
+        || id.starts_with("edit.preferences.")
+        || id.strip_prefix("layer.layerStyle.").is_some_and(|k| crate::layer_style::KINDS.iter().any(|(kind, _)| *kind == k))
+        || id == crate::stroke_ui::COMMAND
+        || id == crate::fill_ui::COMMAND
+        || id == crate::new_layer_ui::COMMAND
+        || id == crate::channel_options_ui::COMMAND
+        || id == crate::channel_options_ui::NEW_CHANNEL
+        || id == crate::channel_options_ui::NEW_SPOT
+        || id == crate::dialogs::merge_channels_ui::COMMAND
+        || id == crate::cas_transform::COMMAND
+        || id == fotodit_engine::pattern_fill_cmds::CREATE
+        || matches!(
+            id,
+            "file.new"
+                | "layer.duplicate"
+                | "layer.frame.convert"
+                | "layer.newFillLayer.solidColor"
+                | "layer.layerStyle.blendingOptions"
+                | "select.colorRange"
+                | "select.transformSelection"
+                | "view.newGuide"
+                | "view.editSelectedGuides"
+                | "view.proofSetup.custom"
+                | "view.thirtyTwoBitPreviewOptions"
+                | "edit.keyboardShortcuts"
+                | "edit.menus"
+                | "edit.toolbar"
+                | "edit.colorSettings"
+                | "edit.fade"
+                | "edit.findAndReplaceText"
+                | "edit.defineBrushPreset"
+                | "edit.defineCustomShape"
+                | "edit.autoAlignLayers"
+                | "edit.autoBlendLayers"
+                | "edit.contentAwareFill"
+                | "edit.presets.presetManager"
+                | "edit.presets.exportImportPresets"
+                | "window.workspace.newWorkspace"
+                | "window.workspace.deleteWorkspace"
+                | "image.variables.define"
+                | "image.variables.dataSets"
+                | "image.applyDataSet"
+                | "layer.exportAs"
+                | "layer.quickExportAsPng"
+        )
+}
+
+/// Would Layer › Layer Content Options open a fill dialog for the active layer? Mirrors the
+/// solid/pattern fill and shape fill dialog openers; other layer kinds run the engine command.
+fn layer_content_dialog(app: &FotoditApp) -> bool {
+    let Some(st) = app.session.active() else { return false };
+    let Some(layer) = st.active_layer else { return false };
+    let Some(l) = st.doc.layer(layer) else { return false };
+    use fotodit_doc::LayerContent as C;
+    match &l.content {
+        C::Fill(fotodit_doc::Fill::Solid(_)) | C::Fill(fotodit_doc::Fill::Pattern { .. }) => true,
+        C::Shape(_) => crate::shape_fill_ui::solid_fill(&st.doc, layer).is_some(),
+        _ => false,
+    }
+}
+
+/// Synchronous shell routes that finish in place and return a completed value (no dialog, no
+/// deferral): tool selection, panel/workspace/window/theme state, view toggles and zoom.
+fn shell_completes(id: &str) -> bool {
+    crate::tool_shortcuts::tool(id).is_some()
+        || panel_alias(id).is_some()
+        || proof_preset(id).is_some()
+        || workspace_name(id).is_some()
+        || id.starts_with("window.toggle.")
+        || id.starts_with("window.theme.")
+        || id.starts_with(crate::native_menu::LANGUAGE_PREFIX)
+        || id.strip_prefix(DOCUMENT_ITEM).is_some_and(|n| n.parse::<usize>().is_ok())
+        || matches!(
+            id,
+            "edit.search"
+                | "window.newWindowForDocument"
+                | "window.togglePanels"
+                | "window.nextDocument"
+                | "window.previousDocument"
+                | "view.darkenInterface"
+                | "view.lightenInterface"
+                | "view.rulers"
+                | "view.show.grid"
+                | "view.show.guides"
+                | "view.snap"
+                | "view.lockGuides"
+                | "view.zoomIn"
+                | "view.zoomOut"
+                | "view.fitOnScreen"
+                | "view.actualPixels"
+                | "view.clearSelectedGuides"
+        )
 }
 
 /// Layer › New › Convert to Frame without params: asks for the frame's name and size first.
@@ -150,7 +460,7 @@ fn invoke_early_commands(app: &mut FotoditApp, ctx: &egui::Context, id: &str, pa
     None
 }
 
-fn invoke_shell_commands(app: &mut FotoditApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
+fn invoke_shell_commands(app: &mut FotoditApp, ctx: &egui::Context, id: &str, params: &Value, completion: crate::jobs_ui::Completion) -> Option<Result<Value, String>> {
     if id == "window.panel.brushSettings" {
         app.ui.brush_tab = 0;
     }
@@ -185,10 +495,13 @@ fn invoke_shell_commands(app: &mut FotoditApp, ctx: &egui::Context, id: &str, pa
     }
     if let Some(profile) = proof_preset(id) {
         // View › Proof Setup presets: set the proof profile and turn Proof Colors on.
-        return Some(app.run("view.proofSetup", json!({"profile": profile})).and_then(|_| app.run("view.proofColors", json!({"on": true}))));
+        return Some(
+            app.run_with_completion("view.proofSetup", json!({"profile": profile}), completion)
+                .and_then(|_| app.run_with_completion("view.proofColors", json!({"on": true}), completion)),
+        );
     }
     if let Some(alias) = panel_alias(id) {
-        return Some(invoke(app, ctx, alias, params.clone()));
+        return Some(invoke_with(app, ctx, alias, params.clone(), completion));
     }
     if let Some(ws) = workspace_name(id) {
         // Reset re-applies the current workspace; Essentials is the default layout.
@@ -323,6 +636,10 @@ fn invoke_file_commands(app: &mut FotoditApp, ctx: &egui::Context, id: &str, par
 }
 
 pub(crate) fn invoke_unguarded(app: &mut FotoditApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
+    invoke_unguarded_with(app, ctx, id, params, crate::jobs_ui::Completion::Default)
+}
+
+pub(crate) fn invoke_unguarded_with(app: &mut FotoditApp, ctx: &egui::Context, id: &str, params: Value, completion: crate::jobs_ui::Completion) -> Result<Value, String> {
     if let Some(result) = crate::smart_svg_ui::intercept(app, id, &params) {
         return result;
     }
@@ -332,22 +649,22 @@ pub(crate) fn invoke_unguarded(app: &mut FotoditApp, ctx: &egui::Context, id: &s
     if let Some(result) = invoke_early_commands(app, ctx, id, &params) {
         return result;
     }
-    if let Some(result) = invoke_shell_commands(app, ctx, id, &params) {
+    if let Some(result) = invoke_shell_commands(app, ctx, id, &params, completion) {
         return result;
     }
     if let Some(result) = invoke_file_commands(app, ctx, id, &params)? {
         return Ok(result);
     }
-    if let Some(result) = invoke_window_command(app, ctx, id) {
+    if let Some(result) = invoke_window_command(app, ctx, id, completion) {
         return result;
     }
     if let Some(result) = invoke_export_command(app, id, &params)? {
         return result;
     }
-    if let Some(result) = invoke_type_command(app, ctx, id, &params) {
+    if let Some(result) = invoke_type_command(app, ctx, id, &params, completion) {
         return result;
     }
-    if let Some(result) = invoke_view_command(app, ctx, id, &params) {
+    if let Some(result) = invoke_view_command(app, ctx, id, &params, completion) {
         return result;
     }
     match id {
@@ -393,7 +710,7 @@ pub(crate) fn invoke_unguarded(app: &mut FotoditApp, ctx: &egui::Context, id: &s
             if let Some(dialog) = crate::pattern_fill_ui::open(app) {
                 return Ok(json!({"dialog": dialog}));
             }
-            let r = app.run(id, params)?;
+            let r = app.run_with_completion(id, params, completion)?;
             app.ui.panels.properties = true;
             app.ui.dock_tabs.properties = 0;
             Ok(r)
@@ -491,7 +808,7 @@ pub(crate) fn invoke_unguarded(app: &mut FotoditApp, ctx: &egui::Context, id: &s
                 Some(i) if !visible => json!({"center": app.ui.views[i].center}),
                 _ => json!({}),
             };
-            app.run("edit.paste", p)
+            app.run_with_completion("edit.paste", p, completion)
         }
         // Layer › New › Layer… (⇧⌘N) asks first, as in Photoshop; with params it runs as is.
         crate::new_layer_ui::COMMAND if params.as_object().is_none_or(|o| o.is_empty()) => Ok(json!({"dialog": crate::new_layer_ui::open(app)?})),
@@ -502,7 +819,7 @@ pub(crate) fn invoke_unguarded(app: &mut FotoditApp, ctx: &egui::Context, id: &s
             let kind = &ls["layer.layerStyle.".len()..];
             crate::layer_style::open(app, Some(kind)).map(|d| json!({"dialog": d})).ok_or_else(|| "no active layer".to_string())
         }
-        _ => app.run(id, params),
+        _ => app.run_with_completion(id, params, completion),
     }
 }
 
@@ -555,14 +872,14 @@ fn invoke_export_command(app: &mut FotoditApp, id: &str, params: &Value) -> Resu
     Ok(result)
 }
 
-fn invoke_type_command(app: &mut FotoditApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
+fn invoke_type_command(app: &mut FotoditApp, ctx: &egui::Context, id: &str, params: &Value, completion: crate::jobs_ui::Completion) -> Option<Result<Value, String>> {
     match id {
         "type.increaseSize" | "type.decreaseSize" | "type.increaseSizeMore" | "type.decreaseSizeMore"
             if params.as_object().is_none_or(|object| object.is_empty()) =>
         {
             Some((|| {
                 let target = type_command_target(app).ok_or("the active layer is not a type layer")?;
-                app.run(id, target)
+                app.run_with_completion(id, target, completion)
             })())
         }
         command
@@ -575,13 +892,13 @@ fn invoke_type_command(app: &mut FotoditApp, ctx: &egui::Context, id: &str, para
                 && params.get("range").is_none() =>
         {
             Some((|| {
-                let Some(mut target) = crate::type_tool::formatting_params(app) else { return app.run(id, params.clone()) };
+                let Some(mut target) = crate::type_tool::formatting_params(app) else { return app.run_with_completion(id, params.clone(), completion) };
                 if let Some(properties) = params.as_object() {
                     for (key, value) in properties {
                         target[key] = value.clone();
                     }
                 }
-                app.run(id, target)
+                app.run_with_completion(id, target, completion)
             })())
         }
         "type.editText" => Some((|| {
@@ -624,9 +941,9 @@ fn type_command_target(app: &FotoditApp) -> Option<Value> {
     Some(params)
 }
 
-fn invoke_view_command(app: &mut FotoditApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
+fn invoke_view_command(app: &mut FotoditApp, ctx: &egui::Context, id: &str, params: &Value, completion: crate::jobs_ui::Completion) -> Option<Result<Value, String>> {
     match id {
-        "view.zoomIn" | "view.zoomOut" | "view.fitOnScreen" | "view.actualPixels" => Some(app.run(id, params.clone())),
+        "view.zoomIn" | "view.zoomOut" | "view.fitOnScreen" | "view.actualPixels" => Some(app.run_with_completion(id, params.clone(), completion)),
         "view.editSelectedGuides" => Some(crate::new_guide_ui::open_edit(app).map(|_| Value::Null)),
         "view.clearSelectedGuides" => {
             Some(crate::guide_select::delete_selected(app).and_then(|done| if done { Ok(Value::Null) } else { Err("No guide is selected".to_string()) }))
@@ -697,7 +1014,7 @@ fn invoke_view_command(app: &mut FotoditApp, ctx: &egui::Context, id: &str, para
     }
 }
 
-fn invoke_window_command(app: &mut FotoditApp, ctx: &egui::Context, id: &str) -> Option<Result<Value, String>> {
+fn invoke_window_command(app: &mut FotoditApp, ctx: &egui::Context, id: &str, completion: crate::jobs_ui::Completion) -> Option<Result<Value, String>> {
     match id {
         "window.newWindowForDocument" => Some((|| {
             let doc = app.session.active_index().ok_or("no document")?;
@@ -713,7 +1030,7 @@ fn invoke_window_command(app: &mut FotoditApp, ctx: &egui::Context, id: &str) ->
         "view.darkenInterface" | "view.lightenInterface" => {
             Some(crate::prefs_ui::step_brightness(app, ctx, id == "view.lightenInterface").map(|()| json!({"theme": app.ui.theme.id()})))
         }
-        "window.theme.system" => Some(app.run("prefs.set", json!({"path": "interface.appearanceMode", "value": "auto"})).map(|_| {
+        "window.theme.system" => Some(app.run_with_completion("prefs.set", json!({"path": "interface.appearanceMode", "value": "auto"}), completion).map(|_| {
             crate::prefs_ui::sync_appearance(app, ctx);
             Value::Null
         })),
@@ -740,7 +1057,7 @@ fn invoke_window_command(app: &mut FotoditApp, ctx: &egui::Context, id: &str) ->
             if code != "auto" && !crate::i18n::Lang::all().any(|lang| lang.code() == code) {
                 Some(Err(format!("unknown UI language `{code}`")))
             } else {
-                Some(app.run("prefs.set", json!({"values": {"interface.language": code}})))
+                Some(app.run_with_completion("prefs.set", json!({"values": {"interface.language": code}}), completion))
             }
         }
         "window.togglePanels" => Some(toggle_panels(app)),
@@ -749,7 +1066,7 @@ fn invoke_window_command(app: &mut FotoditApp, ctx: &egui::Context, id: &str) ->
             let active = app.session.active_index().ok_or("no document open")?;
             let next = if id == "window.nextDocument" { (active + 1) % count } else { (active + count - 1) % count };
             if next != active {
-                app.run("document.activate", json!({"document": next}))?;
+                app.run_with_completion("document.activate", json!({"document": next}), completion)?;
             }
             app.jobs.focus = None;
             Ok(json!({"document": next}))
@@ -801,6 +1118,7 @@ fn toggle_panel(app: &mut FotoditApp, id: &str) -> Result<Value, String> {
         "history" => &mut panels.history,
         "properties" => &mut panels.properties,
         "color" => &mut panels.color,
+        "assistant" => &mut panels.assistant,
         "navigator" => &mut panels.navigator,
         "toolbar" => &mut panels.toolbar,
         "options" => &mut panels.options_bar,

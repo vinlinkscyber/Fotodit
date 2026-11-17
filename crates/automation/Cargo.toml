@@ -44,6 +44,7 @@ wgpu = { version = "30", default-features = false, features = ["std", "wgsl"], o
 pollster = { version = "1", optional = true }
 
 [dev-dependencies]
+serde_json = { workspace = true }
 fotodit-color = { workspace = true }
 fotodit-geom = { workspace = true }
 # Synthetic camera raws (#7789).

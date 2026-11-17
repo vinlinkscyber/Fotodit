@@ -526,6 +526,22 @@ fn window_panel_and_workspace_ids_drive_the_shell() {
 }
 
 #[test]
+fn window_menu_toggles_the_assistant_panel() {
+    let mut app = FotoditApp::new(fotodit_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    assert!(app.ui.panels.assistant);
+    assert_eq!(checked(&app, "window.toggle.assistant"), Some(true));
+    invoke(&mut app, &ctx, "window.toggle.assistant", Value::Null).unwrap();
+    assert!(!app.ui.panels.assistant);
+    assert_eq!(checked(&app, "window.toggle.assistant"), Some(false));
+    // The Window menu recovers a closed panel: one entry, checkmark follows the state.
+    invoke(&mut app, &ctx, "window.toggle.assistant", Value::Null).unwrap();
+    assert!(app.ui.panels.assistant);
+    let items = menu_items(&app);
+    assert_eq!(items.iter().filter(|i| i.path == ["Window"] && i.label == "Assistant").count(), 1);
+}
+
+#[test]
 fn proof_setup_presets_and_checkmarks() {
     let mut app = FotoditApp::new(fotodit_engine::Session::new(), crate::Services::default());
     let ctx = egui::Context::default();

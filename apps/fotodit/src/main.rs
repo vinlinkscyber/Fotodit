@@ -61,7 +61,7 @@ mod photoshop_settings;
 mod portal_save;
 mod presentation;
 // The print portal needs the session bus (zbus, Linux only); its pure helpers are tested everywhere.
-#[cfg(any(target_os = "linux", test))]
+mod assistant;
 mod print_portal;
 mod screen_color;
 mod services;
@@ -148,11 +148,20 @@ fn control_port_for(cli: Option<u16>, prefs: &fotodit_engine::prefs::Integration
 /// (`main` turns `centered` off, #4826). Wayland compositors place windows themselves.
 fn native_options(custom_titlebar: bool) -> eframe::NativeOptions {
     let viewport = egui::ViewportBuilder::default().with_icon(app_icon::viewport_icon(std::env::current_exe().ok().as_deref()));
+    // Headless captures can pin the window size (e.g. FOTODIT_WINDOW_SIZE=1600x900) so
+    // screenshots compare 1:1 with a reference frame; ignored when unset or malformed.
+    let inner_size: [f32; 2] = std::env::var("FOTODIT_WINDOW_SIZE")
+        .ok()
+        .and_then(|v| {
+            let (w, h) = v.split_once('x')?;
+            Some([w.parse().ok()?, h.parse().ok()?])
+        })
+        .unwrap_or([1440.0, 900.0]);
     eframe::NativeOptions {
         viewport: viewport
             .with_app_id(APP_ID)
             .with_title("Fotodit")
-            .with_inner_size([1440.0, 900.0])
+            .with_inner_size(inner_size)
             .with_min_inner_size([760.0, 480.0])
             .with_drag_and_drop(true)
             .with_decorations(!custom_titlebar)
@@ -501,6 +510,7 @@ fn main() -> eframe::Result {
             created_in_callback.store(true, std::sync::atomic::Ordering::Relaxed);
             let automation = control.as_ref().map(|(_, _, workspace)| workspace.clone());
             let mut services = services::native(automation);
+            services.assistant_backend = Some(Box::new(assistant::GuiAssistant::new()));
             services.preset_store = presets;
             #[cfg(target_os = "linux")]
             let display = tablet::DisplayKind::of(cc);

@@ -194,6 +194,7 @@ pub(super) fn checked(app: &FotoditApp, id: &str) -> Option<bool> {
         "window.toggle.history" => p.history,
         "window.toggle.properties" => p.properties,
         "window.toggle.color" => p.color,
+        "window.toggle.assistant" => p.assistant,
         "window.toggle.navigator" => p.navigator,
         "window.toggle.toolbar" => p.toolbar,
         "window.toggle.dock" => p.dock,

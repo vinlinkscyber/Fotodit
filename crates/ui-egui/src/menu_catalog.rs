@@ -773,6 +773,7 @@ pub static CATALOG: &[(&[&str], &str, Option<&str>, &str)] = &[
     (&["Window"], "---", None, "---"),
     (&["Window"], "Actions", Some("Alt+F9"), "window.panel.actions"),
     (&["Window"], "Adjustments", None, "window.panel.adjustments"),
+    (&["Window"], "Assistant", None, "window.panel.assistant"),
     (&["Window"], "Brush Settings", Some("F5"), "window.panel.brushSettings"),
     (&["Window"], "Brushes", None, "window.panel.brushes"),
     (&["Window"], "Channels", None, "window.panel.channels"),

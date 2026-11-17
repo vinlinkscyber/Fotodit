@@ -183,14 +183,31 @@ pub struct JobsUi {
     batch_preview_texture: Option<(JobId, u64, egui::TextureHandle)>,
 }
 
+/// Completion contract for [`run_with`]. `Default` may start a background job and return a
+/// pending receipt. `Required` always runs inline and returns the completed value: assistant-
+/// owned commands need it, because the automation execution engine binds every step to the
+/// journal the moment `command_run` returns - a pending receipt breaks step sequencing,
+/// history binding and the rollback view. Trade-off: an inline run blocks the UI thread for
+/// the command's duration, so Esc cancellation is unavailable while it runs.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Completion {
+    Default,
+    Required,
+}
+
 /// Run command `id`: in the background when background jobs are on and the command is a job
 /// (the result is then `{"job": id, "pending": true}` and the edit lands when [`tick`] applies
 /// it), else synchronously like [`fotodit_engine::Session::execute`].
 pub fn run(app: &mut FotoditApp, id: &str, params: Value) -> Result<Value, String> {
+    run_with(app, id, params, Completion::Default)
+}
+
+/// [`run`] with an explicit completion contract (see [`Completion`]).
+pub fn run_with(app: &mut FotoditApp, id: &str, params: Value, completion: Completion) -> Result<Value, String> {
     // A place is also a job where there are no threads (the web build): the session steps it a
     // slice per frame, and every other command stays synchronous there.
     let place = matches!(id, "file.placeEmbedded" | "file.placeLinked") && place_in_background(app);
-    if !app.background_jobs && !place {
+    if completion == Completion::Required || (!app.background_jobs && !place) {
         return app.session.execute(id, params).map_err(|e| e.to_string());
     }
     match app.session.start(id, params).map_err(|e| e.to_string())? {

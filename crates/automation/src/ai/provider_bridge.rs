@@ -34,7 +34,7 @@ use super::{AiContext, AiError, EditingPlan};
 /// The five supported external AI providers.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub enum ProviderId {
-    /// Google Gemini (gemini-3.5-flash / imagen)
+    /// Google Gemini (gemini-3.1-flash-lite / imagen)
     Gemini,
     /// OpenRouter multi-model router (gpt-4.1-mini, claude-sonnet-4.6, etc.)
     OpenRouter,
@@ -154,7 +154,7 @@ impl ProviderConfig {
             cohere_api_key: get_config_var("COHERE_API_KEY").or_else(|| baked_config_var!("COHERE_API_KEY")),
             pollinations_api_key: get_config_var("POLLINATIONS_API_KEY").or_else(|| baked_config_var!("POLLINATIONS_API_KEY")),
             lajiwa_api_key: get_config_var("LAJIWA_API_KEY").or_else(|| baked_config_var!("LAJIWA_API_KEY")),
-            gemini_model: get_config_var("GEMINI_MODEL").or_else(|| Some("gemini-3.5-flash".into())),
+            gemini_model: get_config_var("GEMINI_MODEL").or_else(|| Some("gemini-3.1-flash-lite".into())),
             openrouter_model: get_config_var("OPENROUTER_MODEL").or_else(|| Some("openai/gpt-4.1-mini".into())),
             cohere_model: get_config_var("COHERE_MODEL").or_else(|| Some("command-a-plus-05-2026".into())),
             pollinations_image_model: get_config_var("POLLINATIONS_IMAGE_MODEL").or_else(|| Some("tongyi-mai/z-image-turbo".into())),
@@ -495,6 +495,9 @@ impl HttpTransport for SystemCurlTransport {
         cmd.arg(url);
         cmd.arg("--max-time").arg(format!("{}", timeout.as_secs().max(1)));
 
+        // Keep the HTTP status separate from the arbitrary binary response body.
+        cmd.arg("-w").arg("\n%{http_code}");
+
         for &(k, v) in headers {
             cmd.arg("-H").arg(format!("{k}: {v}"));
         }
@@ -505,7 +508,44 @@ impl HttpTransport for SystemCurlTransport {
             return Err(AiError::PlanningError(format!("curl image request failed: {err_msg}")));
         }
 
-        Ok((200, output.stdout))
+        split_raw_http_response(output.stdout)
+    }
+}
+
+// curl appends exactly one newline and three status digits after the binary body.
+// Split from the end so embedded newlines, NULs and non-UTF8 image bytes survive.
+fn split_raw_http_response(mut output: Vec<u8>) -> Result<(u16, Vec<u8>), AiError> {
+    let invalid = || AiError::PlanningError("Missing or invalid curl image HTTP status".into());
+    let suffix = output.len().checked_sub(4).ok_or_else(invalid)?;
+    if output[suffix] != b'\n' {
+        return Err(invalid());
+    }
+    let digits = &output[suffix + 1..];
+    if !digits.iter().all(u8::is_ascii_digit) {
+        return Err(invalid());
+    }
+    let status = u16::from(digits[0] - b'0') * 100
+        + u16::from(digits[1] - b'0') * 10
+        + u16::from(digits[2] - b'0');
+    if !(100..=599).contains(&status) {
+        return Err(invalid());
+    }
+    output.truncate(suffix);
+    Ok((status, output))
+}
+
+// Private image-attempt metadata: HTTP status is carried separately from the
+// human-readable error, never guessed from error text. Transport, schema and
+// decoding errors have no HTTP failure status even if their messages contain
+// status-like digits. Public bridge/transport/error interfaces stay unchanged.
+struct ImageAttemptError {
+    error: AiError,
+    status: Option<u16>,
+}
+
+impl From<AiError> for ImageAttemptError {
+    fn from(error: AiError) -> Self {
+        Self { error, status: None }
     }
 }
 
@@ -603,8 +643,8 @@ impl AiProviderBridge {
                             return Ok(bytes);
                         }
                         Err(e) => {
-                            log::warn!("Pollinations image failed: {e}; cascading to Gemini fallback");
-                            self.balancer.record_failure(provider, Some(429));
+                            log::warn!("Pollinations image failed: {}; cascading to Gemini fallback", e.error);
+                            self.balancer.record_failure(provider, e.status);
                         }
                     }
                 }
@@ -615,8 +655,8 @@ impl AiProviderBridge {
                             return Ok(bytes);
                         }
                         Err(e) => {
-                            log::warn!("Gemini image fallback failed: {e}");
-                            self.balancer.record_failure(provider, None);
+                            log::warn!("Gemini image fallback failed: {}", e.error);
+                            self.balancer.record_failure(provider, e.status);
                         }
                     }
                 }
@@ -653,7 +693,7 @@ impl AiProviderBridge {
         timeout: Duration,
     ) -> Result<EditingPlan, AiError> {
         let key = self.balancer.config().gemini_api_key.as_deref().ok_or_else(|| AiError::PlanningError("Missing Gemini API key".into()))?;
-        let model = self.balancer.config().gemini_model.as_deref().unwrap_or("gemini-3.5-flash");
+        let model = self.balancer.config().gemini_model.as_deref().unwrap_or("gemini-3.1-flash-lite");
         let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent");
 
         let system_instruction = "You are Fotodit's AI Editing Planner. Return strict JSON with {title, rationale, steps: [{command, params, description}]}.";
@@ -817,7 +857,7 @@ impl AiProviderBridge {
         width: u32,
         height: u32,
         timeout: Duration,
-    ) -> Result<Vec<u8>, AiError> {
+    ) -> Result<Vec<u8>, ImageAttemptError> {
         let key = self.balancer.config().pollinations_api_key.as_deref().unwrap_or("");
         let model = self.balancer.config().pollinations_image_model.as_deref().unwrap_or("tongyi-mai/z-image-turbo");
         let encoded_prompt = url_encode(prompt);
@@ -836,36 +876,40 @@ impl AiProviderBridge {
         if status == 200 && !bytes.is_empty() {
             Ok(bytes)
         } else {
-            Err(AiError::PlanningError(format!("Pollinations image failed with status {status}")))
+            Err(ImageAttemptError {
+                error: AiError::PlanningError(format!("Pollinations image failed with status {status}")),
+                status: (status != 200).then_some(status),
+            })
         }
     }
 
     // Google Gemini Visual Image Synthesis Fallback
-    fn execute_gemini_image(&self, prompt: &str, timeout: Duration) -> Result<Vec<u8>, AiError> {
+    fn execute_gemini_image(&self, prompt: &str, timeout: Duration) -> Result<Vec<u8>, ImageAttemptError> {
         let key = self.balancer.config().gemini_api_key.as_deref().ok_or_else(|| AiError::PlanningError("Missing Gemini key for image fallback".into()))?;
-        let url = "https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict";
+        let url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image:generateContent";
 
         let headers = [("x-goog-api-key", key)];
         let body = json!({
-            "instances": [{ "prompt": prompt }],
-            "parameters": { "sampleCount": 1, "aspectRatio": "1:1" }
+            "contents": [{ "parts": [{ "text": prompt }] }],
+            "generationConfig": { "responseModalities": ["IMAGE"] }
         });
 
         let (status, resp) = self.transport.execute_json("POST", url, &headers, Some(&body), timeout)?;
         if status != 200 {
-            return Err(AiError::PlanningError(format!("Gemini image fallback status {status}")));
+            return Err(ImageAttemptError {
+                error: AiError::PlanningError(format!("Gemini image fallback status {status}")),
+                status: Some(status),
+            });
         }
 
-        let b64_bytes = resp.get("predictions")
-            .and_then(|p| p.get(0))
-            .and_then(|p| p.get("bytesBase64Encoded"))
+        let b64_bytes = resp.pointer("/candidates/0/content/parts/0/inlineData/data")
             .and_then(Value::as_str)
             .ok_or_else(|| AiError::PlanningError("Missing b64 image data in Gemini response".into()))?;
 
         use base64::Engine;
         base64::engine::general_purpose::STANDARD
             .decode(b64_bytes)
-            .map_err(|e| AiError::PlanningError(format!("Base64 decode failed: {e}")))
+            .map_err(|e| ImageAttemptError::from(AiError::PlanningError(format!("Base64 decode failed: {e}"))))
     }
 
     // Helper: Parses JSON plan text with markdown fence stripping
@@ -953,6 +997,109 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    #[test]
+    fn raw_http_status_preserves_binary_body_and_error_statuses() -> Result<(), AiError> {
+        for status in [200, 401, 402, 429, 500, 503] {
+            let body = vec![0, 255, 137, b'\n', b'2', b'0', b'0', b'\n'];
+            let mut output = body.clone();
+            output.extend_from_slice(format!("\n{status}").as_bytes());
+            let (actual_status, actual_body) = split_raw_http_response(output)?;
+            assert_eq!(actual_status, status);
+            assert_eq!(actual_body, body);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn raw_http_status_preserves_empty_body() -> Result<(), AiError> {
+        let (status, body) = split_raw_http_response(b"\n200".to_vec())?;
+        assert_eq!(status, 200);
+        assert!(body.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn raw_http_status_rejects_missing_or_invalid_suffix() {
+        for output in [
+            b"".as_slice(),
+            b"200",
+            b"body200",
+            b"body\n20",
+            b"body\n2000",
+            b"body\n2x0",
+            b"body\n000",
+            b"body\n099",
+            b"body\n600",
+            b"body\n200\n",
+        ] {
+            assert!(split_raw_http_response(output.to_vec()).is_err());
+        }
+    }
+
+    // Loopback-only fixture: exercise the real curl command, not MockTransport.
+    // The runner must unset proxy variables (or set NO_PROXY=127.0.0.1).
+    #[test]
+    fn raw_http_status_system_curl_loopback_regression() -> Result<(), Box<dyn std::error::Error>> {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        for status in [200, 401, 402, 429, 500, 503] {
+            let listener = TcpListener::bind("127.0.0.1:0")?;
+            listener.set_nonblocking(true)?;
+            let address = listener.local_addr()?;
+            let body = vec![137, 0, 255, b'\n', b'2', b'0', b'0', b'\n'];
+            let expected = body.clone();
+            let server = std::thread::spawn(move || -> std::io::Result<()> {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            if Instant::now() >= deadline {
+                                return Err(std::io::Error::new(
+                                    std::io::ErrorKind::TimedOut,
+                                    "curl did not connect to loopback fixture",
+                                ));
+                            }
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(error) => return Err(error),
+                    }
+                };
+                stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+                stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+                let mut request = Vec::new();
+                let mut byte = [0];
+                while !request.ends_with(b"\r\n\r\n") && request.len() < 8192 {
+                    if stream.read(&mut byte)? == 0 {
+                        break;
+                    }
+                    request.push(byte[0]);
+                }
+                write!(
+                    stream,
+                    "HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len(),
+                )?;
+                stream.write_all(&body)?;
+                Ok(())
+            });
+            let response = SystemCurlTransport.fetch_raw_bytes(
+                &format!("http://{address}/image"),
+                &[],
+                Duration::from_secs(2),
+            );
+            let served = server
+                .join()
+                .map_err(|_| std::io::Error::other("loopback fixture thread failed"))?;
+            served?;
+            let (actual_status, actual_body) = response?;
+            assert_eq!(actual_status, status);
+            assert_eq!(actual_body, expected);
+        }
+        Ok(())
+    }
+
     struct MockTransport {
         call_count: Arc<AtomicUsize>,
         gemini_status: u16,
@@ -969,7 +1116,22 @@ mod tests {
             _timeout: Duration,
         ) -> Result<(u16, Value), AiError> {
             self.call_count.fetch_add(1, Ordering::SeqCst);
-            if url.contains("generativelanguage.googleapis.com") {
+            if url.contains("generativelanguage.googleapis.com") && url.contains("flash-image") {
+                if self.gemini_status == 200 {
+                    // Eight fake PNG bytes, base64-encoded, as inlineData like the real API.
+                    let resp = json!({
+                        "candidates": [{
+                            "content": {
+                                "parts": [{
+                                    "inlineData": {"mimeType": "image/png", "data": "AQIDBAUGBwg="}
+                                }]
+                            }
+                        }]
+                    });
+                    return Ok((200, resp));
+                }
+                return Ok((self.gemini_status, json!({"error": {"message": "Rate limited", "code": 429}})));
+            } else if url.contains("generativelanguage.googleapis.com") {
                 if self.gemini_status == 200 {
                     let resp = json!({
                         "candidates": [{
@@ -1181,4 +1343,133 @@ mod tests {
         let img_bytes = bridge.generate_image("sunset texture", 512, 512).expect("Gemini fallback should provide image");
         assert_eq!(img_bytes.len(), 8, "Mock PNG bytes returned from Gemini");
     }
+    // Offline image-attempt fixtures. A message deliberately containing 429/402
+    // must not turn a transport or response-shape failure into an HTTP failure.
+    struct ImageStatusTransport {
+        status: Option<u16>,
+        response: Value,
+        bytes: Vec<u8>,
+    }
+
+    impl HttpTransport for ImageStatusTransport {
+        fn execute_json(
+            &self,
+            _method: &str,
+            _url: &str,
+            _headers: &[(&str, &str)],
+            _body: Option<&Value>,
+            _timeout: Duration,
+        ) -> Result<(u16, Value), AiError> {
+            self.status
+                .map(|status| (status, self.response.clone()))
+                .ok_or_else(|| AiError::PlanningError("transport failure mentioning 429 and 402".into()))
+        }
+
+        fn fetch_raw_bytes(
+            &self,
+            _url: &str,
+            _headers: &[(&str, &str)],
+            _timeout: Duration,
+        ) -> Result<(u16, Vec<u8>), AiError> {
+            self.status
+                .map(|status| (status, self.bytes.clone()))
+                .ok_or_else(|| AiError::PlanningError("transport failure mentioning 429 and 402".into()))
+        }
+    }
+
+    fn image_status_bridge(provider: ProviderId, transport: ImageStatusTransport) -> AiProviderBridge {
+        // Exactly one configured provider isolates its recorded health outcome.
+        let config = ProviderConfig {
+            pollinations_api_key: (provider == ProviderId::Pollinations).then(|| "fixture".into()),
+            gemini_api_key: (provider == ProviderId::Gemini).then(|| "fixture".into()),
+            ..Default::default()
+        };
+        AiProviderBridge::with_transport(config, CommandCatalog::new(), Box::new(transport))
+    }
+
+    fn assert_image_failure_cooldown(
+        provider: ProviderId,
+        transport: ImageStatusTransport,
+        seconds: u64,
+    ) -> Result<(), String> {
+        let bridge = image_status_bridge(provider, transport);
+        let before = Instant::now();
+        assert!(bridge.generate_image("offline fixture", 8, 8).is_err());
+        let after = Instant::now();
+        let guard = bridge.balancer.health.lock().map_err(|_| "health lock poisoned".to_string())?;
+        let health = guard.get(&provider).ok_or_else(|| "missing provider health".to_string())?;
+        let until = health.cooldown_until.ok_or_else(|| "missing cooldown".to_string())?;
+        let duration = Duration::from_secs(seconds);
+        // Bracket the internal Instant rather than sleeping or relying on a
+        // timing tolerance: record_failure happened between before and after.
+        assert!(until >= before + duration, "{provider:?}: cooldown shorter than {seconds}s");
+        assert!(until <= after + duration, "{provider:?}: cooldown longer than {seconds}s");
+        assert_eq!(health.active_requests, 0);
+        assert_eq!(health.total_calls, 1);
+        assert_eq!(health.total_errors, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn image_failure_status_uses_existing_http_cooldown_policy() -> Result<(), String> {
+        for provider in [ProviderId::Pollinations, ProviderId::Gemini] {
+            for (status, seconds) in [(402, 300), (429, 60), (500, 20), (502, 20), (503, 20), (401, 5)] {
+                assert_image_failure_cooldown(
+                    provider,
+                    ImageStatusTransport { status: Some(status), response: json!({"error": {"message": "429 is only text"}}), bytes: vec![1] },
+                    seconds,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn image_failure_status_non_http_errors_use_general_cooldown() -> Result<(), String> {
+        for provider in [ProviderId::Pollinations, ProviderId::Gemini] {
+            assert_image_failure_cooldown(
+                provider,
+                ImageStatusTransport { status: None, response: Value::Null, bytes: vec![] },
+                5,
+            )?;
+        }
+        // Empty HTTP-200 Pollinations body: failure, but not rate limiting.
+        assert_image_failure_cooldown(
+            ProviderId::Pollinations,
+            ImageStatusTransport { status: Some(200), response: Value::Null, bytes: vec![] },
+            5,
+        )?;
+        // Gemini HTTP-200 schema and base64 failures likewise carry no HTTP
+        // failure status. Arbitrary status-like response text is irrelevant.
+        for response in [
+            json!({"error": {"message": "429 402"}}),
+            json!({"candidates": [{"content": {"parts": [{"inlineData": {"data": "not base64! 429"}}]}}]}),
+        ] {
+            assert_image_failure_cooldown(
+                ProviderId::Gemini,
+                ImageStatusTransport { status: Some(200), response, bytes: vec![] },
+                5,
+            )?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn image_failure_status_success_keeps_bytes_and_healthy_state() -> Result<(), String> {
+        for provider in [ProviderId::Pollinations, ProviderId::Gemini] {
+            let bytes = vec![1, 2, 3, 4];
+            let response = json!({"candidates": [{"content": {"parts": [{"inlineData": {"data": "AQIDBA=="}}]}}]});
+            let bridge = image_status_bridge(provider, ImageStatusTransport { status: Some(200), response, bytes: bytes.clone() });
+            let actual = bridge.generate_image("offline fixture", 8, 8).map_err(|e| e.to_string())?;
+            assert_eq!(actual, bytes);
+            let guard = bridge.balancer.health.lock().map_err(|_| "health lock poisoned".to_string())?;
+            let health = guard.get(&provider).ok_or_else(|| "missing provider health".to_string())?;
+            assert_eq!(health.active_requests, 0);
+            assert_eq!(health.total_calls, 1);
+            assert_eq!(health.total_errors, 0);
+            assert!(health.cooldown_until.is_none());
+        }
+        Ok(())
+    }
+
 }

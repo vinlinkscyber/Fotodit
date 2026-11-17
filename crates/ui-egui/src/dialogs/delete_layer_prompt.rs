@@ -8,6 +8,23 @@ pub fn owns(fields: &Map<String, Value>) -> bool {
     fields.contains_key(MARK)
 }
 
+/// The trigger conditions of [`intercept`], pure: nothing opens. A repeated request while a
+/// prompt is already open returns a pending receipt without a dialog, so a caller that must
+/// refuse the prompt before any effect (the assistant's completed-command gate) uses this to
+/// catch the first and every repeated request alike. Never used to skip the confirmation.
+pub fn would_intercept(app: &FotoditApp, command: &str, params: &Value) -> bool {
+    if app.automation_input
+        || command != "layer.delete"
+        || params.get("__trash").and_then(Value::as_bool) != Some(true)
+        || app.session.prefs().dialogs.get(PREF).and_then(|v| v.get("skip")).and_then(Value::as_bool) == Some(true)
+    {
+        return false;
+    }
+    let Some(state) = app.session.active() else { return false };
+    let ids = if let Some(id) = params.get("layer").and_then(Value::as_u64) { vec![fotodit_doc::LayerId(id)] } else { state.selected_layers().clone() };
+    !ids.is_empty()
+}
+
 pub fn intercept(app: &mut FotoditApp, command: &str, params: &Value) -> Option<Result<Value, String>> {
     if app.automation_input
         || command != "layer.delete"

@@ -200,8 +200,13 @@ pub fn system_info_json(app: &FotoditApp) -> serde_json::Value {
     })
 }
 
-/// Queue the same recovery warning for startup and runtime failures.
+/// Queue the same recovery warning for startup and runtime failures. Layout-review captures
+/// (FOTODIT_ASSISTANT_DEMO=1) suppress the dialog so it never covers the surfaces under review.
 pub fn queue_fallback_notice(app: &mut FotoditApp, reason: impl Into<String>) {
+    if std::env::var_os("FOTODIT_ASSISTANT_DEMO").is_some() {
+        log::warn!("GPU fallback notice suppressed in layout review mode");
+        return;
+    }
     app.ui.gpu_fallback_notice = Some(reason.into());
 }
 

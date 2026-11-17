@@ -1284,3 +1284,198 @@ fn open_identity_keeps_same_poll_results_in_the_profile_queue() {
     assert!(app.held_opens.is_empty());
     control.assert_untouched(&app);
 }
+
+/// Assistant-owned commands carry a completed-value contract: even with background jobs
+/// enabled, `menus::invoke_completed` runs a job-capable filter inline so the automation
+/// execution engine's step sequencing and history binding stay exact. The default path is
+/// unchanged (still returns a pending receipt), and admission is not bypassed: another
+/// document job still blocks the next command.
+#[test]
+fn assistant_owned_commands_complete_inline_and_sequence_despite_background_jobs() {
+    let mut s = fotodit_engine::Session::new();
+    s.execute("file.new", json!({"width": 32, "height": 32, "background": "white"})).unwrap();
+    let mut app = FotoditApp::new(s, crate::Services::default());
+    app.background_jobs = true;
+    let ctx = egui::Context::default();
+    let history_len = |app: &FotoditApp| fotodit_engine::inspect::document(app.session.active().unwrap())["history"].as_array().unwrap().len();
+    let drain = |app: &mut FotoditApp, job: u64| {
+        let started = Instant::now();
+        loop {
+            if app.session.poll_jobs().iter().any(|event| event.id == JobId(job)) {
+                break;
+            }
+            assert!(started.elapsed() < Duration::from_secs(30), "background filter did not finish");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    };
+
+    // Control: the default path really hands back a pending job receipt in this fixture.
+    let started = crate::menus::invoke(&mut app, &ctx, "filter.sharpen.unsharpMask", json!({"amount": 50, "radius": 1, "threshold": 0})).unwrap();
+    assert_eq!(started.get("pending").and_then(Value::as_bool), Some(true), "fixture must exercise the background path: {started}");
+    drain(&mut app, started["job"].as_u64().unwrap());
+
+    // Assistant-owned: completed value (no receipt), exactly one appended history entry,
+    // and the next plan step is admitted immediately.
+    let baseline = history_len(&app);
+    let done = crate::menus::invoke_completed(&mut app, &ctx, "filter.sharpen.unsharpMask", json!({"amount": 50, "radius": 1, "threshold": 0})).unwrap();
+    assert!(done.get("pending").is_none(), "assistant-owned command must complete inline: {done}");
+    assert_eq!(history_len(&app), baseline + 1, "completed command appends exactly one history entry");
+    let curves = crate::menus::invoke_completed(&mut app, &ctx, "layer.newAdjustmentLayer.curves", json!({"points": [[0, 0], [64, 55], [192, 205], [255, 255]]})).unwrap();
+    assert!(curves.get("pending").is_none(), "adjustment step completes inline too: {curves}");
+
+    // Admission is not bypassed: a job started by someone else still blocks the next command.
+    let running = crate::menus::invoke(&mut app, &ctx, "filter.sharpen.unsharpMask", json!({"amount": 50, "radius": 1, "threshold": 0})).unwrap();
+    assert_eq!(running.get("pending").and_then(Value::as_bool), Some(true), "control fixture must still background: {running}");
+    let refused = crate::menus::invoke_completed(&mut app, &ctx, "layer.newAdjustmentLayer.vibrance", json!({"vibrance": 18, "saturation": 4})).unwrap_err();
+    assert!(refused.contains("still running"), "existing job admission must be preserved: {refused}");
+    drain(&mut app, running["job"].as_u64().unwrap());
+}
+
+/// The completed-value contract is enforced at the menu route, not only at the job seam:
+/// authorization denial propagates as the error (nothing runs), a route that would open a
+/// dialog is an explicit refusal, and a completed request leaves no queued later work.
+#[test]
+fn invoke_completed_refuses_denial_and_dialog_routes_and_queues_nothing() {
+    let mut s = fotodit_engine::Session::new();
+    s.execute("file.new", json!({"width": 32, "height": 32, "background": "white"})).unwrap();
+    let mut app = FotoditApp::new(s, crate::Services::default());
+    app.background_jobs = true;
+    let ctx = egui::Context::default();
+    let history_len = |app: &FotoditApp| fotodit_engine::inspect::document(app.session.active().unwrap())["history"].as_array().unwrap().len();
+
+    // Authorization denial: the error is the denial itself and no edit lands.
+    app.automation_input = true;
+    app.services.automation_command = Some(Box::new(|id, _| if id.starts_with("filter.") { Err("filters denied".into()) } else { Ok(()) }));
+    let before = history_len(&app);
+    let denied = crate::menus::invoke_completed(&mut app, &ctx, "filter.sharpen.unsharpMask", json!({"amount": 50, "radius": 1, "threshold": 0})).unwrap_err();
+    assert!(denied.contains("filters denied"), "{denied}");
+    assert_eq!(history_len(&app), before, "a denied command must not edit");
+    app.services.automation_command = None;
+    app.automation_input = false;
+
+    // A route that would open a dialog (interactive creation without params) refuses
+    // explicitly BEFORE the dialog opens instead of returning dialog/null success.
+    let dialogs = app.ui.dialogs.len();
+    let dialog = crate::menus::invoke_completed(&mut app, &ctx, "layer.newFillLayer.solidColor", json!({})).unwrap_err();
+    assert!(dialog.contains("cannot be completed"), "{dialog}");
+    assert_eq!(app.ui.dialogs.len(), dialogs, "the refusal must not open a dialog");
+    let dialog = crate::menus::invoke_completed(&mut app, &ctx, "file.new", json!({})).unwrap_err();
+    assert!(dialog.contains("cannot be completed"), "{dialog}");
+    assert_eq!(app.ui.dialogs.len(), dialogs, "the refusal must not open the New Document dialog");
+
+    // A completed request leaves no queued later work on the document.
+    let done = crate::menus::invoke_completed(&mut app, &ctx, "filter.sharpen.unsharpMask", json!({"amount": 50, "radius": 1, "threshold": 0})).unwrap();
+    assert!(done.get("pending").is_none(), "{done}");
+    let doc = app.session.active().unwrap().doc.id;
+    assert!(app.session.job_on(doc).is_none(), "a completed request must leave no running job");
+    assert!(app.after_transform_commit.is_none(), "a completed request must leave nothing queued");
+}
+
+/// Pre-effect refusals: under the completed-value contract a refused route leaves nothing
+/// behind - no dialog opened, no unsaved-changes prompt parked, no rasterize prompt, no
+/// transform commit launched, no playback, nothing queued, no history entry. Recursive
+/// helpers that DO support completion carry the contract and finish in place.
+#[test]
+fn invoke_completed_refuses_before_effects() {
+    let mut s = fotodit_engine::Session::new();
+    s.execute("file.new", json!({"width": 32, "height": 32, "background": "white"})).unwrap();
+    let mut app = FotoditApp::new(s, crate::Services::default());
+    app.background_jobs = true;
+    let ctx = egui::Context::default();
+    let history_len = |app: &FotoditApp| fotodit_engine::inspect::document(app.session.active().unwrap())["history"].as_array().unwrap().len();
+
+    // A shell route outside the boundary: refused, no dialog opened.
+    let dialogs = app.ui.dialogs.len();
+    let err = crate::menus::invoke_completed(&mut app, &ctx, "edit.preferences.interface", json!({})).unwrap_err();
+    assert!(err.contains("cannot be completed"), "{err}");
+    assert_eq!(app.ui.dialogs.len(), dialogs, "the refusal must not open a dialog");
+
+    // Dirty the document (a completed edit), then an unsaved-changes decision refuses
+    // without parking the prompt or touching the document set.
+    crate::menus::invoke_completed(&mut app, &ctx, "filter.sharpen.unsharpMask", json!({"amount": 50, "radius": 1, "threshold": 0})).unwrap();
+    assert!(app.session.active().unwrap().is_dirty(), "fixture: the edit must dirty the document");
+    let docs = app.session.documents().len();
+    let before = history_len(&app);
+    let err = crate::menus::invoke_completed(&mut app, &ctx, "file.close", json!({})).unwrap_err();
+    assert!(err.contains("unsaved-changes"), "{err}");
+    assert!(app.discard.is_none(), "the refusal must not park the unsaved-changes prompt");
+    assert_eq!(app.session.documents().len(), docs, "the refusal must not close anything");
+    assert_eq!(history_len(&app), before, "the refusal must not record history");
+
+    // A filter on a type layer needs a rasterize decision: refused before the prompt opens,
+    // and the layer stays a type layer.
+    crate::menus::invoke_completed(&mut app, &ctx, "type.create", json!({"x": 4, "y": 20, "text": "CHNDRAX", "size": 10})).unwrap();
+    let dialogs = app.ui.dialogs.len();
+    let before = history_len(&app);
+    let err = crate::menus::invoke_completed(&mut app, &ctx, "filter.sharpen.unsharpMask", json!({"amount": 50, "radius": 1, "threshold": 0})).unwrap_err();
+    assert!(err.contains("rasterize"), "{err}");
+    assert_eq!(app.ui.dialogs.len(), dialogs, "the refusal must not open the rasterize prompt");
+    assert_eq!(history_len(&app), before, "the refusal must not record history");
+    let st = app.session.active().unwrap();
+    let active = st.active_layer.unwrap();
+    assert!(matches!(st.doc.layer(active).unwrap().content, fotodit_doc::LayerContent::Text(_)), "the type layer must be untouched");
+
+    // Recursive helpers that support completion carry the contract and finish in place.
+    let done = crate::menus::invoke_completed(&mut app, &ctx, "window.panel.layers", json!({})).unwrap();
+    assert!(done.get("pending").is_none(), "panel alias must complete in place: {done}");
+    let done = crate::menus::invoke_completed(&mut app, &ctx, "view.proofSetup.workingCmyk", json!({})).unwrap();
+    assert!(done.get("pending").is_none(), "proof preset recursion must complete in place: {done}");
+
+    // Action playback is outside the boundary: explicit refusal, nothing run.
+    let before = history_len(&app);
+    let err = crate::menus::invoke_completed(&mut app, &ctx, "actions.play", json!({})).unwrap_err();
+    assert!(err.contains("cannot be completed"), "{err}");
+    assert_eq!(history_len(&app), before, "the refusal must not record history");
+
+    // Wrong-typed picker parameters classify exactly like a missing one: the dispatch's
+    // `and_then(Value::as_str)` picker arms take null and non-string `path` too.
+    let dialogs = app.ui.dialogs.len();
+    let err = crate::menus::invoke_completed(&mut app, &ctx, "file.open", json!({"path": null})).unwrap_err();
+    assert!(err.contains("cannot be completed"), "{err}");
+    let err = crate::menus::invoke_completed(&mut app, &ctx, "file.open", json!({"path": 123})).unwrap_err();
+    assert!(err.contains("cannot be completed"), "{err}");
+    let err = crate::menus::invoke_completed(&mut app, &ctx, "file.import.videoFramesToLayers", json!({"path": 123})).unwrap_err();
+    assert!(err.contains("cannot be completed"), "{err}");
+    let err = crate::menus::invoke_completed(&mut app, &ctx, "file.import.variableDataSets", json!({"path": null})).unwrap_err();
+    assert!(err.contains("cannot be completed"), "{err}");
+    assert_eq!(app.ui.dialogs.len(), dialogs, "the refusals must not open a dialog");
+
+    // A Layers-panel trash request asks "Delete layer?": refused pre-effect, first and
+    // repeated alike (a repeated request returns a pending receipt without a dialog).
+    let before = history_len(&app);
+    let err = crate::menus::invoke_completed(&mut app, &ctx, "layer.delete", json!({"__trash": true})).unwrap_err();
+    assert!(err.contains("deletion confirmation"), "{err}");
+    let err = crate::menus::invoke_completed(&mut app, &ctx, "layer.delete", json!({"__trash": true})).unwrap_err();
+    assert!(err.contains("deletion confirmation"), "{err}");
+    assert_eq!(app.ui.dialogs.len(), dialogs, "the refusals must not open the confirmation");
+    assert_eq!(history_len(&app), before, "the refusals must not record history");
+
+    // A mask dropped on the Trash asks Apply/Delete first: refused pre-effect, repeated too,
+    // for a layer mask and a vector mask.
+    crate::menus::invoke_completed(&mut app, &ctx, "layer.new.layer", json!({"name": "masked"})).unwrap();
+    let masked = app.session.active().unwrap().active_layer.unwrap().0;
+    crate::menus::invoke_completed(&mut app, &ctx, "layer.layerMask.revealAll", json!({"layer": masked})).unwrap();
+    crate::menus::invoke_completed(&mut app, &ctx, "layer.vectorMask.add", json!({"layer": masked})).unwrap();
+    let before = history_len(&app);
+    let err = crate::menus::invoke_completed(&mut app, &ctx, "layer.layerMask.delete", json!({"layer": masked, "__maskTrash": true})).unwrap_err();
+    assert!(err.contains("mask deletion confirmation"), "{err}");
+    let err = crate::menus::invoke_completed(&mut app, &ctx, "layer.layerMask.delete", json!({"layer": masked, "__maskTrash": true})).unwrap_err();
+    assert!(err.contains("mask deletion confirmation"), "{err}");
+    let err = crate::menus::invoke_completed(&mut app, &ctx, "layer.vectorMask.delete", json!({"layer": masked, "__maskTrash": true})).unwrap_err();
+    assert!(err.contains("mask deletion confirmation"), "{err}");
+    assert_eq!(app.ui.dialogs.len(), dialogs, "the refusals must not open the mask prompt");
+    assert_eq!(history_len(&app), before, "the refusals must not record history");
+
+    // An open Free Transform: a PRECHECKED command refuses BEFORE any commit is launched.
+    crate::menus::invoke_completed(&mut app, &ctx, "layer.new.layer", json!({"name": "pixels"})).unwrap();
+    crate::menus::invoke_completed(&mut app, &ctx, "edit.fill", json!({"color": "#3366cc"})).unwrap();
+    crate::menus::invoke(&mut app, &ctx, "edit.freeTransform", json!({})).unwrap();
+    assert!(app.ui.transform.is_some(), "fixture: the transform session must be open");
+    let before = history_len(&app);
+    let err = crate::menus::invoke_completed(&mut app, &ctx, "layer.new.layer", json!({"name": "blocked"})).unwrap_err();
+    assert!(err.contains("Free Transform"), "{err}");
+    assert!(app.ui.transform.is_some(), "the refusal leaves the transform open");
+    assert!(crate::transform_tool::committing(&app).is_none(), "no commit was launched");
+    assert!(app.after_transform_commit.is_none(), "nothing was queued for after the commit");
+    assert_eq!(history_len(&app), before, "the refusal must not record history");
+}

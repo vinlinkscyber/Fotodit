@@ -14,8 +14,12 @@
 
 pub mod command_intelligence;
 pub mod creative_design;
+mod enhancement_preflight;
 pub mod evaluation;
 pub mod execution;
+pub mod goal_repair;
+pub mod goal_session;
+pub mod live;
 pub mod natural_language;
 pub mod perception;
 pub mod planner;
@@ -24,9 +28,13 @@ pub mod provider_bridge;
 pub use command_intelligence::{CommandCapability, CommandCatalog, ValidatedCommand};
 pub use creative_design::{ColorHarmony, DesignArchetype, LayoutEngine, TypographyHierarchy};
 pub use evaluation::{EvaluationEngine, EvaluationReport};
-pub use execution::{ExecutionEngine, ExecutionResult};
+pub use execution::{ExecutionEngine, ExecutionEvidence, ExecutionResult, StepExecution, StepVisualEvidence, VisualEvidence, VisualEvidenceClass};
+pub use goal_repair::SemanticGoalRepair;
+pub use goal_session::{GoalAttempt, GoalCommandRecord, GoalOutcome, GoalRepairAdapter,
+    GoalRepairDecision, GoalRepairInput, GoalRequest, GoalStop, NoGoalRepair};
+pub use live::LiveEditSession;
 pub use natural_language::{EditingIntent, IntentCategory, NaturalLanguageEngine};
-pub use perception::{DocumentStructure, PerceptionEngine, VisualElement, VisualScene};
+pub use perception::{DocumentStructure, PerceptionEngine, SubjectBasis, SubjectCandidate, VisualElement, VisualScene};
 pub use planner::{AiPlanner, DeterministicRulePlanner, PlanStep};
 pub use provider_bridge::{
     AiProviderBridge, ContextLoadBalancer, ContextProfile, HttpTransport, ProviderConfig,
@@ -140,6 +148,28 @@ pub struct AiResult {
     pub revision: u64,
 }
 
+/// Computed dominant colors from the engine's real pixel statistics, when the
+/// host's command surface offers `image.analysis.colorStats`. Empty when the
+/// command is unavailable, errors, or reports a selection-scoped domain -
+/// never invented. Whole-canvas stats only.
+///
+/// The engine command is invoked with a tight automatic-perception pixel budget
+/// (4M pixels): larger canvases or selections are skipped honestly (empty colors)
+/// rather than triggering region-sized rendering work synchronously around edits.
+pub fn computed_dominant_colors<S: LiveEditSession + ?Sized>(session: &mut S) -> Vec<String> {
+    let Ok(stats) = session.command_run("image.analysis.colorStats", serde_json::json!({"maxColors": 5, "maxPixels": 4_000_000})) else {
+        return Vec::new();
+    };
+    if stats.get("domain").and_then(Value::as_str) != Some("canvas") {
+        return Vec::new();
+    }
+    stats
+        .get("dominantColors")
+        .and_then(Value::as_array)
+        .map(|arr| arr.iter().filter_map(|c| c.get("color").and_then(Value::as_str).map(str::to_string)).collect())
+        .unwrap_or_default()
+}
+
 /// The unified AI Creative Editing Engine.
 pub struct AiEngine {
     catalog: CommandCatalog,
@@ -237,16 +267,57 @@ impl AiEngine {
         prompt: &str,
         context: &mut AiContext,
     ) -> Result<AiResult, AiError> {
-        // 1. Visual Perception: inspect active document structure and visual elements
-        let doc_json = match headless.inspect(None) {
-            Ok(json) => Some(json),
-            Err(AutomationError::BadRequest(msg)) if msg.contains("no document open") => None,
-            Err(other) => return Err(AiError::Automation(other)),
-        };
-        let initial_scene = match &doc_json {
+        self.process_instruction_in(headless, prompt, context)
+    }
+
+    /// Process an instruction against a host-owned, synchronous editing destination.
+    /// The host must preserve active-document identity and all command admission for
+    /// this entire call. Provider-backed planners may block; GUI hosts must not call
+    /// those on a UI frame. Async/prepared-plan integration requires a separate protocol.
+    ///
+    /// Strict opt-in: this entry point makes no visual-evidence captures, so its
+    /// cost profile is unchanged. Use [`Self::process_instruction_in_with_evidence`]
+    /// to collect observed-composite evidence.
+    pub fn process_instruction_in<S: LiveEditSession + ?Sized>(
+        &self,
+        session: &mut S,
+        prompt: &str,
+        context: &mut AiContext,
+    ) -> Result<AiResult, AiError> {
+        self.process_instruction_in_impl(session, prompt, context, false).map(|(result, _)| result)
+    }
+
+    /// `process_instruction_in` plus the observed-composite evidence bundle
+    /// (additive; evidence capture happens only through this entry point, see
+    /// [`ExecutionEvidence`]).
+    pub fn process_instruction_in_with_evidence<S: LiveEditSession + ?Sized>(
+        &self,
+        session: &mut S,
+        prompt: &str,
+        context: &mut AiContext,
+    ) -> Result<(AiResult, ExecutionEvidence), AiError> {
+        self.process_instruction_in_impl(session, prompt, context, true)
+    }
+
+    fn process_instruction_in_impl<S: LiveEditSession + ?Sized>(
+        &self,
+        session: &mut S,
+        prompt: &str,
+        context: &mut AiContext,
+        collect_evidence: bool,
+    ) -> Result<(AiResult, ExecutionEvidence), AiError> {
+        // 1. Inspect the host's active document without interpreting error strings.
+        let doc_json = session.inspect_active()?;
+        let mut initial_scene = match &doc_json {
             Some(json) => self.perception_engine.perceive(json),
             None => VisualScene::default(),
         };
+        // Only with a document open: the no-document path must never dispatch commands.
+        if let Some(json) = &doc_json {
+            if enhancement_preflight::validate_document_state(json).is_ok() {
+                initial_scene.dominant_colors = computed_dominant_colors(session);
+            }
+        }
 
         // 2. Natural Language Intelligence: understand intent and resolve targets
         let intent = self.nl_engine.parse_intent(prompt, &initial_scene, context)?;
@@ -282,12 +353,19 @@ impl AiEngine {
             self.catalog.validate_command(&step.command, &step.params)?;
         }
 
-        // 5. Native Execution: execute transactionally with compound undo support
-        let execution = ExecutionEngine::execute_plan(headless, &plan)?;
+        // 5. Native Execution: execute transactionally with compound undo support.
+        // Evidence capture is strictly opt-in: the legacy entry point above
+        // passes collect_evidence = false and no digest renders happen at all.
+        let (execution, evidence) = if collect_evidence {
+            ExecutionEngine::execute_plan_in_with_evidence(session, &plan)?
+        } else {
+            (ExecutionEngine::execute_plan_in(session, &plan)?, ExecutionEvidence::default())
+        };
 
         // 6. Visual Evaluation: inspect resulting composition and verify goals
-        let post_doc_json = headless.inspect(None).map_err(AiError::Automation)?;
-        let final_scene = self.perception_engine.perceive(&post_doc_json);
+        let post_doc_json = session.inspect_active()?.ok_or(AiError::NoDocumentOpen)?;
+        let mut final_scene = self.perception_engine.perceive(&post_doc_json);
+        final_scene.dominant_colors = computed_dominant_colors(session);
         let evaluation = self.eval_engine.evaluate(&intent, &initial_scene, &final_scene, &execution);
 
         // Record interaction in context
@@ -295,14 +373,17 @@ impl AiEngine {
 
         let revision = post_doc_json.get("revision").and_then(Value::as_u64).unwrap_or(0);
 
-        Ok(AiResult {
-            prompt: prompt.to_string(),
-            initial_scene,
-            plan,
-            execution,
-            evaluation,
-            revision,
-        })
+        Ok((
+            AiResult {
+                prompt: prompt.to_string(),
+                initial_scene,
+                plan,
+                execution,
+                evaluation,
+                revision,
+            },
+            evidence,
+        ))
     }
 
     /// Plan an instruction without executing it (dry-run inspection).
@@ -312,11 +393,18 @@ impl AiEngine {
         prompt: &str,
         context: &AiContext,
     ) -> Result<EditingPlan, AiError> {
-        let doc_json = match headless.inspect(None) {
-            Ok(json) => Some(json),
-            Err(AutomationError::BadRequest(msg)) if msg.contains("no document open") => None,
-            Err(other) => return Err(AiError::Automation(other)),
-        };
+        self.plan_instruction_in(headless, prompt, context)
+    }
+
+    /// Plan without dispatching commands. Inspection uses the host's active document.
+    /// A host that defers execution must independently bind document identity and revision.
+    pub fn plan_instruction_in<S: LiveEditSession + ?Sized>(
+        &self,
+        session: &S,
+        prompt: &str,
+        context: &AiContext,
+    ) -> Result<EditingPlan, AiError> {
+        let doc_json = session.inspect_active()?;
         let initial_scene = match &doc_json {
             Some(json) => self.perception_engine.perceive(json),
             None => VisualScene::default(),
@@ -350,7 +438,12 @@ impl AiEngine {
 
     /// Run perception on active document.
     pub fn perceive_document(&self, headless: &Headless) -> Result<VisualScene, AiError> {
-        let doc_json = headless.inspect(None).map_err(AiError::Automation)?;
+        self.perceive_document_in(headless)
+    }
+
+    /// Inspect the host's active document; no active document is a typed AI error.
+    pub fn perceive_document_in<S: LiveEditSession + ?Sized>(&self, session: &S) -> Result<VisualScene, AiError> {
+        let doc_json = session.inspect_active()?.ok_or(AiError::NoDocumentOpen)?;
         Ok(self.perception_engine.perceive(&doc_json))
     }
 }

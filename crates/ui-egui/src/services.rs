@@ -269,6 +269,13 @@ pub type AutomationOpenPlyraFn = Box<dyn FnMut(&str) -> Result<Option<(String, D
 /// Reject engine commands which still perform ambient filesystem I/O.
 pub type AutomationCommandFn = Box<dyn Fn(&str, &Value) -> Result<(), String>>;
 
+/// Chat assistant bridge the host app installs: a composer prompt runs through the AI
+/// pipeline against the app's admitted command path. `None` means no engine is
+/// connected; the panel reports that instead of simulating a reply.
+pub trait AssistantBackend {
+    fn reply(&mut self, app: &mut crate::FotoditApp, ctx: &egui::Context, prompt: &str) -> Result<String, String>;
+}
+
 /// Open a URL in the system browser (native) — reliable cross-platform, unlike `ctx.open_url`.
 pub type OpenUrlFn = Box<dyn Fn(&str) -> Result<(), String>>;
 
@@ -449,6 +456,8 @@ pub struct Services {
     pub automation_write: Option<AutomationWriteFn>,
     pub automation_open_plyra: Option<AutomationOpenPlyraFn>,
     pub automation_command: Option<AutomationCommandFn>,
+    /// Chat assistant bridge (see [`AssistantBackend`]); installed by the desktop app.
+    pub assistant_backend: Option<Box<dyn AssistantBackend>>,
     /// Same policy as [`Self::automation_command`], as a function pointer the engine calls for
     /// each step of `actions.play`. Installed on the session only while a control request or
     /// an automation-driven [`FotoditApp::run`] runs, so a local play of a recorded `file.*` step still works.

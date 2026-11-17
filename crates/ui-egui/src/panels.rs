@@ -12,6 +12,7 @@ use crate::theme::{self, Tokens};
 use crate::{FotoditApp, icons, widgets};
 
 pub mod actions;
+pub mod assistant;
 pub mod adjust_ui;
 pub mod apply_color;
 pub(crate) mod blend_preview;
