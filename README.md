@@ -171,7 +171,7 @@ Every screenshot here is the real app at work on public-domain art, rendered off
       <sub>Artwork, not a screenshot: the assistant is under active development.</sub>
     </td>
     <td width="58%" valign="top">
-      Describe the edit in plain English. Fotodit's assistant plans it against the same command registry the UI uses, then runs the steps for you.
+      Fotodit is growing a natural-language assistant: describe the edit in plain English, and it plans the steps against the same command registry the UI uses, then runs them for you. The assistant itself is in active development and not shipped yet; these pieces are already in the codebase:
       <br><br>
       <b>Multi-provider by design.</b> A text and planning pipeline (Gemini, Cohere and a lightweight worker) with context-aware load balancing, rate-limit ceilings and circuit-breaker cooldowns, plus a fully offline rule-based planner when every remote provider is unavailable.
       <br><br>
@@ -179,7 +179,7 @@ Every screenshot here is the real app at work on public-domain art, rendered off
       <br><br>
       <b>Offline first.</b> Everything outside the AI features runs locally, with no account and no cloud.
       <br><br>
-      The assistant is early and under active development. Architecture and configuration: <a href="docs/ai-providers.md">docs/ai-providers.md</a>.
+      Design and configuration: <a href="docs/ai-providers.md">docs/ai-providers.md</a>.
     </td>
   </tr>
 </table>
@@ -311,8 +311,6 @@ Fotodit is in early alpha and does not publish installers yet.
 
 Fotodit is dual-licensed under MIT or Apache-2.0, at your option.
 Copyright (c) 2026 Plyra Team and the Fotodit contributors.
-
-Bundled fonts, icons, images and other assets keep their own open licenses.
 
 Every artwork shown is in the public domain (Wikimedia Commons, NASA, U.S. National Archives); sources are listed in [`docs/images/SOURCES.md`](docs/images/SOURCES.md).
 
