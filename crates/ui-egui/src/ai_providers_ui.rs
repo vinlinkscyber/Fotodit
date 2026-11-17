@@ -137,7 +137,7 @@ pub fn show(app: &mut FotoditApp, ctx: &egui::Context) {
     let mut dirty = false;
     let mut open = true;
     egui::Window::new(tl!("AI providers"))
-        .id(egui::Id::new("ai-providers-window"))
+        .id(egui::Id::unique("ai-providers-window"))
         .open(&mut open)
         .collapsible(false)
         .resizable(false)

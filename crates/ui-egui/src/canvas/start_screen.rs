@@ -117,7 +117,7 @@ fn render_search(ui: &mut egui::Ui, width: f32) {
 }
 
 fn search_id() -> egui::Id {
-    egui::Id::new("home-search-query")
+    egui::Id::unique("home-search-query")
 }
 
 fn search_query(ctx: &egui::Context) -> String {
@@ -162,7 +162,7 @@ fn dashed_rect(ui: &egui::Ui, rect: Rect, radius: f32, color: egui::Color32) {
     let stroke = egui::Stroke::new(1.5, color);
     let dash = 7.0;
     let gap = 5.0;
-    let mut paint_side = |from: egui::Pos2, to: egui::Pos2, horizontal: bool| {
+    let paint_side = |from: egui::Pos2, to: egui::Pos2, horizontal: bool| {
         let len = if horizontal { to.x - from.x } else { to.y - from.y };
         let mut d = radius;
         while d < len - radius {
@@ -350,7 +350,7 @@ fn render_ai_rail(app: &mut FotoditApp, ui: &mut egui::Ui, width: f32) {
 }
 
 fn home_ai_id() -> egui::Id {
-    egui::Id::new("home-ai-draft")
+    egui::Id::unique("home-ai-draft")
 }
 
 /// One AI capability card: icon, title, subtitle; primes the Assistant with the prompt.

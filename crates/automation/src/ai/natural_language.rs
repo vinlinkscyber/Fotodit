@@ -8,7 +8,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::perception::{VisualElement, VisualScene};
+#[cfg(test)]
+use super::perception::VisualElement;
+use super::perception::VisualScene;
 use super::{AiContext, AiError};
 
 /// High-level editing intent category.

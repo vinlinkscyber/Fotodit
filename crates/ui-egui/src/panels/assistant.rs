@@ -224,7 +224,7 @@ const QUICK_ACTIONS: &[(&str, &str)] = &[
 ];
 
 fn state_id() -> egui::Id {
-    egui::Id::new("assistant-panel-state")
+    egui::Id::unique("assistant-panel-state")
 }
 
 /// Put a prompt into the panel's draft (used by the home screen's AI rail) and switch it
@@ -477,7 +477,7 @@ fn input_row(ui: &mut egui::Ui, state: &mut AssistantState, app: Option<&mut Fot
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 let (attach_rect, attach) = ui.allocate_exact_size(egui::vec2(22.0, 38.0), egui::Sense::click());
-                let attach = attach.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tl!("Attach an image (coming soon)"));
+                let _attach = attach.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tl!("Attach an image (coming soon)"));
                 crate::icons::paint(ui, attach_rect, "paperclip", 16.0, TEXT_SOFT);
 
                 let width = ui.available_width() - 42.0;

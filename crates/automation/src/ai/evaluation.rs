@@ -131,7 +131,7 @@ impl EvaluationEngine {
 
                 // Check text contrast
                 if let Some(bg_color) = intent.extracted_color.as_deref().or(Some("#ffffff")) {
-                    for text_layer in &text_layers {
+                    for _text_layer in &text_layers {
                         let text_color = "#1e293b"; // standard fallback
                         let ratio = ColorHarmony::contrast_ratio(text_color, bg_color);
                         if ratio < 4.5 {
