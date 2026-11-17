@@ -235,7 +235,8 @@ jobs:
           MAIN: ${{ github.ref == 'refs/heads/main' }}
         run: |
           echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
-          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+          # RUSTC_WRAPPER stays unset: sccache failed to spawn rustc for fotodit-ui-egui on Windows
+          # (os error 206, command line too long), which failed the unit leg before any test ran.
           if [ "$MAIN" != true ]; then echo "SCCACHE_GHA_RW_MODE=READ_ONLY" >> "$GITHUB_ENV"; fi
         shell: bash
 
