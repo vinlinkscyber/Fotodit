@@ -3,7 +3,7 @@
 
 use std::cell::Cell;
 
-use fotodit_automation::ai::{AiContext, AiEngine, AiError, EditingPlan, ExecutionEngine, IntentCategory, LiveEditSession, PlanStep};
+use fotodit_automation::ai::{AiContext, AiEngine, AiError, EditingPlan, ExecutionEngine, IntentCategory, LiveEditSession, PlanStep, computed_dominant_colors};
 use fotodit_automation::{AutomationError, Headless};
 use fotodit_engine::Session;
 use serde_json::{Value, json};
@@ -231,7 +231,37 @@ fn successful_enhancement_process_rechecks_host_before_dispatch_and_records_cont
     let result = ai.process_instruction_in(&mut host, prompt, &mut context).unwrap();
     assert!(result.execution.is_success);
     assert_eq!(host.inspections.get(), 3);
-    assert_eq!(host.calls.len(), result.plan.steps.len());
+    // Color stats are computed from the host before planning and after execution; the
+    // remaining calls are exactly the plan steps.
+    let stats_calls = host.calls.iter().filter(|(id, _)| id == "image.analysis.colorStats").count();
+    assert_eq!(stats_calls, 2);
+    assert_eq!(host.calls.len() - stats_calls, result.plan.steps.len());
     assert_eq!(context.prompt_history, vec![prompt.to_string()]);
     assert_eq!(context.executed_plans, vec![result.plan]);
+}
+
+#[test]
+fn computed_dominant_colors_survives_unsupported_or_failing_stats_command() {
+    let mut fixture = Session::new();
+    fixture.execute("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
+    let document = fotodit_engine::inspect::document(fixture.active().unwrap());
+    // A host without image.analysis.colorStats (or one that refuses it) still processes
+    // the instruction: colors stay honestly empty instead of failing or being invented.
+    let mut host = MockSession { document: Some(document), fail_command: Some("image.analysis.colorStats"), ..Default::default() };
+    let ai = AiEngine::new();
+    let mut context = AiContext::new();
+    let result = ai.process_instruction_in(&mut host, "Make this photograph look professional and enhance clarity", &mut context).unwrap();
+    assert!(result.execution.is_success);
+    assert!(result.initial_scene.dominant_colors.is_empty());
+}
+
+#[test]
+fn computed_dominant_colors_uses_engine_stats_and_stays_honest() {
+    let mut headless = Headless::new();
+    // No document open: the command cannot run, and the result stays empty
+    // rather than carrying invented colors.
+    assert!(computed_dominant_colors(&mut headless).is_empty());
+    LiveEditSession::command_run(&mut headless, "file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
+    // Real engine pixels: a white canvas computes to a single white dominant.
+    assert_eq!(computed_dominant_colors(&mut headless), vec!["#FFFFFF".to_string()]);
 }

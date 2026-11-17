@@ -567,3 +567,123 @@ fn geometric_features_match_full_measurements_without_gray() {
         assert!(b.histogram.is_empty());
     }
 }
+
+#[test]
+fn color_stats_reports_white_canvas_dominant() {
+    let mut s = session(64, 48, 8);
+    let rev_before = s.active().unwrap().revision;
+    let v = s.execute("image.analysis.colorStats", json!({})).unwrap();
+    assert_eq!(v["domain"], "canvas");
+    assert_eq!(v["width"], 64);
+    assert_eq!(v["height"], 48);
+    assert_eq!(v["quantization"], "4bit/channel");
+    assert!(v["sampledPixels"].as_u64().unwrap() > 0);
+    assert_eq!(v["transparentShare"], 0.0);
+    let dom = v["dominantColors"].as_array().unwrap();
+    assert!(!dom.is_empty());
+    // A white background document is dominated by the white bin.
+    assert_eq!(dom[0]["color"], "#FFFFFF");
+    assert!(dom[0]["share"].as_f64().unwrap() > 0.9);
+    assert_eq!(v["revision"], rev_before);
+    // Read-only: no history step added, revision unchanged.
+    assert!(!s.active().unwrap().history.can_undo());
+    assert_eq!(s.active().unwrap().revision, rev_before);
+}
+
+#[test]
+fn color_stats_labels_selection_domain_and_clamps_max_colors() {
+    let mut s = session(64, 48, 8);
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 8, "height": 8})).unwrap();
+    let v = s.execute("image.analysis.colorStats", json!({"maxColors": 99})).unwrap();
+    assert_eq!(v["domain"], "selection");
+    assert_eq!(v["width"], 8);
+    assert!(v["dominantColors"].as_array().unwrap().len() <= 16);
+    assert!(v["revision"].as_u64().is_some());
+}
+
+#[test]
+fn color_stats_selection_counts_coverage_not_bounding_box() {
+    // A hollow/disjoint selection measures covered pixels (coverage ≥ 0.5), not the
+    // bounding rectangle between them.
+    let mut s = session(20, 20, 8);
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
+    s.execute("select.rect", json!({"x": 10, "y": 10, "width": 4, "height": 4, "mode": "add"})).unwrap();
+    let v = s.execute("image.analysis.colorStats", json!({})).unwrap();
+    assert_eq!(v["domain"], "selection");
+    // The bounding box spans 14×14, but only the two disjoint 4×4 squares are covered.
+    assert_eq!(v["width"], 14);
+    assert_eq!(v["height"], 14);
+    assert_eq!(v["sampledPixels"], 32);
+    assert_eq!(v["opaquePixels"], 32);
+    // Subtracting a covered rectangle removes those pixels from the measured
+    // coverage: only the surviving ring is counted.
+    s.execute("select.all", json!({})).unwrap();
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 4, "height": 4, "mode": "subtract"})).unwrap();
+    let v = s.execute("image.analysis.colorStats", json!({})).unwrap();
+    assert_eq!(v["domain"], "selection");
+    assert_eq!(v["sampledPixels"], 400 - 16);
+}
+
+#[test]
+fn color_stats_selection_at_a_nonzero_offset() {
+    // Offset selections align the mask and the rendered rect at a nonzero origin.
+    let mut s = session(20, 20, 8);
+    s.execute("select.rect", json!({"x": 10, "y": 6, "width": 4, "height": 4})).unwrap();
+    let v = s.execute("image.analysis.colorStats", json!({})).unwrap();
+    assert_eq!(v["domain"], "selection");
+    assert_eq!(v["width"], 4);
+    assert_eq!(v["height"], 4);
+    assert_eq!(v["sampledPixels"], 16);
+    assert_eq!(v["dominantColors"][0]["color"], "#FFFFFF");
+}
+
+#[test]
+fn color_stats_refuses_an_oversized_region_before_allocating() {
+    // A legal 65536×65536 document is 2^32 pixels: the checked u64 area refuses the
+    // render instead of overflowing usize or allocating unbounded memory, and the AI
+    // consumer reports unknown colors (#933 pattern, conservative automatic budget).
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 65536, "height": 65536, "background": "transparent"})).unwrap();
+    let err = s.execute("image.analysis.colorStats", json!({})).unwrap_err();
+    assert!(err.to_string().contains("too large"), "{err}");
+    assert!(!s.active().unwrap().history.can_undo());
+    // Truly thin-and-wide geometry hits the same checked bound, not only square shapes.
+    s.execute("file.new", json!({"width": 65536, "height": 245, "background": "transparent"})).unwrap();
+    let err = s.execute("image.analysis.colorStats", json!({})).unwrap_err();
+    assert!(err.to_string().contains("too large"), "{err}");
+}
+
+#[test]
+fn color_stats_reports_a_sparse_selection_missed_by_the_stride_grid() {
+    // Coverage can exist yet miss every stride-grid point when the bounding box is
+    // large: a distinct, honest error, not "the selection is empty". Here the covered
+    // pixels are (0,1), (1,0) and (2000,2000); the bounding box is 2001×2001, so the
+    // stride is 3 and none of the three pixels lies on the grid.
+    let mut s = session(2010, 2010, 8);
+    s.execute("select.rect", json!({"x": 0, "y": 1, "width": 1, "height": 1})).unwrap();
+    s.execute("select.rect", json!({"x": 1, "y": 0, "width": 1, "height": 1, "mode": "add"})).unwrap();
+    s.execute("select.rect", json!({"x": 2000, "y": 2000, "width": 1, "height": 1, "mode": "add"})).unwrap();
+    let err = s.execute("image.analysis.colorStats", json!({})).unwrap_err();
+    assert!(err.to_string().contains("no selected pixels"), "{err}");
+}
+
+#[test]
+fn color_stats_selection_counts_only_majority_coverage() {
+    // Fractional (feathered) coverage below 0.5 is excluded; the covered core remains.
+    let mut s = session(20, 20, 8);
+    s.execute("select.rect", json!({"x": 4, "y": 4, "width": 8, "height": 8, "feather": 2})).unwrap();
+    let v = s.execute("image.analysis.colorStats", json!({})).unwrap();
+    let n = v["sampledPixels"].as_u64().unwrap();
+    assert!(n < 64, "feathered edges below 0.5 coverage are excluded, got {n}");
+    assert!(n > 16, "the feathered core is still covered, got {n}");
+}
+
+#[test]
+fn color_stats_reports_fully_transparent_canvas() {
+    let mut s = session(32, 32, 8);
+    s.execute("layer.visibility", json!({"visible": false})).unwrap();
+    let v = s.execute("image.analysis.colorStats", json!({})).unwrap();
+    assert_eq!(v["transparentShare"], 1.0);
+    assert!(v["meanColor"].is_null());
+    assert!(v["dominantColors"].as_array().unwrap().is_empty());
+}
