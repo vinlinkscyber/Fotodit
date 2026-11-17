@@ -3,7 +3,7 @@
 
 use std::cell::Cell;
 
-use fotodit_automation::ai::{AiContext, AiEngine, AiError, EditingPlan, ExecutionEngine, IntentCategory, LiveEditSession, PlanStep, computed_dominant_colors};
+use fotodit_automation::ai::{AiContext, AiEngine, AiError, EditingPlan, ExecutionEngine, IntentCategory, LiveEditSession, PlanStep, VisualEvidenceClass, computed_dominant_colors};
 use fotodit_automation::{AutomationError, Headless};
 use fotodit_engine::Session;
 use serde_json::{Value, json};
@@ -28,6 +28,11 @@ struct MockSession {
     replace_history: bool,
     inspection_fails: bool,
     inspections: Cell<usize>,
+    /// Scripted digest captures for a host WITH pixel capability: each
+    /// `visual_digest` call pops the front value. An empty script means the
+    /// host offers no capability (the trait default is exercised instead).
+    digest_script: std::collections::VecDeque<Result<Value, String>>,
+    digest_calls: Cell<usize>,
 }
 
 impl LiveEditSession for MockSession {
@@ -38,6 +43,15 @@ impl LiveEditSession for MockSession {
             return Err(AutomationError::BadRequest("no document open: injected inspection failure".into()));
         }
         Ok(self.document.clone())
+    }
+
+    fn visual_digest(&mut self, _max_pixels: u64) -> Option<Result<Value, String>> {
+        if self.digest_script.is_empty() {
+            // No-capability host: the trait default, exercised on purpose.
+            return None;
+        }
+        self.digest_calls.set(self.digest_calls.get() + 1);
+        Some(self.digest_script.pop_front().expect("test digest script exhausted"))
     }
 
     fn command_run(&mut self, command: &str, params: Value) -> Result<Value, AutomationError> {
@@ -88,6 +102,13 @@ impl MockSession {
 
 fn mock_document(name: &str, history: &[&str]) -> Value {
     json!({"name": name, "path": null, "revision": history.len() as u64, "history": history})
+}
+
+/// A well-formed `image.analysis.pixelDigest` output for the scripted host:
+/// the full fixed schema with a grid-consistent sample count.
+fn digest_json(tag: u64, width: u64, height: u64, stride: u64) -> Value {
+    let sampled = ((width - 1) / stride + 1) * ((height - 1) / stride + 1);
+    json!({"schema": 1, "hash": "fnv1a64", "quantization": "8bit/channel", "digest": format!("{tag:016x}"), "domain": "canvas", "width": width, "height": height, "stride": stride, "sampledPixels": sampled, "revision": 1})
 }
 
 fn plan(commands: &[&str]) -> EditingPlan {
@@ -292,6 +313,12 @@ impl LiveEditSession for BorrowedTestSession<'_> {
         // Existing Session.authorize remains in place and is checked by engine dispatch.
         self.session.execute(command, params).map_err(AutomationError::from)
     }
+
+    fn visual_digest(&mut self, max_pixels: u64) -> Option<Result<Value, String>> {
+        // Source-positive admitted path: exactly the same authorization gates as
+        // any other command, including a custom Session.authorize hook.
+        Some(self.command_run("image.analysis.pixelDigest", json!({"maxPixels": max_pixels})).map_err(|e| e.to_string()))
+    }
 }
 
 fn pixel(session: &Session) -> [f32; 4] {
@@ -476,4 +503,387 @@ fn save_reopen_roundtrip_preserves_pixels_through_authorized_session_path() {
     // The reopened document is the active one and keeps the edited pixels.
     assert_eq!(computed_dominant_colors(&mut headless), vec!["#000000".to_string()]);
     let _ = std::fs::remove_file(&path);
+}
+
+
+// ------------------------------------------------------------------ visual result evidence
+//
+// Evidence is collected through the additive `execute_plan_*_with_evidence`
+// API: `StepExecution` stays byte-frozen and evidence never gates success,
+// rollback or dispatch. These tests focus on schema, domain, capture count,
+// denial, budget, position and quantization honesty.
+
+/// Build a single-step plan with real-engine-compatible empty params.
+fn one_step_plan(command: &str) -> EditingPlan {
+    EditingPlan {
+        title: "Evidence test".into(),
+        rationale: "Observed-composite evidence".into(),
+        category: IntentCategory::GeneralEditing,
+        steps: vec![PlanStep { command: command.to_string(), params: json!({}), description: command.to_string() }],
+        creates_document: false,
+        target_size: None,
+    }
+}
+
+#[test]
+fn visual_evidence_unknown_when_host_has_no_digest_capability() {
+    // Default trait behavior: a host without pixel access yields honest Unknown,
+    // never invented change, and no phantom commands reach the editing path.
+    let mut host = MockSession { document: Some(mock_document("mock.plyra", &["New"])), ..Default::default() };
+    let (result, evidence) = ExecutionEngine::execute_plan_in_with_evidence(&mut host, &plan(&["image.adjustments.invert"])).unwrap();
+    assert!(result.is_success);
+    assert_eq!(evidence.steps.len(), 1);
+    assert_eq!(evidence.steps[0].step_index, 0);
+    let visual = &evidence.steps[0].visual;
+    assert_eq!(visual.class, VisualEvidenceClass::Unknown);
+    assert!(visual.detail.contains("no pixel digest capability"), "{}", visual.detail);
+    assert_eq!(host.digest_calls.get(), 0);
+    assert_eq!(host.calls.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), vec!["image.adjustments.invert"]);
+    // The pre-existing API is a thin wrapper returning the identical execution.
+    let mut host2 = MockSession { document: Some(mock_document("mock.plyra", &["New"])), ..Default::default() };
+    let result2 = ExecutionEngine::execute_plan_in(&mut host2, &plan(&["image.adjustments.invert"])).unwrap();
+    assert_eq!(result2, result);
+}
+
+#[test]
+fn nonvisual_and_unclassified_commands_are_honestly_classified() {
+    let mut host = MockSession { document: Some(mock_document("mock.plyra", &["New"])), ..Default::default() };
+    let (result, evidence) = ExecutionEngine::execute_plan_in_with_evidence(&mut host, &plan(&["image.analysis.colorStats", "first"])).unwrap();
+    assert!(result.is_success);
+    assert_eq!(evidence.steps[0].visual.class, VisualEvidenceClass::NotApplicable);
+    let unclassified = &evidence.steps[1].visual;
+    assert_eq!(unclassified.class, VisualEvidenceClass::Unknown);
+    assert!(unclassified.detail.contains("not in the visual-evidence classification table"), "{}", unclassified.detail);
+    assert_eq!(host.digest_calls.get(), 0);
+    assert_eq!(host.calls.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), vec!["image.analysis.colorStats", "first"]);
+}
+
+#[test]
+fn invented_id_under_a_visual_prefix_is_unclassified_not_visual() {
+    // Registry grounding: image.adjustments.* is visual only when the id is a
+    // registered journaling spec. An invented id under the prefix must not
+    // inherit the prefix's admission: unknown-safe, no expansion.
+    let mut host = MockSession { document: Some(mock_document("mock.plyra", &["New"])), ..Default::default() };
+    let (result, evidence) = ExecutionEngine::execute_plan_in_with_evidence(&mut host, &plan(&["image.adjustments.notARealAdjustment"])).unwrap();
+    assert!(result.is_success);
+    assert_eq!(evidence.steps[0].visual.class, VisualEvidenceClass::Unknown);
+    assert!(evidence.steps[0].visual.detail.contains("not in the visual-evidence classification table"), "{}", evidence.steps[0].visual.detail);
+    assert_eq!(host.digest_calls.get(), 0);
+}
+
+#[test]
+fn digest_marks_classify_changed_and_no_change_observed() {
+    // Chained captures: step 1's after-mark is step 2's baseline (k+1 captures
+    // for k visual steps). Equal digests over an identical grid are reported as
+    // no-change-observed (a legitimate idempotent outcome), never as failure.
+    let script = [Ok(digest_json(1, 8, 8, 1)), Ok(digest_json(2, 8, 8, 1)), Ok(digest_json(2, 8, 8, 1))];
+    let mut host = MockSession { document: Some(mock_document("mock.plyra", &["New"])), digest_script: script.into_iter().collect(), ..Default::default() };
+    let (result, evidence) = ExecutionEngine::execute_plan_in_with_evidence(&mut host, &plan(&["image.adjustments.invert", "image.adjustments.invert"])).unwrap();
+    assert!(result.is_success);
+    assert_eq!(evidence.steps[0].visual.class, VisualEvidenceClass::Changed);
+    let noop = &evidence.steps[1].visual;
+    assert_eq!(noop.class, VisualEvidenceClass::NoChangeObserved);
+    assert!(noop.detail.contains("sampling, quantization and hash collisions can hide changes"), "{}", noop.detail);
+    assert_eq!(host.digest_calls.get(), 3);
+    assert_eq!(host.calls.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), vec!["image.adjustments.invert", "image.adjustments.invert"]);
+}
+
+#[test]
+fn geometry_change_is_changed_not_a_digest_mismatch() {
+    // A dimension change is an observable change of its own; digests over
+    // different dimensions are never compared.
+    let script = [Ok(digest_json(1, 8, 8, 1)), Ok(digest_json(9, 16, 16, 1))];
+    let mut host = MockSession { document: Some(mock_document("mock.plyra", &["New"])), digest_script: script.into_iter().collect(), ..Default::default() };
+    let (_result, evidence) = ExecutionEngine::execute_plan_in_with_evidence(&mut host, &plan(&["image.adjustments.invert"])).unwrap();
+    let visual = &evidence.steps[0].visual;
+    assert_eq!(visual.class, VisualEvidenceClass::Changed);
+    assert!(visual.detail.contains("the document dimensions changed (8x8 -> 16x16)"), "{}", visual.detail);
+}
+
+#[test]
+fn stride_change_at_identical_dimensions_is_unknown_incomparable() {
+    // Same dimensions, different stride: the sampling grid changed, so the
+    // digests are incomparable. This is NOT a pixel change - honest Unknown.
+    let script = [Ok(digest_json(1, 8, 8, 1)), Ok(digest_json(1, 8, 8, 2))];
+    let mut host = MockSession { document: Some(mock_document("mock.plyra", &["New"])), digest_script: script.into_iter().collect(), ..Default::default() };
+    let (_result, evidence) = ExecutionEngine::execute_plan_in_with_evidence(&mut host, &plan(&["image.adjustments.invert"])).unwrap();
+    let visual = &evidence.steps[0].visual;
+    assert_eq!(visual.class, VisualEvidenceClass::Unknown);
+    assert!(visual.detail.contains("the sampling grid changed (stride 1 -> 2)"), "{}", visual.detail);
+}
+
+#[test]
+fn malformed_digest_outputs_fail_schema_validation() {
+    // The host's JSON is unauthenticated: every fixed-schema violation -
+    // domain, version, hash, quantization, digest syntax, stride/dims, and
+    // sample-count grid consistency - is rejected, never trusted.
+    let cases: Vec<Value> = [
+        ("domain", json!("layer")),
+        ("schema", json!(2)),
+        ("hash", json!("sha256")),
+        ("quantization", json!("16bit/channel")),
+        ("digest", json!("xyz")),
+        ("digest", json!("00000000000000001")),
+        ("stride", json!(0)),
+        ("width", json!(0)),
+        ("height", json!(0)),
+        ("sampledPixels", json!(63)),
+    ]
+    .into_iter()
+    .map(|(key, value)| {
+        let mut bad = digest_json(1, 8, 8, 1);
+        bad[key] = value;
+        bad
+    })
+    .chain([
+        {
+            let mut missing = digest_json(1, 8, 8, 1);
+            missing.as_object_mut().expect("object").remove("digest");
+            missing
+        },
+        // Dimensions whose area overflows u64.
+        json!({"schema": 1, "hash": "fnv1a64", "quantization": "8bit/channel", "digest": "0000000000000001", "domain": "canvas", "width": u64::MAX, "height": 2, "stride": 1, "sampledPixels": 64}),
+        // Grid-consistent but over the requested capture budget.
+        json!({"schema": 1, "hash": "fnv1a64", "quantization": "8bit/channel", "digest": "0000000000000001", "domain": "canvas", "width": 5000, "height": 5000, "stride": 1, "sampledPixels": 25_000_000u64}),
+    ])
+    .collect();
+    for bad in cases {
+        let script = [Ok(bad.clone()), Ok(digest_json(2, 8, 8, 1))];
+        let mut host = MockSession { document: Some(mock_document("mock.plyra", &["New"])), digest_script: script.into_iter().collect(), ..Default::default() };
+        let (result, evidence) = ExecutionEngine::execute_plan_in_with_evidence(&mut host, &plan(&["image.adjustments.invert"])).unwrap();
+        assert!(result.is_success);
+        let visual = &evidence.steps[0].visual;
+        assert_eq!(visual.class, VisualEvidenceClass::Unknown, "{bad}");
+        assert!(visual.detail.contains("failed schema validation"), "{bad}: {}", visual.detail);
+    }
+}
+
+#[test]
+fn digest_hex_is_compared_numerically_not_textually() {
+    // "AB" and "ab" are the same number: a case-only difference must never
+    // register as a change.
+    let mut upper = digest_json(0xAB, 8, 8, 1);
+    upper["digest"] = json!("00000000000000AB");
+    let script = [Ok(upper), Ok(digest_json(0xAB, 8, 8, 1))];
+    let mut host = MockSession { document: Some(mock_document("mock.plyra", &["New"])), digest_script: script.into_iter().collect(), ..Default::default() };
+    let (_result, evidence) = ExecutionEngine::execute_plan_in_with_evidence(&mut host, &plan(&["image.adjustments.invert"])).unwrap();
+    assert_eq!(evidence.steps[0].visual.class, VisualEvidenceClass::NoChangeObserved, "{}", evidence.steps[0].visual.detail);
+}
+
+#[test]
+fn execute_plan_in_stays_render_free_for_existing_callers() {
+    // Strict opt-in: the legacy entry point makes zero digest captures even
+    // when the host offers the capability.
+    let script = [Ok(digest_json(1, 8, 8, 1)), Ok(digest_json(2, 8, 8, 1))];
+    let mut host = MockSession { document: Some(mock_document("mock.plyra", &["New"])), digest_script: script.into_iter().collect(), ..Default::default() };
+    let result = ExecutionEngine::execute_plan_in(&mut host, &plan(&["image.adjustments.invert"])).unwrap();
+    assert!(result.is_success);
+    assert_eq!(host.digest_calls.get(), 0);
+}
+
+#[test]
+fn capture_failure_is_unknown_and_not_masked() {
+    // The first failure is the honest reason; a later unavailable capture must
+    // not mask it, and evidence never affects the step's success.
+    let script = [Err("refused by host policy".to_string())];
+    let mut host = MockSession { document: Some(mock_document("mock.plyra", &["New"])), digest_script: script.into_iter().collect(), ..Default::default() };
+    let (result, evidence) = ExecutionEngine::execute_plan_in_with_evidence(&mut host, &plan(&["image.adjustments.invert"])).unwrap();
+    assert!(result.is_success);
+    let visual = &evidence.steps[0].visual;
+    assert_eq!(visual.class, VisualEvidenceClass::Unknown);
+    assert!(visual.detail.contains("the baseline digest capture failed: refused by host policy"), "{}", visual.detail);
+}
+
+#[test]
+fn capture_budget_bounds_aggregate_render_cost() {
+    // 8 visual steps chain 9 captures; the budget is 8, so the last step's
+    // after-capture is refused with honest Unknown instead of unbounded cost.
+    let script: Vec<Result<Value, String>> = (1..=8u64).map(|tag| Ok(digest_json(tag, 8, 8, 1))).collect();
+    let mut host = MockSession { document: Some(mock_document("mock.plyra", &["New"])), digest_script: script.into_iter().collect(), ..Default::default() };
+    let commands = ["image.adjustments.invert"; 8];
+    let (result, evidence) = ExecutionEngine::execute_plan_in_with_evidence(&mut host, &plan(&commands)).unwrap();
+    assert!(result.is_success);
+    for step in &evidence.steps[..7] {
+        assert_eq!(step.visual.class, VisualEvidenceClass::Changed, "step {}: {}", step.step_index, step.visual.detail);
+    }
+    let last = &evidence.steps[7].visual;
+    assert_eq!(last.class, VisualEvidenceClass::Unknown);
+    assert!(last.detail.contains("capture budget (8) is exhausted"), "{}", last.detail);
+    assert_eq!(host.digest_calls.get(), 8);
+}
+
+#[test]
+fn failed_step_drops_the_bundle_and_rollback_is_unchanged() {
+    // Legacy entry point (evidence OFF): failure handling must be identical to
+    // the pre-evidence behavior - no captures, same rollback. The opt-in
+    // failure contract is covered separately below.
+    let script = [Ok(digest_json(1, 8, 8, 1)), Ok(digest_json(2, 8, 8, 1))];
+    let mut host = MockSession { fail_command: Some("fail"), document: Some(mock_document("mock.plyra", &["New"])), digest_script: script.into_iter().collect(), ..Default::default() };
+    let error = ExecutionEngine::execute_plan_in(&mut host, &plan(&["image.adjustments.invert", "fail"])).unwrap_err();
+    let AiError::ExecutionError { error, .. } = &error else { panic!("execution error") };
+    assert!(error.contains("history boundary is verified at its pre-plan entries"), "{error}");
+    assert_eq!(host.digest_calls.get(), 0, "legacy path must not capture");
+    assert_eq!(host.calls.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), vec!["image.adjustments.invert", "fail", "edit.undo"]);
+    assert_eq!(host.document.unwrap()["history"].as_array().unwrap().clone(), vec![json!("New")]);
+}
+
+#[test]
+fn failed_step_opt_in_captures_pre_failure_then_drops_bundle() {
+    // Same failure through the OPT-IN API: the completed visual step is
+    // captured (before + after) BEFORE the failing step runs, the partial
+    // bundle is dropped with the error, and rollback matches the legacy path.
+    let script = [Ok(digest_json(1, 8, 8, 1)), Ok(digest_json(2, 8, 8, 1))];
+    let mut host = MockSession { fail_command: Some("fail"), document: Some(mock_document("mock.plyra", &["New"])), digest_script: script.into_iter().collect(), ..Default::default() };
+    let error = ExecutionEngine::execute_plan_in_with_evidence(&mut host, &plan(&["image.adjustments.invert", "fail"])).unwrap_err();
+    let AiError::ExecutionError { error, .. } = &error else { panic!("execution error") };
+    assert!(error.contains("history boundary is verified at its pre-plan entries"), "{error}");
+    // Captures for the completed visual step happened before the failure.
+    assert_eq!(host.digest_calls.get(), 2);
+    assert_eq!(host.calls.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), vec!["image.adjustments.invert", "fail", "edit.undo"]);
+    assert_eq!(host.document.unwrap()["history"].as_array().unwrap().clone(), vec![json!("New")]);
+}
+
+#[test]
+fn unclassified_step_breaks_the_comparison_chain() {
+    // An unobserved middle step means the next visual step re-baselines instead
+    // of attributing the middle step's possible changes to itself.
+    let script = [Ok(digest_json(1, 8, 8, 1)), Ok(digest_json(2, 8, 8, 1)), Ok(digest_json(2, 8, 8, 1)), Ok(digest_json(3, 8, 8, 1))];
+    let mut host = MockSession { document: Some(mock_document("mock.plyra", &["New"])), digest_script: script.into_iter().collect(), ..Default::default() };
+    let (result, evidence) = ExecutionEngine::execute_plan_in_with_evidence(&mut host, &plan(&["image.adjustments.invert", "mystery", "image.adjustments.invert"])).unwrap();
+    assert!(result.is_success);
+    assert_eq!(evidence.steps[0].visual.class, VisualEvidenceClass::Changed);
+    assert_eq!(evidence.steps[1].visual.class, VisualEvidenceClass::Unknown);
+    // The third step re-baselined (tag 2) and observed its own change (2 -> 3).
+    assert_eq!(evidence.steps[2].visual.class, VisualEvidenceClass::Changed);
+    assert_eq!(host.digest_calls.get(), 4);
+}
+
+fn refuse_digest_only(command: &str, _params: &Value) -> fotodit_engine::Result<()> {
+    if command == "image.analysis.pixelDigest" {
+        Err(fotodit_engine::EngineError::Other("custom gate denies digest".into()))
+    } else {
+        Ok(())
+    }
+}
+
+#[test]
+fn denied_digest_hook_is_neither_bypassed_nor_fails_editing() {
+    // A host whose custom authorization hook refuses the digest command: the
+    // refusal surfaces as honest unknown evidence, the editing step still
+    // succeeds through the admitted path, and no side channel bypasses the
+    // gate or reroutes the editing command.
+    let mut original = Session::new();
+    original.execute("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
+    original.authorize = Some(refuse_digest_only);
+    let before = pixel(&original);
+    let mut host = BorrowedTestSession { session: &mut original };
+    let (result, evidence) = ExecutionEngine::execute_plan_in_with_evidence(&mut host, &one_step_plan("image.adjustments.invert")).unwrap();
+    assert!(result.is_success);
+    assert_eq!(evidence.steps[0].visual.class, VisualEvidenceClass::Unknown);
+    assert!(evidence.steps[0].visual.detail.contains("custom gate denies digest"), "{}", evidence.steps[0].visual.detail);
+    // Editing was neither failed nor rerouted by the denied evidence capture,
+    // and the custom gate itself is untouched.
+    assert_ne!(pixel(host.session), before);
+    assert!(host.session.authorize.is_some());
+}
+
+#[test]
+fn process_instruction_in_stays_render_free_and_evidence_is_opt_in() {
+    // The host OFFERS digest capability; the legacy AiEngine entry point must
+    // not use it, and the additive entry point must actually collect.
+    let mut fixture = Session::new();
+    fixture.execute("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
+    let document = fotodit_engine::inspect::document(fixture.active().unwrap());
+    let script: Vec<Result<Value, String>> = (1..=16u64).map(|tag| Ok(digest_json(tag, 8, 8, 1))).collect();
+    let mut host = MockSession { document: Some(document.clone()), digest_script: script.into_iter().collect(), ..Default::default() };
+    let ai = AiEngine::new();
+    let mut context = AiContext::new();
+    let prompt = "Make this photograph look professional and enhance clarity";
+    let result = ai.process_instruction_in(&mut host, prompt, &mut context).unwrap();
+    assert!(result.execution.is_success);
+    assert_eq!(host.digest_calls.get(), 0, "the legacy entry point must not capture evidence");
+
+    let script2: Vec<Result<Value, String>> = (1..=16u64).map(|tag| Ok(digest_json(tag, 8, 8, 1))).collect();
+    let mut host2 = MockSession { document: Some(document), digest_script: script2.into_iter().collect(), ..Default::default() };
+    let mut context2 = AiContext::new();
+    let (result2, evidence) = ai.process_instruction_in_with_evidence(&mut host2, prompt, &mut context2).unwrap();
+    assert!(result2.execution.is_success);
+    assert_eq!(evidence.steps.len(), result2.execution.step_executions.len());
+    assert!(host2.digest_calls.get() >= 1, "the opt-in path actually captures");
+}
+
+#[test]
+fn headless_visual_evidence_reflects_real_pixel_changes() {
+    // End to end through the admitted Headless path: the real engine digest
+    // observes a real inversion, and repeat captures of an unchanged document
+    // are deterministic (no-op renders compare equal).
+    let mut headless = Headless::new();
+    LiveEditSession::command_run(&mut headless, "file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
+    let (result, evidence) = ExecutionEngine::execute_plan_with_evidence(&mut headless, &one_step_plan("image.adjustments.invert")).unwrap();
+    assert!(result.is_success);
+    let visual = &evidence.steps[0].visual;
+    assert_eq!(visual.class, VisualEvidenceClass::Changed, "{}", visual.detail);
+    let first = LiveEditSession::visual_digest(&mut headless, 4_000_000).unwrap().unwrap();
+    let second = LiveEditSession::visual_digest(&mut headless, 4_000_000).unwrap().unwrap();
+    assert_eq!(first["digest"], second["digest"]);
+    assert_eq!(first["schema"], json!(1));
+    assert_eq!(first["hash"], json!("fnv1a64"));
+    assert_eq!(first["quantization"], json!("8bit/channel"));
+    assert_eq!(first["width"], json!(8));
+    assert_eq!(first["stride"], json!(1));
+    assert_eq!(first["sampledPixels"], json!(64));
+}
+
+fn paint(session: &mut Session, x0: i32, y0: i32, x1: i32, y1: i32, rgba: [f32; 4]) {
+    session
+        .edit("paint", move |doc, _| {
+            let surf = doc.layers[0].surface_mut().unwrap();
+            let px = fotodit_raster::from_rgba(&surf.format(), rgba);
+            surf.fill_rect(fotodit_geom::Rect::new(x0, y0, x1, y1), &px);
+            Ok(())
+        })
+        .unwrap();
+}
+
+fn real_digest(session: &mut Session) -> String {
+    let mut host = BorrowedTestSession { session };
+    let value = host.visual_digest(4_000_000).unwrap().unwrap();
+    value["digest"].as_str().unwrap().to_string()
+}
+
+#[test]
+fn real_digest_is_position_sensitive_and_deterministic() {
+    // Two composites with identical histograms (one red pixel each, at
+    // different positions) must digest differently; an unchanged document
+    // re-captures identically.
+    let mut original = Session::new();
+    original.execute("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
+    let plain = real_digest(&mut original);
+    assert_eq!(real_digest(&mut original), plain, "repeat captures of an unchanged document are deterministic");
+    paint(&mut original, 0, 0, 1, 1, [1.0, 0.0, 0.0, 1.0]);
+    let at_origin = real_digest(&mut original);
+    assert_ne!(at_origin, plain);
+    paint(&mut original, 0, 0, 1, 1, [1.0, 1.0, 1.0, 1.0]);
+    paint(&mut original, 1, 0, 2, 1, [1.0, 0.0, 0.0, 1.0]);
+    let shifted = real_digest(&mut original);
+    assert_ne!(shifted, at_origin, "identical histogram, different position: digests must differ");
+    assert_ne!(shifted, plain);
+}
+
+#[test]
+fn real_digest_quantization_hides_hdr_and_sub_byte_differences() {
+    // Documented claim boundary: the digest clamps to 8 bits per channel, so
+    // HDR values above 1.0 are indistinguishable from 1.0 - an equal digest
+    // is not proof of no change.
+    let mut original = Session::new();
+    original.execute("file.new", json!({"width": 8, "height": 8, "depth": 32, "background": "white"})).unwrap();
+    let plain = real_digest(&mut original);
+    paint(&mut original, 0, 0, 1, 1, [2.0, 2.0, 2.0, 1.0]);
+    let hdr = real_digest(&mut original);
+    assert_eq!(hdr, plain, "2.0 clamps to the same byte as 1.0: the HDR difference is invisible to the digest");
+    paint(&mut original, 0, 0, 1, 1, [3.0, 3.0, 3.0, 1.0]);
+    assert_eq!(real_digest(&mut original), plain, "3.0 clamps identically: still invisible");
+    // A visible-scale difference IS observed on the same document.
+    paint(&mut original, 0, 0, 1, 1, [0.0, 0.0, 0.0, 1.0]);
+    assert_ne!(real_digest(&mut original), plain);
 }

@@ -26,7 +26,7 @@ pub mod provider_bridge;
 pub use command_intelligence::{CommandCapability, CommandCatalog, ValidatedCommand};
 pub use creative_design::{ColorHarmony, DesignArchetype, LayoutEngine, TypographyHierarchy};
 pub use evaluation::{EvaluationEngine, EvaluationReport};
-pub use execution::{ExecutionEngine, ExecutionResult};
+pub use execution::{ExecutionEngine, ExecutionEvidence, ExecutionResult, StepExecution, StepVisualEvidence, VisualEvidence, VisualEvidenceClass};
 pub use live::LiveEditSession;
 pub use natural_language::{EditingIntent, IntentCategory, NaturalLanguageEngine};
 pub use perception::{DocumentStructure, PerceptionEngine, SubjectBasis, SubjectCandidate, VisualElement, VisualScene};
@@ -269,12 +269,38 @@ impl AiEngine {
     /// The host must preserve active-document identity and all command admission for
     /// this entire call. Provider-backed planners may block; GUI hosts must not call
     /// those on a UI frame. Async/prepared-plan integration requires a separate protocol.
+    ///
+    /// Strict opt-in: this entry point makes no visual-evidence captures, so its
+    /// cost profile is unchanged. Use [`Self::process_instruction_in_with_evidence`]
+    /// to collect observed-composite evidence.
     pub fn process_instruction_in<S: LiveEditSession + ?Sized>(
         &self,
         session: &mut S,
         prompt: &str,
         context: &mut AiContext,
     ) -> Result<AiResult, AiError> {
+        self.process_instruction_in_impl(session, prompt, context, false).map(|(result, _)| result)
+    }
+
+    /// `process_instruction_in` plus the observed-composite evidence bundle
+    /// (additive; evidence capture happens only through this entry point, see
+    /// [`ExecutionEvidence`]).
+    pub fn process_instruction_in_with_evidence<S: LiveEditSession + ?Sized>(
+        &self,
+        session: &mut S,
+        prompt: &str,
+        context: &mut AiContext,
+    ) -> Result<(AiResult, ExecutionEvidence), AiError> {
+        self.process_instruction_in_impl(session, prompt, context, true)
+    }
+
+    fn process_instruction_in_impl<S: LiveEditSession + ?Sized>(
+        &self,
+        session: &mut S,
+        prompt: &str,
+        context: &mut AiContext,
+        collect_evidence: bool,
+    ) -> Result<(AiResult, ExecutionEvidence), AiError> {
         // 1. Inspect the host's active document without interpreting error strings.
         let doc_json = session.inspect_active()?;
         let mut initial_scene = match &doc_json {
@@ -320,8 +346,14 @@ impl AiEngine {
             self.catalog.validate_command(&step.command, &step.params)?;
         }
 
-        // 5. Native Execution: execute transactionally with compound undo support
-        let execution = ExecutionEngine::execute_plan_in(session, &plan)?;
+        // 5. Native Execution: execute transactionally with compound undo support.
+        // Evidence capture is strictly opt-in: the legacy entry point above
+        // passes collect_evidence = false and no digest renders happen at all.
+        let (execution, evidence) = if collect_evidence {
+            ExecutionEngine::execute_plan_in_with_evidence(session, &plan)?
+        } else {
+            (ExecutionEngine::execute_plan_in(session, &plan)?, ExecutionEvidence::default())
+        };
 
         // 6. Visual Evaluation: inspect resulting composition and verify goals
         let post_doc_json = session.inspect_active()?.ok_or(AiError::NoDocumentOpen)?;
@@ -334,14 +366,17 @@ impl AiEngine {
 
         let revision = post_doc_json.get("revision").and_then(Value::as_u64).unwrap_or(0);
 
-        Ok(AiResult {
-            prompt: prompt.to_string(),
-            initial_scene,
-            plan,
-            execution,
-            evaluation,
-            revision,
-        })
+        Ok((
+            AiResult {
+                prompt: prompt.to_string(),
+                initial_scene,
+                plan,
+                execution,
+                evaluation,
+                revision,
+            },
+            evidence,
+        ))
     }
 
     /// Plan an instruction without executing it (dry-run inspection).

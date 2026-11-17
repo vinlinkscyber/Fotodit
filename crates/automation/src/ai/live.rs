@@ -29,6 +29,42 @@ pub trait LiveEditSession {
 
     /// Run an admitted command against the same live destination and wait for completion.
     fn command_run(&mut self, command: &str, params: Value) -> Result<Value, AutomationError>;
+
+    /// OPTIONAL observation hook: a position-sensitive digest of the rendered
+    /// active-document composite (the engine's read-only, non-journaling
+    /// `image.analysis.pixelDigest` command) for before/after result evidence.
+    ///
+    /// Contract:
+    /// - the default implementation returns `None`: a host without pixel access
+    ///   honestly has no visual evidence, and callers classify that as unknown -
+    ///   evidence is never invented;
+    /// - implementations MUST route through the host's own admitted command path,
+    ///   preserving admission, existing authorization hooks and job policy exactly
+    ///   as for editing commands. Non-mutation, no journaling, synchronous
+    ///   completion, and a stable active document across the capture are
+    ///   PRECONDITIONS the implementation must honor: the caller's inspection is
+    ///   only an identity hint (name + path) and cannot detect every transient
+    ///   or same-name substitution, so it is not a verification of this
+    ///   contract;
+    /// - an authorization refusal is reported as `Some(Err(_))`: it is never
+    ///   bypassed through a side channel, and it never fails the editing step it
+    ///   observes - it surfaces as honest unknown evidence;
+    /// - the returned JSON is unauthenticated host input: callers validate the
+    ///   full fixed schema (domain, schema version, hash, quantization, digest
+    ///   syntax, stride/dims/sample-count consistency) before trusting it, so a
+    ///   custom host's output inherits no engine consistency;
+    /// - `Some(Err(_))` means the host supports the hook but this capture failed
+    ///   or was refused; the error string is surfaced in the evidence detail so a
+    ///   failure is distinguishable from honest absence; `None` means the host
+    ///   offers no digest capability at all;
+    /// - `max_pixels` caps the composite render work of one capture;
+    ///   implementations must pass it through and must not exceed it. The digest
+    ///   bounds the composite buffer only; renderer-internal intermediates and
+    ///   wall-clock time remain governed by the renderer.
+    fn visual_digest(&mut self, max_pixels: u64) -> Option<Result<Value, String>> {
+        let _ = max_pixels;
+        None
+    }
 }
 
 impl LiveEditSession for Headless {
@@ -39,5 +75,12 @@ impl LiveEditSession for Headless {
     fn command_run(&mut self, command: &str, params: Value) -> Result<Value, AutomationError> {
         // Preserve Headless admission, filesystem policy, job synchronization and cache cleanup.
         Headless::command_run(self, command, params)
+    }
+
+    fn visual_digest(&mut self, max_pixels: u64) -> Option<Result<Value, String>> {
+        // The same admitted path as every other command (see above): admission,
+        // job synchronization and cache cleanup are preserved. `image.analysis.pixelDigest`
+        // is read-only and non-journaling.
+        Some(Headless::command_run(self, "image.analysis.pixelDigest", serde_json::json!({"maxPixels": max_pixels})).map_err(|e| e.to_string()))
     }
 }

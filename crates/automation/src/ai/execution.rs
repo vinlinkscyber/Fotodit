@@ -12,6 +12,66 @@ use serde_json::{Value, json};
 use super::{AiError, EditingPlan, LiveEditSession};
 use crate::headless::Headless;
 
+/// Observed-composite evidence class for one executed step. This records what a
+/// before/after pixel comparison OBSERVED; it is never a semantic verdict on
+/// whether the user's intended outcome was achieved.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VisualEvidenceClass {
+    /// The document dimensions changed, or the sampled quantized composite
+    /// DATA differs on an identical grid. A data difference is not proof of a
+    /// visible appearance change (RGB differences under full transparency
+    /// change the data, not the appearance) and says nothing about intent or
+    /// quality.
+    Changed,
+    /// No difference was observed on the sampled, 8-bit-clamped grid. Not
+    /// proof of no change: stride sampling skips pixels, HDR and sub-8-bit
+    /// differences are clamped or quantized away, and a 64-bit
+    /// non-cryptographic hash can collide. An idempotent or no-op visual
+    /// command legitimately lands here.
+    NoChangeObserved,
+    /// A non-visual command class: success never required a pixel change, so no
+    /// comparison was made. This is a legitimate outcome, not a gap.
+    NotApplicable,
+    /// No evidence: the command is unclassified, the host has no digest
+    /// capability, a capture failed or was refused, or the plan's capture budget
+    /// was exhausted. Honest absence, never assumed change or no-change.
+    #[default]
+    Unknown,
+}
+
+/// Per-step visual result evidence: an observation record that never feeds
+/// `success`, `is_success`, rollback or any safety decision.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct VisualEvidence {
+    pub class: VisualEvidenceClass,
+    /// Human-readable basis for the class, including sampling parameters or the
+    /// reason evidence is unavailable.
+    pub detail: String,
+}
+
+/// One step's observed-composite evidence, paired with its plan step index.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StepVisualEvidence {
+    pub step_index: usize,
+    pub visual: VisualEvidence,
+}
+
+/// Observed-composite evidence collected while executing a plan, one entry
+/// per executed step. Each entry is an observation taken AT THAT STEP'S TIME:
+/// after a failure and its rollback the final document is the post-rollback
+/// state, so a successful pre-rollback step's evidence does not describe the
+/// final canvas (on the error path the whole bundle is dropped, so callers
+/// never see pre-rollback observations of a canvas that rollback then
+/// changed). Evidence is observational only: it never feeds `is_success`,
+/// rollback, dispatch or any safety decision. It is returned only through the
+/// additive `execute_plan*_with_evidence` API so that `StepExecution` and all
+/// existing callers stay byte-compatible.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ExecutionEvidence {
+    pub steps: Vec<StepVisualEvidence>,
+}
+
 /// Detailed trace of an executed plan step.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StepExecution {
@@ -44,6 +104,80 @@ pub struct ExecutionResult {
 /// state becomes the rollback baseline, and a failure report says it remains open.
 const IDENTITY_CHANGING: &[&str] = &["file.new", "file.open", "file.close", "file.closeAll"];
 
+// ------------------------------------------------------------------ visual result evidence
+
+/// Per-capture composite render budget for evidence digests, matching the
+/// conservative automatic-perception budget already used for color statistics
+/// (`computed_dominant_colors`). This caps RENDERED pixels per capture (about
+/// 1M are actually sampled at the resulting stride); the digest bounds the
+/// composite buffer only (16 bytes per rendered pixel, at most 64,000,000
+/// bytes here); renderer-internal intermediates and wall-clock time are
+/// governed by the renderer itself.
+const EVIDENCE_MAX_PIXELS: u64 = 4_000_000;
+
+/// Total digest captures allowed per plan execution. Captures are synchronous
+/// composite renders on the host's live path; the aggregate per run is bounded
+/// at 8 x 4M = 32M rendered px, plus the perception path's 2 color-statistics
+/// renders (at most 8M rendered px): about 40M rendered px, i.e. roughly
+/// 640,000,000 decimal bytes (~610 MiB) of CUMULATIVE composite output per run
+/// - not peak memory (one bounded composite buffer at a time, plus renderer
+/// internals, which this does not bound) and no wall-clock or latency claim.
+/// k visual steps chain k+1 captures; once the budget is exhausted further
+/// visual steps get honest `Unknown` evidence instead of unbounded render
+/// cost.
+const EVIDENCE_MAX_CAPTURES: usize = 8;
+
+/// Commands whose success is EXPECTED to change the rendered composite, each
+/// verified against the engine registry (registered, `journal: true`).
+/// Heuristic for evidence capture only: a command listed here that observably
+/// does not change pixels (idempotent or no-op) is still a successful step,
+/// classified `NoChangeObserved`. The `image.adjustments.*` and
+/// `layer.newAdjustmentLayer.*` prefixes are grounded in the ADJ table
+/// generator in cmd.rs, which registers every such id with `journal: true`.
+const VISUAL_COMMANDS: &[&str] = &[
+    "type.create",
+    "type.edit",
+    "type.setStyle",
+    "layer.newFillLayer.solidColor",
+    "layer.newFillLayer.gradient",
+    "layer.duplicate",
+    "layer.removeBackground",
+    "filter.sharpen.unsharpMask",
+    "filter.blur.gaussianBlur",
+    "edit.undo",
+    "edit.redo",
+];
+
+/// Read-only query commands (registered, `journal: false`): success never
+/// involves a pixel change. `image.adjustments.colorLookup.list` is the one
+/// non-journaling id under its prefix.
+const NONVISUAL_COMMANDS: &[&str] = &["image.analysis.colorStats", "image.analysis.pixelDigest", "image.adjustments.colorLookup.list"];
+
+/// Evidence classification for a plan step's command.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EvidenceKind {
+    Visual,
+    Nonvisual,
+    Unclassified,
+}
+
+/// One digest capture: schema-validated geometry + sampling parameters + the
+/// digest itself. The host's JSON is unauthenticated input - a custom host's
+/// output inherits no engine consistency - so every field of the fixed schema
+/// must be present, well-formed and self-consistent before the capture is
+/// trusted.
+#[derive(Clone, Debug, PartialEq)]
+struct DigestMark {
+    /// The digest as a NUMBER (parsed from the host's hex), so textually
+    /// different but numerically identical digests (e.g. case differences)
+    /// can never register as a change.
+    digest: u64,
+    width: u64,
+    height: u64,
+    stride: u64,
+    sampled: u64,
+}
+
 /// Observed identity hint and history state of the active document, read through
 /// the host's own inspection JSON (`fotodit_engine::inspect::document`). Every
 /// field must be present and well-formed; anything missing or malformed makes
@@ -70,9 +204,127 @@ struct DocMark {
 pub struct ExecutionEngine;
 
 impl ExecutionEngine {
+    /// Evidence classification of a plan step's command. Prefix membership is
+    /// verified against the LIVE REGISTRY (a registered spec with
+    /// `journal: true`), so an invented id under a visual prefix - say an
+    /// unregistered `image.adjustments.*` - classifies Unclassified:
+    /// unknown-safe, no admission expansion. Anything not grounded as visual
+    /// or read-only is Unclassified: unobserved, never assumed.
+    fn evidence_class(command: &str) -> EvidenceKind {
+        if NONVISUAL_COMMANDS.contains(&command) {
+            return EvidenceKind::Nonvisual;
+        }
+        let candidate = VISUAL_COMMANDS.contains(&command)
+            || command.starts_with("image.adjustments.")
+            || command.starts_with("layer.newAdjustmentLayer.");
+        if candidate
+            && fotodit_engine::command_specs()
+                .iter()
+                .any(|s| s.id == command && s.journal)
+        {
+            return EvidenceKind::Visual;
+        }
+        EvidenceKind::Unclassified
+    }
+
+    /// One digest capture through the host's OPTIONAL observation hook.
+    /// `Ok(None)`: the host offers no digest capability. `Err`: the host
+    /// supports it but this capture failed or was refused, or its output
+    /// failed the fixed-schema validation below. Never fails the step it
+    /// observes. The hook contract forbids mutation and requires the active
+    /// document to be preserved (see `LiveEditSession::visual_digest`).
+    fn capture_digest<S: LiveEditSession + ?Sized>(session: &mut S) -> Result<Option<DigestMark>, String> {
+        let Some(result) = session.visual_digest(EVIDENCE_MAX_PIXELS) else {
+            return Ok(None);
+        };
+        let value = result?;
+        let invalid = || "the host's digest output failed schema validation".to_string();
+        if value.get("domain").and_then(Value::as_str) != Some("canvas")
+            || value.get("schema").and_then(Value::as_u64) != Some(1)
+            || value.get("hash").and_then(Value::as_str) != Some("fnv1a64")
+            || value.get("quantization").and_then(Value::as_str) != Some("8bit/channel")
+        {
+            return Err(invalid());
+        }
+        let digest_hex = value.get("digest").and_then(Value::as_str).ok_or_else(invalid)?;
+        if digest_hex.len() != 16 || !digest_hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(invalid());
+        }
+        let digest = u64::from_str_radix(digest_hex, 16).map_err(|_| invalid())?;
+        let width = value.get("width").and_then(Value::as_u64).filter(|v| *v >= 1).ok_or_else(invalid)?;
+        let height = value.get("height").and_then(Value::as_u64).filter(|v| *v >= 1).ok_or_else(invalid)?;
+        let stride = value.get("stride").and_then(Value::as_u64).filter(|v| *v >= 1).ok_or_else(invalid)?;
+        let sampled = value.get("sampledPixels").and_then(Value::as_u64).ok_or_else(invalid)?;
+        // Declared geometry must not overflow and must stay within the capture
+        // budget we requested; actual resource use remains a host precondition
+        // (the hook contract), not something this JSON can prove.
+        let area = width.checked_mul(height).ok_or_else(invalid)?;
+        if area > EVIDENCE_MAX_PIXELS {
+            return Err(invalid());
+        }
+        let cols = (width - 1) / stride + 1;
+        let rows = (height - 1) / stride + 1;
+        if cols.checked_mul(rows) != Some(sampled) {
+            return Err(invalid());
+        }
+        Ok(Some(DigestMark { digest, width, height, stride, sampled }))
+    }
+
+    /// Compare two captures. A dimension change is an observable change of
+    /// its own (geometry evidence; digests are never compared). A stride
+    /// change at identical dimensions is NOT a pixel change: the grids
+    /// differ, so the digests are incomparable and the honest class is
+    /// Unknown. Digests are only compared over an identical grid.
+    fn compare_digests(before: &DigestMark, after: &DigestMark) -> VisualEvidence {
+        if (before.width, before.height) != (after.width, after.height) {
+            return VisualEvidence {
+                class: VisualEvidenceClass::Changed,
+                detail: format!(
+                    "the document dimensions changed ({}x{} -> {}x{}); a geometry change is an observable change of its own and digests are not compared",
+                    before.width, before.height, after.width, after.height
+                ),
+            };
+        }
+        if before.stride != after.stride {
+            return VisualEvidence {
+                class: VisualEvidenceClass::Unknown,
+                detail: format!(
+                    "the sampling grid changed (stride {} -> {}) at identical dimensions; the digests are not comparable, so there is no evidence of change or of no-change",
+                    before.stride, after.stride
+                ),
+            };
+        }
+        if before.digest != after.digest {
+            VisualEvidence {
+                class: VisualEvidenceClass::Changed,
+                detail: format!(
+                    "the sampled quantized composite data differs ({}x{}, stride {}, {} px sampled); a data difference is not proof of a visible appearance change, intent or quality",
+                    after.width, after.height, after.stride, after.sampled
+                ),
+            }
+        } else {
+            VisualEvidence {
+                class: VisualEvidenceClass::NoChangeObserved,
+                detail: format!(
+                    "no difference observed on the sampled, 8-bit-clamped grid ({}x{}, stride {}, {} px sampled); sampling, quantization and hash collisions can hide changes",
+                    after.width, after.height, after.stride, after.sampled
+                ),
+            }
+        }
+    }
+
     /// Execute an editing plan step-by-step with automatic transactional rollback on failure.
     pub fn execute_plan(headless: &mut Headless, plan: &EditingPlan) -> Result<ExecutionResult, AiError> {
         Self::execute_plan_in(headless, plan)
+    }
+
+    /// `execute_plan` plus the observed-composite evidence bundle (additive;
+    /// the evidence never changes execution, see [`ExecutionEvidence`]).
+    pub fn execute_plan_with_evidence(
+        headless: &mut Headless,
+        plan: &EditingPlan,
+    ) -> Result<(ExecutionResult, ExecutionEvidence), AiError> {
+        Self::execute_plan_in_with_evidence(headless, plan)
     }
 
     /// Execute on the host's admitted command path, including rollback attempts.
@@ -115,6 +367,29 @@ impl ExecutionEngine {
         session: &mut S,
         plan: &EditingPlan,
     ) -> Result<ExecutionResult, AiError> {
+        // Strict opt-in: existing callers keep the old behavior exactly -
+        // no evidence captures, so no additional renders.
+        Self::execute_plan_in_impl(session, plan, false).map(|(result, _)| result)
+    }
+
+    /// `execute_plan_in` plus the observed-composite evidence bundle. The
+    /// bundle is observational only and never feeds `is_success`, rollback or
+    /// dispatch; on the error path it is dropped, so callers never see
+    /// pre-rollback observations of a canvas that rollback then changed.
+    /// Evidence captures (bounded by `EVIDENCE_MAX_CAPTURES` x
+    /// `EVIDENCE_MAX_PIXELS`) happen ONLY through this entry point.
+    pub fn execute_plan_in_with_evidence<S: LiveEditSession + ?Sized>(
+        session: &mut S,
+        plan: &EditingPlan,
+    ) -> Result<(ExecutionResult, ExecutionEvidence), AiError> {
+        Self::execute_plan_in_impl(session, plan, true)
+    }
+
+    fn execute_plan_in_impl<S: LiveEditSession + ?Sized>(
+        session: &mut S,
+        plan: &EditingPlan,
+        collect_evidence: bool,
+    ) -> Result<(ExecutionResult, ExecutionEvidence), AiError> {
         // Identity-changing commands cannot be rolled back soundly; refuse plans
         // that contain them before anything executes (a leading file.new of a
         // creates_document plan excepted, documented above).
@@ -139,6 +414,7 @@ impl ExecutionEngine {
             super::enhancement_preflight::validate(&document, plan)?;
         }
         let mut executed = Vec::new();
+        let mut evidence: Vec<StepVisualEvidence> = Vec::new();
         let total_steps = plan.steps.len();
         let mut baseline: Option<DocMark> = None;
         // Entries verified as appended by this plan's steps, oldest first.
@@ -149,6 +425,12 @@ impl ExecutionEngine {
         // journaled edits are undone: incomplete relative to the original state.
         let mut created_document_open = false;
         let mut mark_prev = Self::document_mark(session);
+        // Visual-evidence state: the latest captured digest, chained so the next
+        // visual step reuses it as its baseline (k+1 captures for k visual
+        // steps). An unclassified step breaks the chain: the next visual step
+        // re-baselines instead of attributing an unobserved step's changes.
+        let mut last_digest: Option<DigestMark> = None;
+        let mut evidence_captures = 0usize;
 
         for (idx, step) in plan.steps.iter().enumerate() {
             // The leading file.new of a creation plan: the created document is
@@ -171,6 +453,15 @@ impl ExecutionEngine {
                             output: Some(output),
                             error: None,
                         });
+                        if collect_evidence {
+                            evidence.push(StepVisualEvidence {
+                                step_index: idx,
+                                visual: VisualEvidence {
+                                    class: VisualEvidenceClass::NotApplicable,
+                                    detail: "document creation is observed through inspection; the first visual step captures its own baseline".to_string(),
+                                },
+                            });
+                        }
                         continue;
                     }
                     Err(err) => {
@@ -183,6 +474,15 @@ impl ExecutionEngine {
                             output: None,
                             error: Some(err_msg.clone()),
                         });
+                        if collect_evidence {
+                            evidence.push(StepVisualEvidence {
+                                step_index: idx,
+                                visual: VisualEvidence {
+                                    class: VisualEvidenceClass::NotApplicable,
+                                    detail: "document creation is observed through inspection; the first visual step captures its own baseline".to_string(),
+                                },
+                            });
+                        }
                         // Reconcile mutate-then-Err on creation too. Only an
                         // inspection showing the identical pre-step mark verifies
                         // that nothing was applied; no readable mark at all means
@@ -212,6 +512,37 @@ impl ExecutionEngine {
                 }
             }
             let spec = fotodit_engine::command_specs().iter().find(|s| s.id == step.command);
+
+            // Visual result evidence (observation only): baseline for a visual
+            // step before it runs. Never affects success, rollback or dispatch.
+            // With collect_evidence = false (the legacy entry points) none of
+            // this runs: no classification, no captures, no renders.
+            let evidence_kind = if collect_evidence { Self::evidence_class(&step.command) } else { EvidenceKind::Nonvisual };
+            let mut before_digest: Option<DigestMark> = None;
+            let mut before_note: Option<String> = None;
+            match evidence_kind {
+                EvidenceKind::Visual => {
+                    if let Some(mark) = &last_digest {
+                        before_digest = Some(mark.clone());
+                    } else if evidence_captures >= EVIDENCE_MAX_CAPTURES {
+                        before_note = Some(format!("the plan's visual-evidence capture budget ({EVIDENCE_MAX_CAPTURES}) is exhausted; skipped to bound render cost"));
+                    } else {
+                        evidence_captures += 1;
+                        match Self::capture_digest(session) {
+                            Ok(Some(mark)) => {
+                                before_digest = Some(mark.clone());
+                                last_digest = Some(mark);
+                            }
+                            Ok(None) => before_note = Some("the host offers no pixel digest capability".to_string()),
+                            Err(e) => before_note = Some(format!("the baseline digest capture failed: {e}")),
+                        }
+                    }
+                }
+                EvidenceKind::Nonvisual => {}
+                // An unobserved step breaks the comparison chain: the next
+                // visual step re-baselines instead of attributing changes.
+                EvidenceKind::Unclassified => last_digest = None,
+            }
 
             match session.command_run(&step.command, step.params.clone()) {
                 Ok(output) => {
@@ -262,6 +593,64 @@ impl ExecutionEngine {
                         output: Some(output),
                         error: None,
                     });
+                    if collect_evidence {
+                        let visual = match evidence_kind {
+                            EvidenceKind::Nonvisual => VisualEvidence {
+                                class: VisualEvidenceClass::NotApplicable,
+                                detail: "a non-visual command class; success does not require a pixel change".to_string(),
+                            },
+                            EvidenceKind::Unclassified => VisualEvidence {
+                                class: VisualEvidenceClass::Unknown,
+                                detail: "the command is not in the visual-evidence classification table; its visual effect is unobserved".to_string(),
+                            },
+                            EvidenceKind::Visual => {
+                                if evidence_captures >= EVIDENCE_MAX_CAPTURES {
+                                    VisualEvidence {
+                                        class: VisualEvidenceClass::Unknown,
+                                        detail: format!("the plan's visual-evidence capture budget ({EVIDENCE_MAX_CAPTURES}) is exhausted; skipped to bound render cost"),
+                                    }
+                                } else {
+                                    evidence_captures += 1;
+                                    let after_outcome = Self::capture_digest(session);
+                                    match (before_digest, after_outcome) {
+                                        (Some(before), Ok(Some(mark))) => {
+                                            last_digest = Some(mark.clone());
+                                            Self::compare_digests(&before, &mark)
+                                        }
+                                        // A fresh capture still seeds the chain for the next
+                                        // visual step; only the comparison is missing.
+                                        (None, Ok(Some(mark))) => {
+                                            last_digest = Some(mark);
+                                            VisualEvidence {
+                                                class: VisualEvidenceClass::Unknown,
+                                                detail: match before_note {
+                                                    Some(note) => format!("no baseline to compare against: {note}"),
+                                                    None => "no baseline to compare against".to_string(),
+                                                },
+                                            }
+                                        }
+                                        // The first failure is the honest reason; a later
+                                        // failure must not mask it.
+                                        (_, Ok(None)) => {
+                                            last_digest = None;
+                                            VisualEvidence {
+                                                class: VisualEvidenceClass::Unknown,
+                                                detail: before_note.unwrap_or_else(|| "the host offers no pixel digest capability".to_string()),
+                                            }
+                                        }
+                                        (_, Err(e)) => {
+                                            last_digest = None;
+                                            VisualEvidence {
+                                                class: VisualEvidenceClass::Unknown,
+                                                detail: before_note.unwrap_or_else(|| format!("the post-step digest capture failed: {e}")),
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        };
+                        evidence.push(StepVisualEvidence { step_index: idx, visual });
+                    }
                 }
                 Err(err) => {
                     let err_msg = err.to_string();
@@ -273,6 +662,15 @@ impl ExecutionEngine {
                         output: None,
                         error: Some(err_msg.clone()),
                     });
+                    if collect_evidence {
+                        evidence.push(StepVisualEvidence {
+                            step_index: idx,
+                            visual: VisualEvidence {
+                                class: VisualEvidenceClass::Unknown,
+                                detail: "the step failed; its effect is reconciled by the rollback inspection, not by pixel evidence, and the evidence bundle is dropped on this error path".to_string(),
+                            },
+                        });
+                    }
 
                     // Reconcile the failed step itself with the same prefix rule:
                     // an entry it verifiably appended before erroring is rolled
@@ -365,14 +763,17 @@ impl ExecutionEngine {
             }
         }
 
-        Ok(ExecutionResult {
-            total_steps,
-            executed_steps: executed.len(),
-            step_executions: executed,
-            is_success: true,
-            error: None,
-            undos_performed: 0,
-        })
+        Ok((
+            ExecutionResult {
+                total_steps,
+                executed_steps: executed.len(),
+                step_executions: executed,
+                is_success: true,
+                error: None,
+                undos_performed: 0,
+            },
+            ExecutionEvidence { steps: evidence },
+        ))
     }
 
     /// Active document identity hint and full history entry list via the host's
