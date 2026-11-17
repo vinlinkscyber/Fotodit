@@ -308,8 +308,15 @@ impl AiEngine {
             None => VisualScene::default(),
         };
         // Only with a document open: the no-document path must never dispatch commands.
-        if doc_json.is_some() {
-            initial_scene.dominant_colors = computed_dominant_colors(session);
+        // Initial color analysis is optional metadata: skip it when enhancement
+        // eligibility is absent per the preflight's document-state checks. Actual
+        // plan admission is unchanged - enhancement execution still applies the full
+        // preflight, which remains an early honesty check, not a safety or
+        // authorization boundary.
+        if let Some(json) = &doc_json {
+            if enhancement_preflight::validate_document_state(json).is_ok() {
+                initial_scene.dominant_colors = computed_dominant_colors(session);
+            }
         }
 
         // 2. Natural Language Intelligence: understand intent and resolve targets
