@@ -35,6 +35,7 @@ pub mod file_dialog;
 pub mod file_open;
 pub mod frame_stages;
 pub mod gpu_memo;
+pub mod ai_providers_ui;
 pub mod gpu_status;
 pub mod home_recent_ui;
 pub mod i18n;
@@ -680,6 +681,9 @@ pub struct FotoditApp {
     gpu_oom_retries: u32,
     /// Run once the first frames have rendered (see [`Self::on_started`]).
     started: Option<gpu_status::StartedHook>,
+    /// The AI providers window. Lives here, not in `UiState`, so typed keys are never serialized,
+    /// cloned into snapshots or visible to the command bus.
+    pub ai_providers: ai_providers_ui::State,
     /// Frame and canvas-upload timings (exposed via `ui.inspect`).
     pub perf: gpu_canvas::Perf,
     /// Per-frame stroke timings for latency reports (`FOTODIT_STROKE_TRACE`, see `stroke_trace`).

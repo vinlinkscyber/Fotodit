@@ -94,6 +94,7 @@ pub const SHELL_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("window.theme.softLight", "Soft", &["Window", "Theme", "Light Theme"], None),
     ("window.theme.system", "Sync with system", &["Window", "Theme"], None),
     ("edit.search", "Search…", &["Edit"], Some("Cmd+F")),
+    ("edit.aiProviders", "AI Providers…", &["Edit"], None),
     ("help.discord", "Discord", &["Help"], None),
     ("help.website", "Website", &["Help"], None),
     ("help.plyraWebsite", "Website", &["Help"], None),

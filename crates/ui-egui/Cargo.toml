@@ -32,6 +32,8 @@ fotodit-format = { workspace = true }
 fotodit-codecs = { workspace = true }
 # Reading embedded thumbnail resources (1036/1033) for recent files in Home screen.
 fotodit-psd = { workspace = true }
+# Protected local storage for the AI providers screen (calls the key store directly, never the command bus).
+fotodit-keystore = { workspace = true }
 egui = { workspace = true }
 egui_extras = { version = "0.37", default-features = false, features = ["svg"] }
 eframe = { workspace = true, features = ["wgpu", "accesskit", "clipboard"] }
@@ -63,6 +65,7 @@ sys-locale = "=0.3.2"
 winsafe = { version = "=0.0.29", default-features = false, features = ["kernel", "dxgi", "advapi"] }
 
 [dev-dependencies]
+fotodit-keystore = { workspace = true, features = ["testing"] }
 fotodit-io = { workspace = true, features = ["testgen"] }
 # egui's own default fonts in tests: the oracle for egui_fonts.rs, and contexts made with
 # `Context::default()` (no install_fonts) can lay out text.

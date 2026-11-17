@@ -108,15 +108,6 @@ pub struct ProviderConfig {
     pub openrouter_enabled: bool,
 }
 
-/// Compile-time baked-in config value (set from CI secrets at build time via the
-/// build environment). Used as the last fallback after process env and .env files,
-/// so local overrides always win.
-macro_rules! baked_config_var {
-    ($name:literal) => {
-        option_env!($name).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)
-    };
-}
-
 fn get_config_var(key: &str) -> Option<String> {
     if let Ok(val) = std::env::var(key) {
         let trimmed = val.trim();
@@ -145,15 +136,58 @@ fn get_config_var(key: &str) -> Option<String> {
     None
 }
 
+/// Storage slot (and file key) of a provider's saved key in the local protected key store.
+pub fn key_slot(provider: ProviderId) -> &'static str {
+    match provider {
+        ProviderId::Gemini => "gemini",
+        ProviderId::OpenRouter => "openrouter",
+        ProviderId::Cohere => "cohere",
+        ProviderId::Pollinations => "pollinations",
+        ProviderId::Lajiwa => "lajiwa",
+    }
+}
+
+/// Resolves a provider key by the credential source the user chose on the AI providers screen:
+/// - saved key: only that key is used. If it cannot be read (damaged file, another Windows user) the
+///   provider has no key; nothing else stands in, so a different account is never picked silently.
+/// - removed on purpose, or no choice made yet: no key, from any source.
+/// - the user chose the environment variable / `.env` route: the process environment, then `.env` files.
+/// - no key store on this platform: the environment, then `.env` files, because there is nothing to choose from.
+/// A compile-time ("baked") key is never used here on any platform.
+fn get_secret_var(name: &str, provider: ProviderId) -> Option<String> {
+    let external = || {
+        if let Ok(val) = std::env::var(name) {
+            let trimmed = val.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+        get_config_var(name)
+    };
+    let Some(store) = fotodit_keystore::default_store() else {
+        return external();
+    };
+    match store.source(key_slot(provider)) {
+        Ok(fotodit_keystore::Source::Saved) => {
+            let secret = store.get(key_slot(provider)).ok()??;
+            let value = secret.expose().trim().to_string();
+            (!value.is_empty()).then_some(value)
+        }
+        Ok(fotodit_keystore::Source::External) => external(),
+        // Removed, not chosen yet, or an unreadable store file: fail closed.
+        Ok(fotodit_keystore::Source::Disabled | fotodit_keystore::Source::Unconfigured) | Err(_) => None,
+    }
+}
+
 impl ProviderConfig {
     /// Create a new configuration populated from environment variables or .env file.
     pub fn from_env() -> Self {
         Self {
-            gemini_api_key: get_config_var("GEMINI_API_KEY").or_else(|| baked_config_var!("GEMINI_API_KEY")),
-            openrouter_api_key: get_config_var("OPENROUTER_API_KEY"),
-            cohere_api_key: get_config_var("COHERE_API_KEY").or_else(|| baked_config_var!("COHERE_API_KEY")),
-            pollinations_api_key: get_config_var("POLLINATIONS_API_KEY").or_else(|| baked_config_var!("POLLINATIONS_API_KEY")),
-            lajiwa_api_key: get_config_var("LAJIWA_API_KEY").or_else(|| baked_config_var!("LAJIWA_API_KEY")),
+            gemini_api_key: get_secret_var("GEMINI_API_KEY", ProviderId::Gemini),
+            openrouter_api_key: get_secret_var("OPENROUTER_API_KEY", ProviderId::OpenRouter),
+            cohere_api_key: get_secret_var("COHERE_API_KEY", ProviderId::Cohere),
+            pollinations_api_key: get_secret_var("POLLINATIONS_API_KEY", ProviderId::Pollinations),
+            lajiwa_api_key: get_secret_var("LAJIWA_API_KEY", ProviderId::Lajiwa),
             gemini_model: get_config_var("GEMINI_MODEL").or_else(|| Some("gemini-3.1-flash-lite".into())),
             openrouter_model: get_config_var("OPENROUTER_MODEL").or_else(|| Some("openai/gpt-4.1-mini".into())),
             cohere_model: get_config_var("COHERE_MODEL").or_else(|| Some("command-a-plus-05-2026".into())),
@@ -441,6 +475,60 @@ pub trait HttpTransport: Send + Sync {
     ) -> Result<(u16, Vec<u8>), AiError>;
 }
 
+/// Quotes a value for a curl config file: `\\` and `"` are escaped, control characters are refused.
+fn curl_config_quote(value: &str) -> std::io::Result<String> {
+    if value.chars().any(char::is_control) {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "control character in request"));
+    }
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for c in value.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    Ok(out)
+}
+
+/// Renders request headers and an optional body as a curl config file. They are sent to curl on stdin (`-K -`)
+/// rather than as `-H` / `-d` arguments, because command-line arguments are readable by other programs running
+/// as the same user (process lists, Task Manager): one header carries an API key, and the body carries the
+/// prompt. A compact JSON body has no raw control characters, so refusing them loses nothing.
+fn curl_config(headers: &[(&str, &str)], body: Option<&str>) -> std::io::Result<String> {
+    let mut out = String::new();
+    for &(k, v) in headers {
+        if k.is_empty() || k.chars().any(|c| c.is_control() || c == ':') {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid HTTP header"));
+        }
+        out.push_str("header = ");
+        out.push_str(&curl_config_quote(&format!("{k}: {v}"))?);
+        out.push('\n');
+    }
+    if let Some(b) = body {
+        out.push_str("data = ");
+        out.push_str(&curl_config_quote(b)?);
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+/// Runs a prepared curl command with `headers` and `body` supplied through a stdin config.
+fn run_curl(mut cmd: std::process::Command, headers: &[(&str, &str)], body: Option<&str>) -> std::io::Result<std::process::Output> {
+    use std::io::Write as _;
+    use std::process::Stdio;
+    let config = curl_config(headers, body)?;
+    cmd.arg("-K").arg("-");
+    cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = cmd.spawn()?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(config.as_bytes())?;
+    }
+    child.wait_with_output()
+}
+
 /// Production HTTP transport utilizing native system curl with TLS support.
 pub struct SystemCurlTransport;
 
@@ -460,17 +548,13 @@ impl HttpTransport for SystemCurlTransport {
         cmd.arg("--max-time").arg(format!("{}", timeout.as_secs().max(1)));
         cmd.arg("-w").arg("\n%{http_code}"); // Append status code at end
 
-        for &(k, v) in headers {
-            cmd.arg("-H").arg(format!("{k}: {v}"));
+        let mut config_headers: Vec<(&str, &str)> = headers.to_vec();
+        let body_text = body.map(Value::to_string);
+        if body_text.is_some() {
+            config_headers.push(("Content-Type", "application/json"));
         }
 
-        if let Some(b) = body {
-            let body_str = b.to_string();
-            cmd.arg("-H").arg("Content-Type: application/json");
-            cmd.arg("-d").arg(body_str);
-        }
-
-        let output = cmd.output().map_err(|e| AiError::PlanningError(format!("curl execution failed: {e}")))?;
+        let output = run_curl(cmd, &config_headers, body_text.as_deref()).map_err(|e| AiError::PlanningError(format!("curl execution failed: {e}")))?;
         let stdout = String::from_utf8_lossy(&output.stdout);
 
         let mut lines = stdout.rsplitn(2, '\n');
@@ -498,11 +582,7 @@ impl HttpTransport for SystemCurlTransport {
         // Keep the HTTP status separate from the arbitrary binary response body.
         cmd.arg("-w").arg("\n%{http_code}");
 
-        for &(k, v) in headers {
-            cmd.arg("-H").arg(format!("{k}: {v}"));
-        }
-
-        let output = cmd.output().map_err(|e| AiError::PlanningError(format!("curl fetch failed: {e}")))?;
+        let output = run_curl(cmd, headers, None).map_err(|e| AiError::PlanningError(format!("curl fetch failed: {e}")))?;
         if !output.status.success() {
             let err_msg = String::from_utf8_lossy(&output.stderr);
             return Err(AiError::PlanningError(format!("curl image request failed: {err_msg}")));
@@ -994,8 +1074,29 @@ fn strip_markdown_fences(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    #[test]
+    fn provider_slots_match_the_settings_screen_list() {
+        let ids = [ProviderId::Gemini, ProviderId::OpenRouter, ProviderId::Cohere, ProviderId::Pollinations, ProviderId::Lajiwa];
+        let slots: Vec<&str> = ids.iter().map(|p| key_slot(*p)).collect();
+        let listed: Vec<&str> = fotodit_keystore::PROVIDERS.iter().map(|p| p.slot).collect();
+        assert_eq!(slots, listed);
+    }
+
+    #[test]
+    fn curl_headers_and_body_go_through_a_config_not_the_command_line() -> std::io::Result<()> {
+        let cfg = curl_config(&[("Authorization", "Bearer abc\"def\\ghi"), ("X-Plain", "v")], None)?;
+        assert_eq!(cfg, "header = \"Authorization: Bearer abc\\\"def\\\\ghi\"\nheader = \"X-Plain: v\"\n");
+        assert!(curl_config(&[("X", "a\r\nInjected: 1")], None).is_err());
+        assert!(curl_config(&[("Bad:Name", "v")], None).is_err());
+        assert!(curl_config(&[("", "v")], None).is_err());
+        // A prompt body with quotes, backslashes and an escaped newline stays one config line.
+        let body = serde_json::json!({"prompt": "say \"hi\"\nthen \\ done"}).to_string();
+        let cfg = curl_config(&[], Some(&body))?;
+        assert_eq!(cfg.lines().count(), 1);
+        assert!(cfg.starts_with("data = \"") && cfg.ends_with("\"\n"));
+        assert!(curl_config(&[], Some("raw\nnewline")).is_err());
+        Ok(())
+    }
 
     #[test]
     fn raw_http_status_preserves_binary_body_and_error_statuses() -> Result<(), AiError> {

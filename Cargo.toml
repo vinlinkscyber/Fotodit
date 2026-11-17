@@ -36,6 +36,7 @@ fotodit-engine = { path = "crates/engine" }
 fotodit-ui-egui = { path = "crates/ui-egui" }
 fotodit-testkit = { path = "crates/testkit" }
 fotodit-tablet = { path = "crates/tablet" }
+fotodit-keystore = { path = "crates/keystore" }
 fotodit-ipp = { path = "crates/ipp" }
 
 # external

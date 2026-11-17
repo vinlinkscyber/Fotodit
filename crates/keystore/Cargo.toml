@@ -1,0 +1,37 @@
+[package]
+name = "fotodit-keystore"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Per-user protected local storage for AI provider keys (Windows DPAPI), with a safe API"
+
+# An isolated helper crate, like fotodit-tablet: only `src/windows.rs` allows `unsafe` (the
+# DPAPI calls take raw blob pointers). Every other file is denied, and every other crate keeps the
+# workspace's `unsafe_code = "forbid"`.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+cognitive_complexity = "deny"
+too_many_arguments = "deny"
+wildcard_imports = "deny"
+dbg_macro = "warn"
+todo = "warn"
+
+[features]
+# A reversible test double for `Sealer`, so callers' tests need no real credentials or OS store.
+testing = []
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+base64 = "0.23"
+# Already in Cargo.lock (1.9.1) through other crates; its volatile wipe is the established way to keep the
+# compiler from removing a zeroing store, so this crate needs no extra `unsafe`.
+zeroize = "1"
+
+# Already in Cargo.lock (the tablet crate pins the same version); `Win32_Security_Cryptography`
+# adds the DPAPI functions without adding a package.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "=0.62.2", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }

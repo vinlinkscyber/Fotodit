@@ -187,6 +187,7 @@ impl FotoditApp {
             gpu_fault: None,
             gpu_oom_retries: 0,
             started: None,
+            ai_providers: Default::default(),
             perf: Default::default(),
             stroke_trace: stroke_trace::StrokeTrace::from_env(),
             render_path: Default::default(),

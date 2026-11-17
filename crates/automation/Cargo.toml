@@ -25,6 +25,7 @@ fotodit-compose = { workspace = true }
 fotodit-codecs = { workspace = true }
 fotodit-io = { workspace = true }
 fotodit-format = { path = "../format" }
+fotodit-keystore = { workspace = true }
 fotodit-engine = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

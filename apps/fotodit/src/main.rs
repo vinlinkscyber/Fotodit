@@ -354,6 +354,11 @@ fn main() -> eframe::Result {
     fotodit_engine::malloc_tuning::apply();
     // Then, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
+    // The AI providers window's Test connection: one owner-confirmed request per click, never automatic.
+    fotodit_ui_egui::ai_providers_ui::set_checker(fotodit_ui_egui::ai_providers_ui::Checker {
+        availability: fotodit_automation::ai::key_check::availability,
+        run: fotodit_automation::ai::key_check::run_saved,
+    });
     crash_guard::install_hook();
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(done) = craft_update::self_update::finish(&fotodit_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {

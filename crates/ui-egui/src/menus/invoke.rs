@@ -672,6 +672,10 @@ pub(crate) fn invoke_unguarded_with(app: &mut FotoditApp, ctx: &egui::Context, i
             app.ui.palette_open = !app.ui.palette_open;
             Ok(Value::Null)
         }
+        "edit.aiProviders" => {
+            crate::ai_providers_ui::open(app);
+            Ok(Value::Null)
+        }
         "help.about" => Ok(json!({"dialog": app.ui.open_dialog(DialogKind::About, Default::default())})),
         "help.systemInfo" => {
             let mut fields = serde_json::Map::new();

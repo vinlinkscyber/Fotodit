@@ -19,6 +19,7 @@ pub mod evaluation;
 pub mod execution;
 pub mod goal_repair;
 pub mod goal_session;
+pub mod key_check;
 pub mod live;
 pub mod natural_language;
 pub mod perception;

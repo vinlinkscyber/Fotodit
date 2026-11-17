@@ -2563,6 +2563,7 @@ dependencies = [
  "fotodit-geom",
  "fotodit-gpu",
  "fotodit-io",
+ "fotodit-keystore",
  "fotodit-psd",
  "fotodit-raster",
  "fotodit-raw",
@@ -2815,6 +2816,18 @@ name = "fotodit-ipp"
 version = "0.20.1"
 
 [[package]]
+name = "fotodit-keystore"
+version = "0.20.1"
+dependencies = [
+ "base64 0.23.1",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "windows",
+ "zeroize",
+]
+
+[[package]]
 name = "fotodit-ops"
 version = "0.20.1"
 dependencies = [
@@ -2958,6 +2971,7 @@ dependencies = [
  "fotodit-geom",
  "fotodit-gpu",
  "fotodit-io",
+ "fotodit-keystore",
  "fotodit-paint",
  "fotodit-plugins",
  "fotodit-psd",
