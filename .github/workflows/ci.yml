@@ -11,6 +11,10 @@ on:
     types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
     inputs:
+      windows_only:
+        description: "Limited qualification: run only the platform check and the two Windows legs (not full CI acceptance)"
+        type: boolean
+        default: false
       full_sweep:
         description: "Run every testkit sweep case (runtime comparison and integration validation)"
         type: boolean
@@ -144,7 +148,7 @@ jobs:
 
   # The Linux gate. Its rust-cache entry is the one `test (without heif)` restores.
   gate:
-    if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
+    if: inputs.windows_only != true && (github.event.action != 'labeled' || github.event.label.name == 'full-ci')
     # Tracks @main so suite-wide CI fixes reach every app without a PR in each repository.
     uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
     with:
@@ -275,7 +279,7 @@ jobs:
   # cache without saving one: the dependencies are the same, and the 10 GB cache budget is tight
   # (#2688).
   test-without-heif:
-    if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
+    if: inputs.windows_only != true && (github.event.action != 'labeled' || github.event.label.name == 'full-ci')
     timeout-minutes: 60
     name: test (without heif)
     # The gate's runner: its cache entry is keyed on the OS.
@@ -313,7 +317,7 @@ jobs:
         run: cargo nextest run -p fotodit-heif -p fotodit-codecs -p fotodit-io --locked --profile ci
 
   corpus:
-    if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
+    if: inputs.windows_only != true && (github.event.action != 'labeled' || github.event.label.name == 'full-ci')
     timeout-minutes: 30
     # Real-file corpus tests (cargo feature `corpus`), on every PR and on main. The corpora are
     # pinned in xtask/src/corpus_pins.rs and sha256-verified (xtask/*.sha256) after both a cache
@@ -353,7 +357,7 @@ jobs:
     name: web build and wasm size gate
     # PRs run it only when web-relevant files change (see `platforms`); main always does.
     needs: platforms
-    if: needs.platforms.outputs.web == 'true'
+    if: inputs.windows_only != true && needs.platforms.outputs.web == 'true'
     runs-on: ubuntu-latest
     env:
       # Match release.yml so PR results reflect what would actually ship.
