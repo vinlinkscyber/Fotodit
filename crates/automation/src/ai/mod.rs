@@ -16,6 +16,7 @@ pub mod command_intelligence;
 pub mod creative_design;
 pub mod evaluation;
 pub mod execution;
+pub mod live;
 pub mod natural_language;
 pub mod perception;
 pub mod planner;
@@ -25,6 +26,7 @@ pub use command_intelligence::{CommandCapability, CommandCatalog, ValidatedComma
 pub use creative_design::{ColorHarmony, DesignArchetype, LayoutEngine, TypographyHierarchy};
 pub use evaluation::{EvaluationEngine, EvaluationReport};
 pub use execution::{ExecutionEngine, ExecutionResult};
+pub use live::LiveEditSession;
 pub use natural_language::{EditingIntent, IntentCategory, NaturalLanguageEngine};
 pub use perception::{DocumentStructure, PerceptionEngine, VisualElement, VisualScene};
 pub use planner::{AiPlanner, DeterministicRulePlanner, PlanStep};
@@ -237,12 +239,21 @@ impl AiEngine {
         prompt: &str,
         context: &mut AiContext,
     ) -> Result<AiResult, AiError> {
-        // 1. Visual Perception: inspect active document structure and visual elements
-        let doc_json = match headless.inspect(None) {
-            Ok(json) => Some(json),
-            Err(AutomationError::BadRequest(msg)) if msg.contains("no document open") => None,
-            Err(other) => return Err(AiError::Automation(other)),
-        };
+        self.process_instruction_in(headless, prompt, context)
+    }
+
+    /// Process an instruction against a host-owned, synchronous editing destination.
+    /// The host must preserve active-document identity and all command admission for
+    /// this entire call. Provider-backed planners may block; GUI hosts must not call
+    /// those on a UI frame. Async/prepared-plan integration requires a separate protocol.
+    pub fn process_instruction_in<S: LiveEditSession + ?Sized>(
+        &self,
+        session: &mut S,
+        prompt: &str,
+        context: &mut AiContext,
+    ) -> Result<AiResult, AiError> {
+        // 1. Inspect the host's active document without interpreting error strings.
+        let doc_json = session.inspect_active()?;
         let initial_scene = match &doc_json {
             Some(json) => self.perception_engine.perceive(json),
             None => VisualScene::default(),
@@ -283,10 +294,10 @@ impl AiEngine {
         }
 
         // 5. Native Execution: execute transactionally with compound undo support
-        let execution = ExecutionEngine::execute_plan(headless, &plan)?;
+        let execution = ExecutionEngine::execute_plan_in(session, &plan)?;
 
         // 6. Visual Evaluation: inspect resulting composition and verify goals
-        let post_doc_json = headless.inspect(None).map_err(AiError::Automation)?;
+        let post_doc_json = session.inspect_active()?.ok_or(AiError::NoDocumentOpen)?;
         let final_scene = self.perception_engine.perceive(&post_doc_json);
         let evaluation = self.eval_engine.evaluate(&intent, &initial_scene, &final_scene, &execution);
 
@@ -312,11 +323,18 @@ impl AiEngine {
         prompt: &str,
         context: &AiContext,
     ) -> Result<EditingPlan, AiError> {
-        let doc_json = match headless.inspect(None) {
-            Ok(json) => Some(json),
-            Err(AutomationError::BadRequest(msg)) if msg.contains("no document open") => None,
-            Err(other) => return Err(AiError::Automation(other)),
-        };
+        self.plan_instruction_in(headless, prompt, context)
+    }
+
+    /// Plan without dispatching commands. Inspection uses the host's active document.
+    /// A host that defers execution must independently bind document identity and revision.
+    pub fn plan_instruction_in<S: LiveEditSession + ?Sized>(
+        &self,
+        session: &S,
+        prompt: &str,
+        context: &AiContext,
+    ) -> Result<EditingPlan, AiError> {
+        let doc_json = session.inspect_active()?;
         let initial_scene = match &doc_json {
             Some(json) => self.perception_engine.perceive(json),
             None => VisualScene::default(),
@@ -350,7 +368,12 @@ impl AiEngine {
 
     /// Run perception on active document.
     pub fn perceive_document(&self, headless: &Headless) -> Result<VisualScene, AiError> {
-        let doc_json = headless.inspect(None).map_err(AiError::Automation)?;
+        self.perceive_document_in(headless)
+    }
+
+    /// Inspect the host's active document; no active document is a typed AI error.
+    pub fn perceive_document_in<S: LiveEditSession + ?Sized>(&self, session: &S) -> Result<VisualScene, AiError> {
+        let doc_json = session.inspect_active()?.ok_or(AiError::NoDocumentOpen)?;
         Ok(self.perception_engine.perceive(&doc_json))
     }
 }
