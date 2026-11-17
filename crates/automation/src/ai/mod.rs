@@ -143,6 +143,28 @@ pub struct AiResult {
     pub revision: u64,
 }
 
+/// Computed dominant colors from the engine's real pixel statistics, when the
+/// host's command surface offers `image.analysis.colorStats`. Empty when the
+/// command is unavailable, errors, or reports a selection-scoped domain -
+/// never invented. Whole-canvas stats only.
+///
+/// The engine command is invoked with a tight automatic-perception pixel budget
+/// (4M pixels): larger canvases or selections are skipped honestly (empty colors)
+/// rather than triggering region-sized rendering work synchronously around edits.
+pub fn computed_dominant_colors<S: LiveEditSession + ?Sized>(session: &mut S) -> Vec<String> {
+    let Ok(stats) = session.command_run("image.analysis.colorStats", serde_json::json!({"maxColors": 5, "maxPixels": 4_000_000})) else {
+        return Vec::new();
+    };
+    if stats.get("domain").and_then(Value::as_str) != Some("canvas") {
+        return Vec::new();
+    }
+    stats
+        .get("dominantColors")
+        .and_then(Value::as_array)
+        .map(|arr| arr.iter().filter_map(|c| c.get("color").and_then(Value::as_str).map(str::to_string)).collect())
+        .unwrap_or_default()
+}
+
 /// The unified AI Creative Editing Engine.
 pub struct AiEngine {
     catalog: CommandCatalog,
@@ -255,10 +277,14 @@ impl AiEngine {
     ) -> Result<AiResult, AiError> {
         // 1. Inspect the host's active document without interpreting error strings.
         let doc_json = session.inspect_active()?;
-        let initial_scene = match &doc_json {
+        let mut initial_scene = match &doc_json {
             Some(json) => self.perception_engine.perceive(json),
             None => VisualScene::default(),
         };
+        // Only with a document open: the no-document path must never dispatch commands.
+        if doc_json.is_some() {
+            initial_scene.dominant_colors = computed_dominant_colors(session);
+        }
 
         // 2. Natural Language Intelligence: understand intent and resolve targets
         let intent = self.nl_engine.parse_intent(prompt, &initial_scene, context)?;
@@ -299,7 +325,8 @@ impl AiEngine {
 
         // 6. Visual Evaluation: inspect resulting composition and verify goals
         let post_doc_json = session.inspect_active()?.ok_or(AiError::NoDocumentOpen)?;
-        let final_scene = self.perception_engine.perceive(&post_doc_json);
+        let mut final_scene = self.perception_engine.perceive(&post_doc_json);
+        final_scene.dominant_colors = computed_dominant_colors(session);
         let evaluation = self.eval_engine.evaluate(&intent, &initial_scene, &final_scene, &execution);
 
         // Record interaction in context
