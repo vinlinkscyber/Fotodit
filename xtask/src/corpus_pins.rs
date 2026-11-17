@@ -54,7 +54,7 @@ pub const PHOTOSHOP: PinnedCorpus = PinnedCorpus {
     dest: "photoshop",
     upstreams: &[Upstream {
         prefix: "",
-        repo: "storytold/fotodit-corpus",
+        repo: "storytold/photocraft-corpus",
         commit: FOTODIT_CORPUS_COMMIT,
         subdir: "photoshop",
         extras: &[("README.md", "README.md"), ("LICENSE-MIT", "LICENSE-MIT"), ("LICENSE-APACHE", "LICENSE-APACHE")],
@@ -79,7 +79,7 @@ pub const GIMP: PinnedCorpus = PinnedCorpus {
     dest: "gimp",
     upstreams: &[Upstream {
         prefix: "",
-        repo: "storytold/fotodit-corpus",
+        repo: "storytold/photocraft-corpus",
         commit: FOTODIT_CORPUS_GIMP_COMMIT,
         subdir: "gimp",
         extras: &[("README.md", "README.md"), ("LICENSE-MIT", "LICENSE-MIT"), ("LICENSE-APACHE", "LICENSE-APACHE")],
