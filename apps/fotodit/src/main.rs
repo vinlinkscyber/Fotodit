@@ -61,7 +61,6 @@ mod photoshop_settings;
 mod portal_save;
 mod presentation;
 // The print portal needs the session bus (zbus, Linux only); its pure helpers are tested everywhere.
-#[cfg(any(target_os = "linux", test))]
 mod assistant;
 mod print_portal;
 mod screen_color;
