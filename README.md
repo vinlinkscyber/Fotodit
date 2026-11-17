@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/app-icon/hicolor/256x256/apps/com.plyra.fotodit.png" width="128" height="128" alt="Fotodit icon: an engraved nine-tailed fox on a blue tile">
+  <img src="assets/app-icon/hicolor/256x256/apps/com.plyra.fotodit.png" width="128" height="128" alt="Fotodit icon">
 </p>
 
 <h1 align="center">Fotodit</h1>
