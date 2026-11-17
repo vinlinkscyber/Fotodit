@@ -13,6 +13,19 @@ struct MockSession {
     document: Option<Value>,
     calls: Vec<(String, Value)>,
     fail_command: Option<&'static str>,
+    /// The failing command journals an entry before erroring (mutate-then-Err).
+    mutate_before_fail: bool,
+    /// After the first successful command the document identity changes, as a
+    /// document-switching side effect would produce.
+    identity_sabotage: bool,
+    /// file.new actually creates a document (the default mock deliberately
+    /// never creates one, preserving the no-document coverage).
+    file_new_creates: bool,
+    /// edit.undo reports success but removes nothing.
+    noop_undo: bool,
+    /// A journaling command replaces the history list with foreign entries
+    /// instead of appending.
+    replace_history: bool,
     inspection_fails: bool,
     inspections: Cell<usize>,
 }
@@ -30,10 +43,51 @@ impl LiveEditSession for MockSession {
     fn command_run(&mut self, command: &str, params: Value) -> Result<Value, AutomationError> {
         self.calls.push((command.to_string(), params));
         if self.fail_command == Some(command) {
+            // mutate-then-Err: the failure still leaves its journaled entry.
+            if self.mutate_before_fail {
+                self.push_history(command);
+            }
             return Err(AutomationError::BadRequest("injected command refusal".into()));
+        }
+        // Simulate the engine's history contract using its real registry: journaling
+        // commands append one History panel entry; queries do not; edit.undo removes
+        // the latest undoable entry and is refused when only the current
+        // (non-undoable) state remains.
+        if command == "file.new" && self.file_new_creates {
+            self.document = Some(mock_document("Untitled-1", &["New"]));
+        } else if command == "edit.undo" {
+            let history = self.document.as_mut().and_then(|doc| doc.get_mut("history")).and_then(Value::as_array_mut);
+            match history {
+                _ if self.noop_undo => {}
+                Some(h) if h.len() > 1 => {
+                    h.pop();
+                }
+                _ => return Err(AutomationError::BadRequest("nothing to undo".into())),
+            }
+        } else if self.replace_history {
+            if let Some(h) = self.document.as_mut().and_then(|doc| doc.get_mut("history")).and_then(Value::as_array_mut) {
+                *h = vec![json!("OtherUserEdit"), json!("ForeignEdit")];
+            }
+        } else if fotodit_engine::command_specs().iter().any(|s| s.id == command && s.journal) {
+            self.push_history(command);
+        }
+        if self.identity_sabotage {
+            self.document = Some(mock_document("sabotaged.plyra", &["Open", "Stroke", "Fill"]));
         }
         Ok(json!({"command": command}))
     }
+}
+
+impl MockSession {
+    fn push_history(&mut self, label: &str) {
+        if let Some(h) = self.document.as_mut().and_then(|doc| doc.get_mut("history")).and_then(Value::as_array_mut) {
+            h.push(json!(label));
+        }
+    }
+}
+
+fn mock_document(name: &str, history: &[&str]) -> Value {
+    json!({"name": name, "path": null, "revision": history.len() as u64, "history": history})
 }
 
 fn plan(commands: &[&str]) -> EditingPlan {
@@ -62,11 +116,119 @@ fn execution_routes_commands_and_parameters_through_host_trait_object() {
 
 #[test]
 fn failed_step_uses_same_host_for_existing_undo_attempts() {
-    let mut host = MockSession { fail_command: Some("fail"), ..Default::default() };
-    let error = ExecutionEngine::execute_plan_in(&mut host, &plan(&["first", "second", "fail", "never"])).unwrap_err();
-    assert!(matches!(error, AiError::ExecutionError { step: 2, .. }));
-    assert_eq!(host.calls.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), vec!["first", "second", "fail", "edit.undo", "edit.undo"]);
+    let mut host = MockSession { fail_command: Some("fail"), document: Some(mock_document("mock.plyra", &["New"])), ..Default::default() };
+    let error = ExecutionEngine::execute_plan_in(&mut host, &plan(&["image.adjustments.invert", "image.adjustments.invert", "fail", "never"])).unwrap_err();
+    let AiError::ExecutionError { step, error, .. } = &error else { panic!("execution error") };
+    assert_eq!(*step, 2);
+    assert!(error.contains("history boundary is verified at its pre-plan entries"), "{error}");
+    assert_eq!(host.calls.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), vec!["image.adjustments.invert", "image.adjustments.invert", "fail", "edit.undo", "edit.undo"]);
     assert_eq!(host.calls[3].1, json!({}));
+    // Both plan entries are gone; the pre-existing "New" entry was never touched.
+    let history = host.document.unwrap()["history"].as_array().unwrap().clone();
+    assert_eq!(history, vec![json!("New")]);
+}
+
+#[test]
+fn failed_step_entry_is_reconciled_and_undone_first() {
+    // mutate-then-Err: the failed command journaled an entry before erroring.
+    // Rollback must account that entry to the failed step and undo it first.
+    let mut host = MockSession { fail_command: Some("stroke"), mutate_before_fail: true, document: Some(mock_document("mock.plyra", &["New"])), ..Default::default() };
+    let error = ExecutionEngine::execute_plan_in(&mut host, &plan(&["image.adjustments.invert", "stroke"])).unwrap_err();
+    let AiError::ExecutionError { error, .. } = &error else { panic!("execution error") };
+    assert!(error.contains("rolled back 2 entr"), "{error}");
+    assert!(error.contains("history boundary is verified at its pre-plan entries"), "{error}");
+    assert_eq!(host.calls.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), vec!["image.adjustments.invert", "stroke", "edit.undo", "edit.undo"]);
+    assert_eq!(host.document.unwrap()["history"].as_array().unwrap().clone(), vec![json!("New")]);
+}
+
+#[test]
+fn plans_changing_document_identity_are_refused_before_execution() {
+    let mut host = MockSession { document: Some(mock_document("mock.plyra", &["New"])), ..Default::default() };
+    let error = ExecutionEngine::execute_plan_in(&mut host, &plan(&["image.adjustments.invert", "file.close"])).unwrap_err();
+    let AiError::ExecutionError { step, error, .. } = &error else { panic!("execution error") };
+    assert_eq!(*step, 1);
+    assert!(error.contains("changes which document is active"), "{error}");
+    assert!(host.calls.is_empty(), "nothing may execute before the refusal");
+}
+
+#[test]
+fn creation_plan_rolls_back_inside_the_created_document() {
+    let mut host = MockSession { fail_command: Some("fail"), file_new_creates: true, ..Default::default() };
+    let mut plan = plan(&["file.new", "image.adjustments.invert", "fail"]);
+    plan.creates_document = true;
+    let error = ExecutionEngine::execute_plan_in(&mut host, &plan).unwrap_err();
+    let AiError::ExecutionError { error, .. } = &error else { panic!("execution error") };
+    // The created document's edits are undone, but the run is honestly
+    // incomplete relative to the original state: the document stays open.
+    assert!(error.contains("rollback incomplete"), "{error}");
+    assert!(error.contains("plan-created document remains open"), "{error}");
+    assert!(error.contains("rolled back 1 of 1"), "{error}");
+    assert_eq!(host.calls.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), vec!["file.new", "image.adjustments.invert", "fail", "edit.undo"]);
+    // The created document remains open (creation is not a history entry) with
+    // only its own initial entry.
+    assert_eq!(host.document.unwrap()["history"].as_array().unwrap().clone(), vec![json!("New")]);
+}
+
+#[test]
+fn rollback_fails_closed_when_history_prefix_is_replaced() {
+    // Prefix attack: the step keeps name/path and grows the list by one, but the
+    // prior entries were REPLACED by foreign ones. Not one foreign entry may be
+    // undone.
+    let mut host = MockSession { fail_command: Some("fail"), replace_history: true, document: Some(mock_document("mock.plyra", &["New"])), ..Default::default() };
+    let error = ExecutionEngine::execute_plan_in(&mut host, &plan(&["image.adjustments.invert", "fail"])).unwrap_err();
+    let AiError::ExecutionError { error, .. } = &error else { panic!("execution error") };
+    assert!(error.contains("rollback incomplete"), "{error}");
+    assert!(error.contains("rolled back 0"), "{error}");
+    assert_eq!(host.calls.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), vec!["image.adjustments.invert", "fail"]);
+    assert_eq!(host.document.unwrap()["history"].as_array().unwrap().clone(), vec![json!("OtherUserEdit"), json!("ForeignEdit")]);
+}
+
+#[test]
+fn noop_undo_is_reported_as_zero_verified_undos() {
+    let mut host = MockSession { fail_command: Some("fail"), noop_undo: true, document: Some(mock_document("mock.plyra", &["New"])), ..Default::default() };
+    let error = ExecutionEngine::execute_plan_in(&mut host, &plan(&["image.adjustments.invert", "fail"])).unwrap_err();
+    let AiError::ExecutionError { error, .. } = &error else { panic!("execution error") };
+    assert!(error.contains("rollback incomplete"), "{error}");
+    assert!(error.contains("rolled back 0 of 1"), "{error}");
+    assert!(error.contains("undo verification failed"), "{error}");
+    assert_eq!(host.calls.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), vec!["image.adjustments.invert", "fail", "edit.undo"]);
+    // The plan's entry remains, reported rather than silently consumed.
+    assert_eq!(host.document.unwrap()["history"].as_array().unwrap().clone(), vec![json!("New"), json!("image.adjustments.invert")]);
+}
+
+#[test]
+fn malformed_inspection_metadata_closes_rollback() {
+    // history missing from the inspection JSON: unreadable, never assumed empty.
+    let mut host = MockSession { fail_command: Some("fail"), document: Some(json!({"name": "mock.plyra"})), ..Default::default() };
+    let error = ExecutionEngine::execute_plan_in(&mut host, &plan(&["image.adjustments.invert", "fail"])).unwrap_err();
+    let AiError::ExecutionError { error, .. } = &error else { panic!("execution error") };
+    assert!(error.contains("rollback incomplete"), "{error}");
+    assert!(error.contains("could not be inspected"), "{error}");
+    assert_eq!(host.calls.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), vec!["image.adjustments.invert", "fail"]);
+}
+
+#[test]
+fn rollback_fails_closed_when_active_document_changes() {
+    let mut host = MockSession { fail_command: Some("fail"), identity_sabotage: true, document: Some(mock_document("first.plyra", &["New"])), ..Default::default() };
+    let error = ExecutionEngine::execute_plan_in(&mut host, &plan(&["image.adjustments.invert", "fail"])).unwrap_err();
+    let AiError::ExecutionError { error, .. } = &error else { panic!("execution error") };
+    assert!(error.contains("rollback incomplete"), "{error}");
+    assert!(error.contains("changed the active document"), "{error}");
+    // Fail-closed: no blind undo is issued.
+    assert_eq!(host.calls.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), vec!["image.adjustments.invert", "fail"]);
+}
+
+#[test]
+fn rollback_stops_safely_when_inspection_is_unreadable() {
+    // No document JSON is readable: the steps' effect on history cannot be
+    // verified, so rollback must undo nothing and say so, never undo blindly.
+    let mut host = MockSession { fail_command: Some("fail"), ..Default::default() };
+    let error = ExecutionEngine::execute_plan_in(&mut host, &plan(&["image.adjustments.invert", "image.adjustments.invert", "fail"])).unwrap_err();
+    let AiError::ExecutionError { error, .. } = &error else { panic!("execution error") };
+    assert!(error.contains("rollback incomplete"), "{error}");
+    assert!(error.contains("could not be inspected"), "{error}");
+    assert!(error.contains("rolled back 0"), "{error}");
+    assert_eq!(host.calls.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), vec!["image.adjustments.invert", "image.adjustments.invert", "fail"]);
 }
 
 #[test]
@@ -203,7 +365,9 @@ fn missing_document_after_execution_is_reported_without_recording_success() {
     assert!(matches!(error, AiError::NoDocumentOpen));
     assert!(!host.calls.is_empty());
     assert_eq!(host.calls[0].0, "file.new");
-    assert_eq!(host.inspections.get(), 2);
+    // Legitimate delta: rollback safety reads the document mark once before the
+    // plan and once after each executed step (2 + steps + 1).
+    assert_eq!(host.inspections.get(), 7);
     assert!(context.prompt_history.is_empty());
 }
 
@@ -230,7 +394,9 @@ fn successful_enhancement_process_rechecks_host_before_dispatch_and_records_cont
     let prompt = "Make this photograph look professional and enhance clarity";
     let result = ai.process_instruction_in(&mut host, prompt, &mut context).unwrap();
     assert!(result.execution.is_success);
-    assert_eq!(host.inspections.get(), 3);
+    // Legitimate delta: rollback safety reads the document mark once before the
+    // plan and once after each executed step (3 + steps + 1).
+    assert_eq!(host.inspections.get(), 7);
     // Color stats are computed from the host before planning and after execution; the
     // remaining calls are exactly the plan steps.
     let stats_calls = host.calls.iter().filter(|(id, _)| id == "image.analysis.colorStats").count();
@@ -264,4 +430,50 @@ fn computed_dominant_colors_uses_engine_stats_and_stays_honest() {
     LiveEditSession::command_run(&mut headless, "file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
     // Real engine pixels: a white canvas computes to a single white dominant.
     assert_eq!(computed_dominant_colors(&mut headless), vec!["#FFFFFF".to_string()]);
+}
+
+#[test]
+fn rollback_undoes_only_journaling_plan_steps_not_preexisting_history() {
+    let mut headless = Headless::new();
+    LiveEditSession::command_run(&mut headless, "file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
+    // A pre-existing user edit that no plan rollback may consume.
+    LiveEditSession::command_run(&mut headless, "image.adjustments.invert", json!({})).unwrap();
+    assert_eq!(computed_dominant_colors(&mut headless), vec!["#000000".to_string()]);
+
+    let plan = EditingPlan {
+        title: "Mixed journaling plan".into(),
+        rationale: "A non-journaling analysis step precedes the failing step".into(),
+        category: IntentCategory::GeneralEditing,
+        steps: vec![
+            PlanStep { command: "image.analysis.colorStats".into(), params: json!({"maxColors": 5, "maxPixels": 4_000_000}), description: "analysis only".into() },
+            PlanStep { command: "image.adjustments.invert".into(), params: json!({}), description: "plan edit".into() },
+            PlanStep { command: "test.nonexistent.command".into(), params: json!({}), description: "fails".into() },
+        ],
+        creates_document: false,
+        target_size: None,
+    };
+    let error = ExecutionEngine::execute_plan_in(&mut headless, &plan).unwrap_err();
+    assert!(matches!(error, AiError::ExecutionError { step: 2, .. }));
+    // Only the plan's own journaling edit may be rolled back: the pre-existing
+    // inversion (black canvas) survives because the analysis step journaled nothing.
+    assert_eq!(computed_dominant_colors(&mut headless), vec!["#000000".to_string()]);
+}
+
+#[test]
+fn save_reopen_roundtrip_preserves_pixels_through_authorized_session_path() {
+    // Durability through the authorized Headless save/open path (the admitted
+    // command path refuses file.save/file.open; nothing here weakens that).
+    // trusted_local: the authorized test-session filesystem (Headless::new has
+    // no filesystem grant; the admitted command path's refusal is untouched).
+    let mut headless = Headless::trusted_local();
+    LiveEditSession::command_run(&mut headless, "file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
+    LiveEditSession::command_run(&mut headless, "image.adjustments.invert", json!({})).unwrap();
+    assert_eq!(computed_dominant_colors(&mut headless), vec!["#000000".to_string()]);
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let path = std::env::temp_dir().join(format!("fotodit_ai_roundtrip_{}_{}.plyra", std::process::id(), nanos));
+    headless.save(None, Some(&path), Some("plyra"), &Default::default()).unwrap();
+    headless.open(&path).unwrap();
+    // The reopened document is the active one and keeps the edited pixels.
+    assert_eq!(computed_dominant_colors(&mut headless), vec!["#000000".to_string()]);
+    let _ = std::fs::remove_file(&path);
 }
