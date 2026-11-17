@@ -22,12 +22,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # Credential-free build: no repository secrets are mapped into the build
+      # environment. Provider keys are supplied at runtime by the person running
+      # the app (environment variable or .env / fotodit.env / ai_keys.env next to
+      # the exe); provider planning stays opt-in via FOTODIT_AI_PROVIDER=provider
+      # and the deterministic planner is the default either way.
       - name: Build
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
-          POLLINATIONS_API_KEY: ${{ secrets.POLLINATIONS_API_KEY }}
-          LAJIWA_API_KEY: ${{ secrets.LAJIWA_API_KEY }}
         run: cargo build --release --locked -p fotodit -p fotodit-cli
       - name: Artifact sizes
         shell: bash
