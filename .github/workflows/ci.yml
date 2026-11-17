@@ -86,7 +86,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Git dependencies come from plyra
+      - name: Git dependencies come from storytold
         run: |
           set -euo pipefail
           test -f Cargo.lock || { echo "Cargo.lock is missing"; exit 1; }
@@ -112,9 +112,9 @@ jobs:
           lock = tomllib.load(open("Cargo.lock", "rb"))
           bad = sorted({p["source"] for p in lock.get("package", [])
                         if p.get("source", "").startswith("git+")
-                        and not p["source"].startswith("git+https://github.com/plyra/")})
+                        and not p["source"].startswith("git+https://github.com/storytold/")})
           if bad:
-              print("Git dependencies outside github.com/plyra:", *bad, sep="\n")
+              print("Git dependencies outside github.com/storytold:", *bad, sep="\n")
               sys.exit(1)
           PY
       - id: pick
@@ -146,7 +146,7 @@ jobs:
   gate:
     if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
     # Tracks @main so suite-wide CI fixes reach every app without a PR in each repository.
-    uses: plyra/craft-common-actions/.github/workflows/gate.yml@main
+    uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
     with:
       # egui/winit/rfd.
       packages: >-
@@ -203,7 +203,7 @@ jobs:
       - name: Check out craft-fonts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: plyra/craft-fonts
+          repository: storytold/craft-fonts
           ref: b076417b5880bd4154bd22f00695b1d28c6bea83
           path: craft-fonts
           persist-credentials: false
@@ -290,7 +290,7 @@ jobs:
           persist-credentials: false
 
       - name: Install Linux build dependencies
-        uses: plyra/craft-common-actions/actions/install-apt-packages@main
+        uses: storytold/craft-common-actions/actions/install-apt-packages@main
         with:
           packages: >-
             libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev
@@ -462,7 +462,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install Linux build dependencies
-        uses: plyra/craft-common-actions/actions/install-apt-packages@main
+        uses: storytold/craft-common-actions/actions/install-apt-packages@main
         with:
           packages: >-
             libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev
@@ -492,7 +492,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install Linux build dependencies
-        uses: plyra/craft-common-actions/actions/install-apt-packages@main
+        uses: storytold/craft-common-actions/actions/install-apt-packages@main
         with:
           packages: >-
             libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev
@@ -621,6 +621,10 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      # NOTE: the suite's upstream fotodit repo (formerly plyra/fotodit) does not
+      # resolve from this repo's Actions access (HTTP 404 as of 2026-11-17); the
+      # dispatch-only dry_mixer baseline job below stays blocked until its
+      # location is confirmed. All other plyra/* references moved to storytold/*.
       - name: Pin baseline to the merge base with origin/main
         id: baseline
         run: |
@@ -633,7 +637,7 @@ jobs:
           cp crates/engine/examples/bench_dry_mixer.rs "$RUNNER_TEMP/fotodit-baseline/crates/engine/examples/bench_dry_mixer.rs"
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - name: Install Linux build dependencies
-        uses: plyra/craft-common-actions/actions/install-apt-packages@main
+        uses: storytold/craft-common-actions/actions/install-apt-packages@main
         with:
           packages: >-
             libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev
