@@ -1,0 +1,103 @@
+name: test-windows
+
+# Self-contained Windows compile + test evidence, manual dispatch only.
+# Modeled on ci.yml's Windows legs but with NO reusable-workflow references, NO
+# repository secrets, and NO artifact uploads. Exists so Windows test evidence can
+# be produced while ci.yml's gate reference (plyra/craft-common-actions) is
+# unresolved. This workflow is compile/test evidence only: it does not exercise an
+# interactive Windows GUI session.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  FOTODIT_NO_PRINT: "1"
+  LPDEST: fotodit-no-such-printer
+  # No debuginfo on Windows: matches ci.yml (PDB writing for ~200 test binaries
+  # dominated build time there; a panic still names its file and line).
+  CARGO_PROFILE_DEV_DEBUG: "0"
+
+jobs:
+  test:
+    timeout-minutes: 100
+    name: test (windows-latest, ${{ matrix.part }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [unit, integration]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba91 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Optional central fonts. The pinned craft-fonts checkout may be unreachable
+      # (same plyra-org dependency class as the ci.yml gate); when it is, the run
+      # continues WITHOUT PLYRA_FONTS_DIR. Consequence: the all-language UI tests
+      # and the optional Japanese font tests SKIP instead of running - reduced
+      # coverage, disclosed in the run summary, never a hard failure here.
+      - name: Try craft-fonts checkout (optional)
+        id: fonts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba91 # v7.0.1
+        continue-on-error: true
+        with:
+          repository: plyra/craft-fonts
+          ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+          path: craft-fonts
+          persist-credentials: false
+
+      - name: Configure fonts if present
+        shell: bash
+        run: |
+          if [ -d "$GITHUB_WORKSPACE/craft-fonts" ] && [ -n "$(ls -A "$GITHUB_WORKSPACE/craft-fonts" 2>/dev/null)" ]; then
+            echo "PLYRA_FONTS_DIR=$GITHUB_WORKSPACE/craft-fonts" >> "$GITHUB_ENV"
+            echo "PLYRA_FONTS_REQUIRED=1" >> "$GITHUB_ENV"
+            echo "fonts=present" >> "$GITHUB_OUTPUT"
+          else
+            echo "fonts=absent (all-language UI tests and optional Japanese font tests will SKIP)" >> "$GITHUB_STEP_SUMMARY"
+            echo "fonts=absent" >> "$GITHUB_OUTPUT"
+          fi
+        id: fontcfg
+
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: clippy
+
+      # Read-only cache use off main; nothing here writes caches or artifacts.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' && matrix.part == 'integration' }}
+          cache-on-failure: true
+
+      - name: Clippy
+        if: matrix.part == 'integration'
+        run: cargo clippy --workspace --all-targets --locked --features heif -- -D warnings
+
+      - name: Dependency layering
+        if: matrix.part == 'integration'
+        run: cargo xtask layers
+
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-nextest@0.9.150
+
+      # Unit leg: --lib --bins. Integration leg: every --test target. Same feature
+      # selection as ci.yml so results are comparable with its Windows legs.
+      - name: Test
+        env:
+          PART: ${{ matrix.part }}
+        run: |
+          case "$PART" in
+            unit) targets=(--lib --bins) ;;
+            *) targets=(--test '*') ;;
+          esac
+          cargo nextest run --profile ci --workspace --locked --features heif "${targets[@]}"
+        shell: bash
+
+      - name: Doctests
+        if: matrix.part == 'unit'
+        run: cargo test --workspace --locked --features heif --doc
