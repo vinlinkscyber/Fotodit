@@ -34,6 +34,24 @@ pub fn drop_action(layer: u64, kind: MaskKind) -> (String, Value) {
     (command.into(), json!({"layer": layer, MARK: true}))
 }
 
+/// The trigger conditions of [`intercept`], pure: nothing opens. A repeated request while a
+/// prompt is already open returns a pending receipt without a dialog, so a caller that must
+/// refuse the prompt before any effect (the assistant's completed-command gate) uses this to
+/// catch the first and every repeated request alike. Never used to skip the confirmation.
+pub fn would_intercept(app: &FotoditApp, command: &str, params: &Value) -> bool {
+    let vector = match command {
+        LAYER_MASK_DELETE => false,
+        VECTOR_MASK_DELETE => true,
+        _ => return false,
+    };
+    if params.get(MARK).and_then(Value::as_bool) != Some(true) {
+        return false;
+    }
+    let Some(layer) = params.get("layer").and_then(Value::as_u64) else { return false };
+    let Some(state) = app.session.active() else { return false };
+    state.doc.layer(LayerId(layer)).is_some_and(|l| if vector { l.vector_mask.is_some() } else { l.mask.is_some() })
+}
+
 /// Opens the prompt for a [`drop_action`]; `None` for every other command.
 pub fn intercept(app: &mut FotoditApp, command: &str, params: &Value) -> Option<Result<Value, String>> {
     let vector = match command {

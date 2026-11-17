@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use super::command_intelligence::CommandCatalog;
 use super::creative_design::{ArchetypeKind, DesignArchetype, LayoutEngine, TypographyHierarchy};
-use super::natural_language::{EditingIntent, IntentCategory};
+use super::natural_language::{EditingIntent, IntentCategory, NaturalLanguageEngine, normalize_display_copy, subject_purpose};
 use super::perception::VisualScene;
 use super::{AiContext, AiError, EditingPlan};
 
@@ -157,7 +157,7 @@ impl DeterministicRulePlanner {
         })
     }
 
-    fn plan_graphic_design(&self, intent: &EditingIntent, scene: &VisualScene) -> EditingPlan {
+    fn plan_graphic_design(&self, intent: &EditingIntent, scene: &VisualScene) -> Result<EditingPlan, AiError> {
         let width = if scene.width > 0 { scene.width } else { 1200 };
         let height = if scene.height > 0 { scene.height } else { 1600 };
 
@@ -170,7 +170,136 @@ impl DeterministicRulePlanner {
         };
 
         let archetype = DesignArchetype::from_kind(archetype_kind);
-        let hierarchy = TypographyHierarchy::compute(height, Some(archetype_kind));
+        let hierarchy = TypographyHierarchy::compute_for_canvas(width, height, Some(archetype_kind));
+
+        // Required user copy: every subject term the user supplied (quoted
+        // spans and names introduced by "called"/"named") must appear in the
+        // design, because the evaluator checks for each of them. Emitting only
+        // the first would make the remaining terms unsatisfiable.
+        let required_terms = NaturalLanguageEngine::new().subject_terms(&intent.raw_prompt);
+        // Headline: the first user-supplied term when present (typically the
+        // quoted or named subject); the archetype placeholder only when the
+        // user supplied no content of their own.
+        let headline_text = required_terms.first().cloned().unwrap_or_else(|| {
+            match archetype_kind {
+                ArchetypeKind::WeddingInvitation => "TOGETHER WITH THEIR FAMILIES",
+                ArchetypeKind::PromotionalPoster => "CREATIVE EXPO 2026",
+                ArchetypeKind::ProductAdvertising => "INNOVATION DEFINED",
+                _ => "FEATURED PRESENTATION",
+            }
+            .to_string()
+        });
+        // Subheading: the second user-supplied term when there is one (e.g.
+        // the brand name when a quoted tagline took the headline); then the
+        // user's stated purpose interpreted as display copy; otherwise the
+        // archetype placeholder.
+        let subhead_text = required_terms.get(1).cloned()
+            .or_else(|| subject_purpose(&intent.raw_prompt).map(|p| normalize_display_copy(&p)))
+            .unwrap_or_else(|| {
+                match archetype_kind {
+                    ArchetypeKind::WeddingInvitation => "Request the Honor of Your Presence",
+                    ArchetypeKind::PromotionalPoster => "A Celebration of Art & Technology",
+                    ArchetypeKind::ProductAdvertising => "Engineered for Performance",
+                    _ => "Discover the Possibilities",
+                }
+                .to_string()
+            });
+
+        let headline_color = archetype.primary_palette.get(1).cloned().unwrap_or_else(|| "#ffffff".into());
+        let secondary_color = archetype.primary_palette.get(2).cloned().unwrap_or_else(|| "#94a3b8".into());
+        struct CopyLine {
+            text: String,
+            base_pt: f32,
+            font: String,
+            color: String,
+            description: String,
+            gap_em: f32,
+        }
+        let mut copy_lines = vec![
+            CopyLine {
+                text: headline_text.clone(),
+                base_pt: hierarchy.heading_pt,
+                font: hierarchy.heading_font.clone(),
+                color: headline_color,
+                description: format!("Create primary headline with '{headline_text}' in {}", hierarchy.heading_font),
+                gap_em: 0.55,
+            },
+            CopyLine {
+                text: subhead_text.clone(),
+                base_pt: hierarchy.subheading_pt,
+                font: hierarchy.body_font.clone(),
+                color: secondary_color.clone(),
+                description: format!("Create subheading with '{subhead_text}'"),
+                gap_em: 0.9,
+            },
+        ];
+        // Any further user-supplied terms (rare, but each one is a required
+        // term the evaluator checks) get their own caption lines so no
+        // requested copy is silently dropped.
+        for term in required_terms.iter().skip(2) {
+            copy_lines.push(CopyLine {
+                text: term.clone(),
+                base_pt: hierarchy.caption_pt,
+                font: hierarchy.body_font.clone(),
+                color: secondary_color.clone(),
+                description: format!("Add requested text '{term}'"),
+                gap_em: 0.9,
+            });
+        }
+
+        // Capacity planning for the WHOLE composition. Render-unit basis:
+        // documents default to 72 dpi, where 1 pt of type em is 1 px; ink is
+        // smaller than the em and the 0.78/0.30/1.6 factors are conservative
+        // layout estimates, not measured glyph metrics. Native center
+        // alignment places each line with real shaped advances, and a box
+        // turns an over-wide line into native paragraph wrapping. Try the
+        // composition at descending scales; if no scale keeps every baseline
+        // and estimated ink bottom on the canvas at a legible size, refuse
+        // honestly instead of clamping baselines into a pile or cropping.
+        let max_w = width as f32 * 0.85;
+        // Legibility floor is relative to the canvas, matching the
+        // evaluator's relative ink check; tiny canvases get proportionally
+        // tiny (but planned) type rather than a false refusal.
+        let min_legible = (width.min(height) as f32 * 0.025).max(0.1);
+        let max_baseline = height as f32 * 0.95;
+        let max_bottom = height as f32 * 0.97;
+        let mut placed: Option<Vec<(f32, i32, Option<[f32; 4]>)>> = None;
+        'scales: for scale in [1.0f32, 0.85, 0.7, 0.55] {
+            let mut cursor = height as f32 * 0.30;
+            let mut attempt: Vec<(f32, i32, Option<[f32; 4]>)> = Vec::with_capacity(copy_lines.len());
+            for line in &copy_lines {
+                let size = (line.base_pt * scale).max(0.1);
+                if size < min_legible {
+                    break 'scales;
+                }
+                // Long copy wraps natively into as many rows as it needs;
+                // the vertical capacity check below decides whether the
+                // composition fits, instead of shrinking text indefinitely.
+                let rows = (TypographyHierarchy::estimate_line_width(&line.text, size) / max_w).ceil().max(1.0);
+                let baseline = cursor + size * 0.78;
+                let (text_box, bottom) = if rows > 1.0 {
+                    let box_h = rows * size * 1.6;
+                    let top = baseline - size * 0.78;
+                    (Some([width as f32 * 0.075, top, max_w, box_h]), top + box_h)
+                } else {
+                    (None, baseline + size * 0.30)
+                };
+                if baseline > max_baseline || bottom > max_bottom {
+                    break;
+                }
+                cursor = bottom + size * line.gap_em;
+                attempt.push((size, baseline.round() as i32, text_box));
+            }
+            if attempt.len() == copy_lines.len() {
+                placed = Some(attempt);
+                break;
+            }
+        }
+        let placed = placed.ok_or_else(|| {
+            AiError::PlanningError(format!(
+                "the requested copy does not fit a {width}x{height} canvas at a legible size"
+            ))
+        })?;
 
         let mut steps = Vec::new();
 
@@ -178,64 +307,31 @@ impl DeterministicRulePlanner {
         let bg_color = intent.extracted_color.clone().unwrap_or_else(|| {
             archetype.primary_palette.first().cloned().unwrap_or_else(|| "#0f172a".into())
         });
-
         steps.push(PlanStep {
             command: "layer.newFillLayer.solidColor".into(),
             params: json!({ "color": bg_color }),
             description: format!("Set background color to '{bg_color}'"),
         });
 
-        // 2. Headline text
-        let headline_text = match archetype_kind {
-            ArchetypeKind::WeddingInvitation => "TOGETHER WITH THEIR FAMILIES",
-            ArchetypeKind::PromotionalPoster => "CREATIVE EXPO 2026",
-            ArchetypeKind::ProductAdvertising => "INNOVATION DEFINED",
-            _ => "FEATURED PRESENTATION",
-        };
+        // 2..N. Text lines, natively centered and wrapped where needed.
+        for (line, (size, baseline, text_box)) in copy_lines.iter().zip(placed) {
+            steps.push(PlanStep {
+                command: "type.create".into(),
+                params: json!({
+                    "x": (width / 2) as i32,
+                    "align": "center",
+                    "y": baseline,
+                    "box": text_box,
+                    "text": line.text,
+                    "font": line.font,
+                    "size": size,
+                    "color": line.color,
+                }),
+                description: line.description.clone(),
+            });
+        }
 
-        let headline_x = self.layout_engine.center_x(400, width);
-        let headline_y = ((height as f32) * 0.22).round() as i32;
-        let headline_color = archetype.primary_palette.get(1).cloned().unwrap_or_else(|| "#ffffff".into());
-
-        steps.push(PlanStep {
-            command: "type.create".into(),
-            params: json!({
-                "x": headline_x,
-                "y": headline_y,
-                "text": headline_text,
-                "font": hierarchy.heading_font,
-                "sizePt": hierarchy.heading_pt,
-                "color": headline_color,
-            }),
-            description: format!("Create primary headline with '{headline_text}' in {}", hierarchy.heading_font),
-        });
-
-        // 3. Subheading text
-        let subhead_text = match archetype_kind {
-            ArchetypeKind::WeddingInvitation => "Request the Honor of Your Presence",
-            ArchetypeKind::PromotionalPoster => "A Celebration of Art & Technology",
-            ArchetypeKind::ProductAdvertising => "Engineered for Performance",
-            _ => "Discover the Possibilities",
-        };
-
-        let subhead_x = self.layout_engine.center_x(450, width);
-        let subhead_y = ((height as f32) * 0.35).round() as i32;
-        let subhead_color = archetype.primary_palette.get(2).cloned().unwrap_or_else(|| "#94a3b8".into());
-
-        steps.push(PlanStep {
-            command: "type.create".into(),
-            params: json!({
-                "x": subhead_x,
-                "y": subhead_y,
-                "text": subhead_text,
-                "font": hierarchy.body_font,
-                "sizePt": hierarchy.subheading_pt,
-                "color": subhead_color,
-            }),
-            description: format!("Create subheading with '{subhead_text}'"),
-        });
-
-        EditingPlan {
+        Ok(EditingPlan {
             title: format!("{} Composition", archetype.name),
             rationale: format!(
                 "Constructs a balanced {} layout with {} typography hierarchy, calibrated whitespace margins, and harmonic palette.",
@@ -245,7 +341,7 @@ impl DeterministicRulePlanner {
             steps,
             creates_document: false,
             target_size: Some([width, height]),
-        }
+        })
     }
 
     fn plan_typography_refinement(&self, intent: &EditingIntent, scene: &VisualScene) -> EditingPlan {
@@ -256,7 +352,7 @@ impl DeterministicRulePlanner {
             let mut style_params = json!({ "layer": target_id });
             if let Some(sz) = intent.numeric_value {
                 if let Some(map) = style_params.as_object_mut() {
-                    map.insert("sizePt".into(), json!(sz));
+                    map.insert("size".into(), json!(sz));
                 }
             }
             if let Some(col) = &intent.extracted_color {
@@ -292,7 +388,7 @@ impl DeterministicRulePlanner {
                     "x": x,
                     "y": y,
                     "text": text,
-                    "sizePt": size,
+                    "size": size,
                     "color": color,
                 }),
                 description: "Create new typography element with requested parameters".into(),
@@ -406,7 +502,7 @@ impl AiPlanner for DeterministicRulePlanner {
             IntentCategory::SubjectIsolation => self.plan_subject_isolation(intent, scene),
             IntentCategory::BackgroundReplacement => self.plan_background_replacement(intent, scene),
             IntentCategory::PhotoEnhancement => self.plan_photo_enhancement(intent, scene)?,
-            IntentCategory::GraphicDesign => self.plan_graphic_design(intent, scene),
+            IntentCategory::GraphicDesign => return self.plan_graphic_design(intent, scene),
             IntentCategory::TypographyRefinement => self.plan_typography_refinement(intent, scene),
             IntentCategory::ColorStyling => self.plan_color_styling(intent, scene),
             IntentCategory::DirectFilterOrAdjustment => self.plan_direct_filter(intent, scene),
@@ -450,6 +546,201 @@ mod tests {
         let plan = planner.plan(&intent, &scene, &context).unwrap();
         assert_eq!(plan.steps.len(), 1);
         assert_eq!(plan.steps[0].command, "layer.removeBackground");
+    }
+
+    #[test]
+    fn plan_graphic_design_uses_user_named_business() {
+        let catalog = CommandCatalog::new();
+        let planner = DeterministicRulePlanner::new(catalog);
+        let intent = EditingIntent {
+            raw_prompt: "create a poster for my taxi busines to promote it its called chndrax".into(),
+            category: IntentCategory::GraphicDesign,
+            archetype: Some("promotional_poster".into()),
+            target_layer: None,
+            target_layer_id: None,
+            extracted_color: None,
+            numeric_value: None,
+            direction: None,
+            stylistic_tone: None,
+            text_content: Some("chndrax".into()),
+        };
+        let scene = VisualScene::default();
+        let context = AiContext::new();
+
+        let plan = planner.plan(&intent, &scene, &context).unwrap();
+        let texts: Vec<&str> = plan
+            .steps
+            .iter()
+            .filter(|s| s.command == "type.create")
+            .filter_map(|s| s.params.get("text").and_then(|t| t.as_str()))
+            .collect();
+        assert!(texts.iter().any(|t| *t == "chndrax"), "headline must carry the user's name, got {texts:?}");
+        assert!(
+            texts.iter().any(|t| *t == "Taxi business"),
+            "subheading must carry the user's stated purpose, interpreted as display copy (typo corrected, not invented): got {texts:?}"
+        );
+    }
+
+    #[test]
+    fn plan_graphic_design_scales_type_to_the_actual_canvas() {
+        // Grounded in render units (1 pt == 1 px at the default 72 dpi): a
+        // 1200x1600 poster headline must be a prominent fraction of the
+        // canvas, not the old 43 px cap that rendered ~2.7% of canvas height.
+        let catalog = CommandCatalog::new();
+        let planner = DeterministicRulePlanner::new(catalog);
+        let intent = |prompt: &str| EditingIntent {
+            raw_prompt: prompt.into(),
+            category: IntentCategory::GraphicDesign,
+            archetype: Some("promotional_poster".into()),
+            target_layer: None,
+            target_layer_id: None,
+            extracted_color: None,
+            numeric_value: None,
+            direction: None,
+            stylistic_tone: None,
+            text_content: None,
+        };
+        let context = AiContext::new();
+
+        let poster = planner.plan(&intent("make a poster called chndrax"), &VisualScene::default(), &context).unwrap();
+        let headline_size = poster.steps.iter()
+            .find(|s| s.command == "type.create")
+            .and_then(|s| s.params["size"].as_f64()).unwrap() as f32;
+        assert!(headline_size >= 1600.0 * 0.06, "headline must be prominent at canvas scale: {headline_size}pt");
+
+        // The hierarchy follows the canvas, not a fixed constant: a small
+        // canvas gets proportionally smaller (but still prominent) type.
+        let mut small_scene = VisualScene::default();
+        small_scene.width = 300;
+        small_scene.height = 400;
+        let small = planner.plan(&intent("make a poster called chndrax"), &small_scene, &context).unwrap();
+        let small_headline = small.steps.iter()
+            .find(|s| s.command == "type.create")
+            .and_then(|s| s.params["size"].as_f64()).unwrap() as f32;
+        assert!((24.0..=90.0).contains(&small_headline), "small canvas scales down: {small_headline}pt");
+        assert!(small_headline < headline_size);
+
+        // Centering uses the estimated width of the actual string: the
+        // headline sits centered within the canvas, and a long quoted line is
+        // shrunk to fit instead of overflowing.
+        let hx = poster.steps.iter()
+            .find(|s| s.command == "type.create")
+            .and_then(|s| s.params["x"].as_i64()).unwrap() as f32;
+        let center_offset = (hx - 600.0).abs();
+        assert!(center_offset <= 1200.0 * 0.06, "headline horizontally centered: offset {center_offset}");
+
+        let long = planner.plan(&intent("make a poster \"The Absolutely Tremendous Grand Opening Celebration\" called chndrax"), &VisualScene::default(), &context).unwrap();
+        let long_step = long.steps.iter().find(|s| s.command == "type.create").unwrap();
+        let long_size = long_step.params["size"].as_f64().unwrap() as f32;
+        // Long copy wraps natively in a paragraph box and, when the whole
+        // composition needs it, rescales as a group - never below the
+        // canvas-relative legibility floor.
+        assert!(long_size <= headline_size, "group rescale never grows type: {long_size}pt vs {headline_size}pt");
+        assert!(long_size >= 1200.0 * 0.025, "rescale respects the legibility floor: {long_size}pt");
+        let long_box = long_step.params["box"].as_array().expect("over-wide copy gets a native paragraph box");
+        assert_eq!(long_box[2].as_f64(), Some(1200.0 * 0.85), "box wraps at 85% of canvas width: {long_box:?}");
+
+        // Vertical composition: the subheading baseline sits below the
+        // headline baseline with a gap that scales with the type sizes.
+        let ys: Vec<i64> = poster.steps.iter().filter(|s| s.command == "type.create")
+            .filter_map(|s| s.params["y"].as_i64()).collect();
+        assert!(ys.len() == 2 && ys[1] > ys[0] + headline_size as i64 / 2, "subheading below headline: {ys:?}");
+    }
+
+    #[test]
+    fn plan_graphic_design_refuses_copy_that_cannot_fit_legibly() {
+        // Capacity honesty: on a canvas far too small for the requested copy,
+        // the planner must refuse instead of clamping baselines into a pile
+        // or emitting unreadably small text.
+        let catalog = CommandCatalog::new();
+        let planner = DeterministicRulePlanner::new(catalog);
+        let intent = EditingIntent {
+            raw_prompt: format!("make a poster \"{}\" called chndrax", "The Absolutely Tremendous Grand Opening Celebration ".repeat(10)),
+            category: IntentCategory::GraphicDesign,
+            archetype: Some("promotional_poster".into()),
+            target_layer: None,
+            target_layer_id: None,
+            extracted_color: None,
+            numeric_value: None,
+            direction: None,
+            stylistic_tone: None,
+            text_content: None,
+        };
+        let mut scene = VisualScene::default();
+        scene.width = 120;
+        scene.height = 160;
+        let context = AiContext::new();
+        let err = planner.plan(&intent, &scene, &context).unwrap_err();
+        assert!(err.to_string().contains("does not fit"), "honest capacity refusal, got {err}");
+
+        // Ordinary-length copy on an adequate canvas still plans.
+        let ordinary = EditingIntent { raw_prompt: "make a poster called chndrax".into(), ..intent.clone() };
+        let mut scene = VisualScene::default();
+        scene.width = 1200;
+        scene.height = 1600;
+        let plan = planner.plan(&ordinary, &scene, &context).unwrap();
+        assert!(plan.steps.iter().any(|s| s.command == "type.create"));
+    }
+
+    #[test]
+    fn plan_graphic_design_emits_every_required_term() {
+        // A quoted tagline AND a named brand must both reach the canvas; the
+        // evaluator requires each, so emitting only one is an impossible goal.
+        let catalog = CommandCatalog::new();
+        let planner = DeterministicRulePlanner::new(catalog);
+        let intent = EditingIntent {
+            raw_prompt: "make a poster \"Grand Opening\" called chndrax".into(),
+            category: IntentCategory::GraphicDesign,
+            archetype: Some("promotional_poster".into()),
+            target_layer: None,
+            target_layer_id: None,
+            extracted_color: None,
+            numeric_value: None,
+            direction: None,
+            stylistic_tone: None,
+            text_content: Some("Grand Opening".into()),
+        };
+        let scene = VisualScene::default();
+        let context = AiContext::new();
+
+        let plan = planner.plan(&intent, &scene, &context).unwrap();
+        let texts: Vec<&str> = plan
+            .steps
+            .iter()
+            .filter(|s| s.command == "type.create")
+            .filter_map(|s| s.params.get("text").and_then(|t| t.as_str()))
+            .collect();
+        assert!(texts.iter().any(|t| *t == "Grand Opening"), "quoted term must be emitted, got {texts:?}");
+        assert!(texts.iter().any(|t| *t == "chndrax"), "named brand must be emitted, got {texts:?}");
+    }
+
+    #[test]
+    fn plan_graphic_design_falls_back_to_archetype_without_user_content() {
+        let catalog = CommandCatalog::new();
+        let planner = DeterministicRulePlanner::new(catalog);
+        let intent = EditingIntent {
+            raw_prompt: "create a promotional poster".into(),
+            category: IntentCategory::GraphicDesign,
+            archetype: Some("promotional_poster".into()),
+            target_layer: None,
+            target_layer_id: None,
+            extracted_color: None,
+            numeric_value: None,
+            direction: None,
+            stylistic_tone: None,
+            text_content: None,
+        };
+        let scene = VisualScene::default();
+        let context = AiContext::new();
+
+        let plan = planner.plan(&intent, &scene, &context).unwrap();
+        let texts: Vec<&str> = plan
+            .steps
+            .iter()
+            .filter(|s| s.command == "type.create")
+            .filter_map(|s| s.params.get("text").and_then(|t| t.as_str()))
+            .collect();
+        assert!(texts.iter().any(|t| *t == "CREATIVE EXPO 2026"));
     }
 
     #[test]

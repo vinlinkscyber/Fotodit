@@ -23,7 +23,7 @@ pub mod workspace_ui;
 pub use bar::menu_bar;
 #[cfg(test)]
 use bar::pointer_reaches_title;
-pub use invoke::{apply_workspace, invoke};
+pub use invoke::{apply_workspace, invoke, invoke_completed};
 pub(crate) use invoke::{invoke_unguarded, panel_alias};
 pub(crate) use items::ItemCache;
 pub use items::{MenuItem, is_live, menu_items};

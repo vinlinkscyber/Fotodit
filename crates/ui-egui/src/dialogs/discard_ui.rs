@@ -65,6 +65,14 @@ fn discarded(app: &FotoditApp, id: &str, params: &Value) -> (Option<DocId>, Vec<
     (target.and_then(|i| docs.get(i)).map(|d| d.doc.id), dirty)
 }
 
+/// Would [`intercept`] park `id` behind the unsaved-changes prompt? Pure: nothing is parked,
+/// shown or mutated. The completed-value contract (`menus::invoke_completed`) refuses such
+/// commands explicitly before any effect instead of parking them.
+pub fn would_intercept(app: &FotoditApp, id: &str, params: &Value) -> bool {
+    let (_, docs) = discarded(app, id, params);
+    !docs.is_empty() && !(id == EXIT && app.window_lost)
+}
+
 /// Park `id` behind a prompt if it would discard unsaved work. Returns whether it did.
 pub fn intercept(app: &mut FotoditApp, id: &str, params: &Value) -> bool {
     let (target, docs) = discarded(app, id, params);

@@ -17,6 +17,8 @@ pub mod creative_design;
 mod enhancement_preflight;
 pub mod evaluation;
 pub mod execution;
+pub mod goal_repair;
+pub mod goal_session;
 pub mod live;
 pub mod natural_language;
 pub mod perception;
@@ -27,6 +29,9 @@ pub use command_intelligence::{CommandCapability, CommandCatalog, ValidatedComma
 pub use creative_design::{ColorHarmony, DesignArchetype, LayoutEngine, TypographyHierarchy};
 pub use evaluation::{EvaluationEngine, EvaluationReport};
 pub use execution::{ExecutionEngine, ExecutionEvidence, ExecutionResult, StepExecution, StepVisualEvidence, VisualEvidence, VisualEvidenceClass};
+pub use goal_repair::SemanticGoalRepair;
+pub use goal_session::{GoalAttempt, GoalCommandRecord, GoalOutcome, GoalRepairAdapter,
+    GoalRepairDecision, GoalRepairInput, GoalRequest, GoalStop, NoGoalRepair};
 pub use live::LiveEditSession;
 pub use natural_language::{EditingIntent, IntentCategory, NaturalLanguageEngine};
 pub use perception::{DocumentStructure, PerceptionEngine, SubjectBasis, SubjectCandidate, VisualElement, VisualScene};
@@ -308,8 +313,10 @@ impl AiEngine {
             None => VisualScene::default(),
         };
         // Only with a document open: the no-document path must never dispatch commands.
-        if doc_json.is_some() {
-            initial_scene.dominant_colors = computed_dominant_colors(session);
+        if let Some(json) = &doc_json {
+            if enhancement_preflight::validate_document_state(json).is_ok() {
+                initial_scene.dominant_colors = computed_dominant_colors(session);
+            }
         }
 
         // 2. Natural Language Intelligence: understand intent and resolve targets

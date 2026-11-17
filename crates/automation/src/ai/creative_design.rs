@@ -161,10 +161,20 @@ pub struct TypographyHierarchy {
 }
 
 impl TypographyHierarchy {
-    /// Compute typographic hierarchy scale based on canvas height and design archetype.
+    /// Backward-compatible portrait hierarchy entry point.
     pub fn compute(canvas_height: u32, archetype: Option<ArchetypeKind>) -> Self {
-        let base_pt = ((canvas_height as f32) / 60.0).clamp(10.0, 24.0);
-        let ratio = 1.333; // Perfect Fourth scale
+        Self::compute_for_canvas(canvas_height.saturating_mul(3) / 4, canvas_height, archetype)
+    }
+
+    /// Type size is the em size, not the ink height. At the default 72 dpi
+    /// one point is one document pixel; actual glyph ink is smaller and is
+    /// checked from rendered content bounds by the evaluator.
+    pub fn compute_for_canvas(canvas_width: u32, canvas_height: u32, archetype: Option<ArchetypeKind>) -> Self {
+        let min_dim = canvas_width.min(canvas_height).max(1) as f32;
+        let heading_pt = (min_dim * 0.16).clamp(0.1, 1296.0);
+        let subheading_pt = (heading_pt / 1.8).max(0.1);
+        let body_pt = (heading_pt / 2.8).max(0.1);
+        let caption_pt = (heading_pt / 3.5).max(0.1);
 
         let (heading_font, body_font) = match archetype {
             Some(ArchetypeKind::WeddingInvitation) => ("Cinzel".into(), "Inter".into()),
@@ -172,11 +182,6 @@ impl TypographyHierarchy {
             Some(ArchetypeKind::EditorialCover) => ("Playfair Display".into(), "Inter".into()),
             _ => ("Inter".into(), "Inter".into()),
         };
-
-        let body_pt = base_pt.round();
-        let caption_pt = (base_pt / ratio).round().max(9.0);
-        let subheading_pt = (base_pt * ratio).round();
-        let heading_pt = (subheading_pt * ratio).round().max(24.0);
 
         Self {
             heading_pt,
@@ -187,6 +192,13 @@ impl TypographyHierarchy {
             heading_font,
             body_font,
         }
+    }
+
+    /// Conservative planning-only width estimate for a single line at
+    /// `size_pt`. This is a heuristic, not measured glyph metrics. Native
+    /// center alignment handles placement; the evaluator checks actual ink.
+    pub fn estimate_line_width(text: &str, size_pt: f32) -> f32 {
+        text.chars().count() as f32 * size_pt * 0.65
     }
 }
 

@@ -28,6 +28,25 @@ fn active_layer(layers: &[Value], id: u64) -> Option<&Value> {
 }
 
 pub(super) fn validate(document: &Value, plan: &EditingPlan) -> Result<(), AiError> {
+    let id = validate_document_state(document)?;
+    let first = plan.steps.first().ok_or_else(|| refusal("the plan has no sharpening step"))?;
+    if first.command != "filter.sharpen.unsharpMask" {
+        return Err(refusal("sharpening must be the first step, before adjustment layers"));
+    }
+    if first.params.get("layer").and_then(Value::as_u64) != Some(id) {
+        return Err(refusal("the planned sharpening target differs from the current active layer; plan again"));
+    }
+    if first.params.get("target").is_some() {
+        return Err(refusal("the sharpening step must not override the pixel target"));
+    }
+    Ok(())
+}
+
+/// Document-state enhancement eligibility: every check is decidable from inspection
+/// alone, without a plan. Shared by execution's preflight and by the initial-analysis
+/// gate in `mod.rs` so the two eligibility decisions cannot drift apart. This is an
+/// early honesty check, not a safety or authorization boundary.
+pub(super) fn validate_document_state(document: &Value) -> Result<u64, AiError> {
     let id = document.get("activeLayer").and_then(Value::as_u64).ok_or_else(|| refusal("no active layer"))?;
     let layers = document.get("layers").and_then(Value::as_array).ok_or_else(|| refusal("layer inspection is missing or malformed"))?;
     let layer = active_layer(layers, id).ok_or_else(|| refusal(format!("active layer {id} is absent from inspection")))?;
@@ -61,15 +80,5 @@ pub(super) fn validate(document: &Value, plan: &EditingPlan) -> Result<(), AiErr
     if document.get("layerMaskView") != Some(&Value::Null) || channels.get("layerMaskView") != Some(&Value::Null) {
         return Err(refusal("leave layer/filter mask view first, or provide complete mask-view inspection"));
     }
-    let first = plan.steps.first().ok_or_else(|| refusal("the plan has no sharpening step"))?;
-    if first.command != "filter.sharpen.unsharpMask" {
-        return Err(refusal("sharpening must be the first step, before adjustment layers"));
-    }
-    if first.params.get("layer").and_then(Value::as_u64) != Some(id) {
-        return Err(refusal("the planned sharpening target differs from the current active layer; plan again"));
-    }
-    if first.params.get("target").is_some() {
-        return Err(refusal("the sharpening step must not override the pixel target"));
-    }
-    Ok(())
+    Ok(id)
 }

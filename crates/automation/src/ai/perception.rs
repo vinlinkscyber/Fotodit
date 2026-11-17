@@ -236,7 +236,12 @@ impl PerceptionEngine {
                     let h = b.get(3).and_then(Value::as_i64).unwrap_or(0) as i32;
                     [x0, y0, w, h]
                 } else {
-                    [0, 0, width as i32, height as i32]
+                    // Absent or null inspect geometry is UNKNOWN, not
+                    // canvas-sized content: record zero bounds so consumers
+                    // (the goal evaluator) withhold geometry-based
+                    // satisfaction instead of counting unmeasured ink as a
+                    // full-canvas pass.
+                    [0, 0, 0, 0]
                 };
 
                 let mut text_content = None;
@@ -325,6 +330,32 @@ impl PerceptionEngine {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn perception_records_absent_bounds_as_unknown_zero_geometry() {
+        // A layer whose inspect JSON carries no bounds (or null) has no
+        // measured ink: the scene must record zero geometry, never the
+        // canvas-sized fallback that used to let unknown geometry count as
+        // measured, fully-on-canvas content.
+        let engine = PerceptionEngine::new();
+        let doc = json!({
+            "width": 1200,
+            "height": 800,
+            "layers": [
+                { "id": 1, "name": "Text A", "kind": "Type", "visible": true, "hasMask": false,
+                  "text": { "text": "chndrax", "font": "Inter", "sizePt": 120 } },
+                { "id": 2, "name": "Text B", "kind": "Type", "visible": true, "hasMask": false, "bounds": null,
+                  "text": { "text": "taxi", "font": "Inter", "sizePt": 60 } },
+                { "id": 3, "name": "Text C", "kind": "Type", "visible": true, "hasMask": false, "bounds": [10, 20, 300, 100],
+                  "text": { "text": "measured", "font": "Inter", "sizePt": 60 } }
+            ]
+        });
+        let scene = engine.perceive(&doc);
+        let by_id = |id: u64| scene.layers.iter().find(|l| l.id == id).unwrap().bounds;
+        assert_eq!(by_id(1), [0, 0, 0, 0], "absent bounds are unknown, not canvas-sized");
+        assert_eq!(by_id(2), [0, 0, 0, 0], "null bounds are unknown, not canvas-sized");
+        assert_eq!(by_id(3), [10, 20, 300, 100], "measured bounds pass through");
+    }
 
     #[test]
     fn perceive_fotodit_doc() {

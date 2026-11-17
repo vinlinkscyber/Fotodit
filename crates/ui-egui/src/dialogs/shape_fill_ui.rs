@@ -55,7 +55,7 @@ fn paint_of(doc: &Document, layer: LayerId, which: Paint) -> Option<Option<Fill>
 }
 
 /// The solid fill colour of shape layer `layer`, if it has one (not a gradient, pattern or none).
-fn solid_fill(doc: &Document, layer: LayerId) -> Option<Color> {
+pub(crate) fn solid_fill(doc: &Document, layer: LayerId) -> Option<Color> {
     match paint_of(doc, layer, Paint::Fill)? {
         Some(Fill::Solid(c)) => Some(c),
         _ => None,

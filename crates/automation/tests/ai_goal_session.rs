@@ -1,0 +1,314 @@
+//! Goal coordination tests use scripted planning and admitted host boundaries only.
+//! No provider requests, sleeps, UI automation or external services.
+use std::cell::{Cell, RefCell};
+
+use fotodit_automation::ai::{AiContext, AiEngine, AiError, AiPlanner, EditingIntent,
+    EditingPlan, GoalRepairAdapter, GoalRepairDecision, GoalRepairInput, GoalRequest,
+    GoalStop, IntentCategory, LiveEditSession, NoGoalRepair, PlanStep, VisualScene};
+use fotodit_automation::{AutomationError, Headless};
+use serde_json::{Value, json};
+
+const GOAL: &str = "create a poster for my taxi busines to promote it its called chndrax";
+
+#[derive(Clone)]
+struct InitialPlan(EditingPlan);
+impl AiPlanner for InitialPlan {
+    fn plan(&self, _intent: &EditingIntent, _scene: &VisualScene, _context: &AiContext) -> Result<EditingPlan, AiError> {
+        Ok(self.0.clone())
+    }
+}
+
+struct Repair {
+    plan: EditingPlan,
+    calls: Cell<usize>,
+    prompts: RefCell<Vec<String>>,
+    layer_counts: RefCell<Vec<usize>>,
+}
+impl Repair {
+    fn new(plan: EditingPlan) -> Self {
+        Self { plan, calls: Cell::new(0), prompts: RefCell::new(Vec::new()), layer_counts: RefCell::new(Vec::new()) }
+    }
+}
+impl GoalRepairAdapter for Repair {
+    fn plan_repair(&self, input: GoalRepairInput<'_>) -> Result<GoalRepairDecision, AiError> {
+        self.calls.set(self.calls.get() + 1);
+        self.prompts.borrow_mut().push(input.original_intent.raw_prompt.clone());
+        self.layer_counts.borrow_mut().push(input.current_scene.layers.len());
+        assert!(!input.attempts.is_empty());
+        assert!(input.attempts.last().unwrap().execution.as_ref().unwrap().is_success);
+        assert!(!input.attempts.last().unwrap().evaluation.as_ref().unwrap().intent_satisfied);
+        Ok(GoalRepairDecision::Plan(self.plan.clone()))
+    }
+}
+
+fn step(command: &str, params: Value) -> PlanStep {
+    PlanStep { command: command.into(), params, description: command.into() }
+}
+fn plan(steps: Vec<PlanStep>) -> EditingPlan {
+    EditingPlan { title: "Scripted goal attempt".into(), rationale: "Offline coordinator test".into(),
+        category: IntentCategory::GraphicDesign, steps, creates_document: false, target_size: None }
+}
+fn duplicate() -> EditingPlan { plan(vec![step("layer.duplicate", json!({}))]) }
+fn text() -> EditingPlan { plan(vec![step("type.create", json!({"x": 1, "y": 1, "text": "chndrax taxi", "size": 12}))]) }
+fn engine(plan: EditingPlan) -> AiEngine { AiEngine::with_planner(Box::new(InitialPlan(plan))) }
+
+#[derive(Clone, Copy, PartialEq)]
+enum Mode { Normal, Pending, Dialog, ErrorAfterMutation, InspectionAfterMutation, SwitchDocument, DigestPending, DigestChanges }
+
+struct Host {
+    document: Value,
+    calls: Vec<String>,
+    mode: Mode,
+    mutated: bool,
+}
+impl Host {
+    fn new(mode: Mode) -> Self {
+        let mut s = fotodit_engine::Session::new();
+        s.execute("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
+        Self { document: fotodit_engine::inspect::document(s.active().unwrap()), calls: Vec::new(), mode, mutated: false }
+    }
+    fn mutate(&mut self, command: &str) {
+        let length = {
+            let history = self.document["history"].as_array_mut().unwrap();
+            history.push(json!(command));
+            history.len()
+        };
+        self.document["revision"] = json!(length);
+        let mut layer = self.document["layers"][0].clone();
+        layer["id"] = json!(self.document["layers"].as_array().unwrap().len() + 1);
+        if command == "type.create" {
+            layer["kind"] = json!("Type");
+            layer["text"] = json!({"text": "chndrax taxi", "font": "Inter", "sizePt": 12});
+        }
+        self.document["layers"].as_array_mut().unwrap().push(layer);
+        self.mutated = true;
+    }
+}
+impl LiveEditSession for Host {
+    fn inspect_active(&self) -> Result<Option<Value>, AutomationError> {
+        if self.mode == Mode::InspectionAfterMutation && self.mutated {
+            return Err(AutomationError::App("inspection unavailable after edit".into()));
+        }
+        Ok(Some(self.document.clone()))
+    }
+    fn command_run(&mut self, command: &str, _params: Value) -> Result<Value, AutomationError> {
+        self.calls.push(command.into());
+        if command == "edit.undo" {
+            self.document["history"].as_array_mut().unwrap().pop();
+            return Ok(json!({}));
+        }
+        self.mutate(command);
+        match self.mode {
+            Mode::Pending => Ok(json!({"pending": true, "job": 7})),
+            Mode::Dialog => Ok(json!({"dialog": 7})),
+            Mode::ErrorAfterMutation => Err(AutomationError::App("mutated then failed".into())),
+            Mode::SwitchDocument => { self.document["name"] = json!("other document"); Ok(json!({})) }
+            _ => Ok(json!({})),
+        }
+    }
+    fn visual_digest(&mut self, _max_pixels: u64) -> Option<Result<Value, String>> {
+        if self.mode == Mode::DigestPending {
+            Some(Ok(json!({"pending": true, "job": 9})))
+        } else if self.mode == Mode::DigestChanges {
+            let tag = self.document["history"].as_array().unwrap().len();
+            Some(Ok(json!({"domain": "canvas", "schema": 1, "hash": "fnv1a64",
+                "quantization": "8bit/channel", "digest": format!("{tag:016x}"),
+                "width": 8, "height": 8, "stride": 1, "sampledPixels": 64})))
+        } else { None }
+    }
+}
+
+#[test]
+fn completed_but_unmet_repairs_with_fresh_scene_and_immutable_original_goal() {
+    let mut host = Host::new(Mode::Normal);
+    let initial_layers = host.document["layers"].as_array().unwrap().len();
+    let repair = Repair::new(text());
+    let mut context = AiContext::new();
+    let outcome = engine(duplicate()).process_goal_in(&mut host, &GoalRequest::new(GOAL), &mut context, &repair);
+    assert_eq!(repair.calls.get(), 1);
+    assert_eq!(&*repair.prompts.borrow(), &[GOAL.to_string()]);
+    assert_eq!(&*repair.layer_counts.borrow(), &[initial_layers + 1]);
+    assert_eq!(outcome.attempts.len(), 2);
+    assert!(outcome.attempts[1].execution.as_ref().unwrap().is_success);
+    // This assertion binds to the evaluator at the agreed base, not independent
+    // visual verification. An evaluator revision needs its own semantic fixtures.
+    assert_eq!(outcome.stop, GoalStop::Completed);
+    assert!(!outcome.final_state_unverified);
+    assert!(context.prompt_history.iter().all(|prompt| prompt == GOAL));
+}
+
+#[test]
+fn repeated_plan_ignores_labels_and_object_key_order_before_second_mutation() {
+    let mut first = duplicate();
+    first.steps[0].params = serde_json::from_str("{\"layer\":1,\"unused\":{\"b\":2,\"a\":1}}").unwrap();
+    let mut repeated = first.clone();
+    repeated.title = "Different title must not bypass loop guard".into();
+    repeated.steps[0].description = "A new label".into();
+    repeated.steps[0].params = serde_json::from_str("{\"unused\":{\"a\":1,\"b\":2},\"layer\":1}").unwrap();
+    let mut host = Host::new(Mode::Normal);
+    let outcome = engine(first).process_goal_in(&mut host, &GoalRequest::new(GOAL), &mut AiContext::new(), &Repair::new(repeated));
+    assert_eq!(outcome.stop, GoalStop::RepeatedPlan);
+    assert_eq!(outcome.attempts.len(), 1);
+    assert_eq!(host.calls, vec!["layer.duplicate"]);
+}
+
+#[test]
+fn command_budget_rejects_entire_plan_before_dispatch() {
+    let mut host = Host::new(Mode::Normal);
+    let mut request = GoalRequest::new(GOAL);
+    request.max_commands = 1;
+    let outcome = engine(plan(vec![step("layer.duplicate", json!({})), step("layer.duplicate", json!({}))]))
+        .process_goal_in(&mut host, &request, &mut AiContext::new(), &NoGoalRepair);
+    assert_eq!(outcome.stop, GoalStop::BudgetExhausted);
+    assert!(host.calls.is_empty());
+    assert!(outcome.attempts.is_empty());
+}
+
+#[test]
+fn attempt_budget_does_not_invoke_repair_after_last_attempt() {
+    let mut host = Host::new(Mode::Normal);
+    let repair = Repair::new(text());
+    let mut request = GoalRequest::new(GOAL);
+    request.max_attempts = 1;
+    let outcome = engine(duplicate()).process_goal_in(&mut host, &request, &mut AiContext::new(), &repair);
+    assert_eq!(outcome.stop, GoalStop::BudgetExhausted);
+    assert_eq!(repair.calls.get(), 0);
+    assert_eq!(host.calls, vec!["layer.duplicate"]);
+}
+
+#[test]
+fn pending_or_dialog_receipt_poison_stops_all_further_dispatch_not_cancellation() {
+    for mode in [Mode::Pending, Mode::Dialog] {
+        let mut host = Host::new(mode);
+        let repair = Repair::new(text());
+        let outcome = engine(duplicate()).process_goal_in(&mut host, &GoalRequest::new(GOAL), &mut AiContext::new(), &repair);
+        assert_eq!(outcome.stop, GoalStop::FinalStateUnverified);
+        assert!(outcome.final_state_unverified);
+        assert_eq!(repair.calls.get(), 0);
+        assert_eq!(host.calls, vec!["layer.duplicate"]);
+        let edits: Vec<_> = outcome.attempts[0].commands.iter()
+            .filter(|call| call.command == "layer.duplicate" && !call.observation).collect();
+        assert_eq!(edits.len(), 1, "exactly one actual duplicate dispatch must be ledgered");
+        let expected = if mode == Mode::Pending { json!({"pending": true, "job": 7}) }
+            else { json!({"dialog": 7}) };
+        assert_eq!(edits[0].output.as_ref(), Some(&expected));
+        assert!(host.mutated, "a late receipt is not proof of no mutation or cancellation");
+    }
+}
+
+#[test]
+fn mutation_then_error_never_replans_and_retains_actual_error_ledger() {
+    let mut host = Host::new(Mode::ErrorAfterMutation);
+    let repair = Repair::new(text());
+    let mut context = AiContext::new();
+    let outcome = engine(duplicate()).process_goal_in(&mut host, &GoalRequest::new(GOAL), &mut context, &repair);
+    assert_eq!(outcome.stop, GoalStop::FinalStateUnverified);
+    assert_eq!(repair.calls.get(), 0);
+    assert!(outcome.detail.contains("mutated then failed"));
+    assert!(outcome.attempts[0].commands.iter().any(|call| call.error.is_some()));
+    assert!(context.executed_plans.is_empty());
+}
+
+#[test]
+fn post_mutation_inspection_failure_and_identity_change_stop_without_repair() {
+    for mode in [Mode::InspectionAfterMutation, Mode::SwitchDocument] {
+        let mut host = Host::new(mode);
+        let repair = Repair::new(text());
+        let outcome = engine(duplicate()).process_goal_in(&mut host, &GoalRequest::new(GOAL), &mut AiContext::new(), &repair);
+        assert_eq!(outcome.stop, GoalStop::FinalStateUnverified);
+        assert_eq!(repair.calls.get(), 0);
+        assert_eq!(host.calls, vec!["layer.duplicate"]);
+    }
+}
+
+#[test]
+fn deferred_observation_stops_before_any_edit_dispatch() {
+    let mut host = Host::new(Mode::DigestPending);
+    let outcome = engine(duplicate()).process_goal_in(&mut host, &GoalRequest::new(GOAL), &mut AiContext::new(), &NoGoalRepair);
+    assert_eq!(outcome.stop, GoalStop::FinalStateUnverified);
+    assert!(host.calls.is_empty());
+    assert!(outcome.attempts[0].commands.iter().any(|call| call.observation));
+}
+
+#[test]
+fn no_repair_adapter_asks_for_input_instead_of_repeating_old_planner() {
+    let mut host = Host::new(Mode::Normal);
+    let outcome = engine(duplicate()).process_goal_in(&mut host, &GoalRequest::new(GOAL), &mut AiContext::new(), &NoGoalRepair);
+    assert_eq!(outcome.stop, GoalStop::NeedsInput);
+    assert_eq!(host.calls, vec!["layer.duplicate"]);
+}
+
+#[test]
+fn invalid_request_and_invalid_command_stop_before_dispatch() {
+    let mut host = Host::new(Mode::Normal);
+    let mut request = GoalRequest::new(GOAL);
+    request.max_attempts = 9;
+    let outcome = engine(duplicate()).process_goal_in(&mut host, &request, &mut AiContext::new(), &NoGoalRepair);
+    assert_eq!(outcome.stop, GoalStop::InvalidRequest);
+    let outcome = engine(plan(vec![step("made.up.command", json!({}))]))
+        .process_goal_in(&mut host, &GoalRequest::new(GOAL), &mut AiContext::new(), &NoGoalRepair);
+    assert_eq!(outcome.stop, GoalStop::PlanningFailed);
+    assert!(host.calls.is_empty());
+}
+
+#[test]
+fn real_admitted_headless_commands_complete_through_existing_engine() {
+    let mut host = Headless::trusted_local();
+    host.command_run("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
+    let outcome = engine(duplicate()).process_goal_in(&mut host, &GoalRequest::new(GOAL), &mut AiContext::new(), &NoGoalRepair);
+    assert!(matches!(outcome.stop, GoalStop::NeedsInput | GoalStop::BudgetExhausted));
+    assert!(outcome.attempts[0].execution.as_ref().unwrap().is_success);
+    assert!(outcome.attempts[0].evidence.is_some());
+    assert!(!outcome.final_state_unverified);
+}
+
+#[test]
+fn inserted_creation_counts_against_budget_before_any_real_host_dispatch() {
+    let mut host = Headless::trusted_local();
+    let mut request = GoalRequest::new(GOAL);
+    request.max_commands = 1;
+    let outcome = engine(text()).process_goal_in(&mut host, &request, &mut AiContext::new(), &NoGoalRepair);
+    assert_eq!(outcome.stop, GoalStop::BudgetExhausted);
+    assert!(host.inspect_active().unwrap().is_none());
+}
+
+struct StopRepair(bool);
+impl GoalRepairAdapter for StopRepair {
+    fn plan_repair(&self, _input: GoalRepairInput<'_>) -> Result<GoalRepairDecision, AiError> {
+        if self.0 { Ok(GoalRepairDecision::Stop("Need another strategy, not another edit".into())) }
+        else { Err(AiError::PlanningError("repair planner unavailable".into())) }
+    }
+}
+
+#[test]
+fn explicit_adapter_stop_or_planning_error_preserves_completed_attempt_without_retry() {
+    for stop in [true, false] {
+        let mut host = Host::new(Mode::Normal);
+        let outcome = engine(duplicate()).process_goal_in(&mut host, &GoalRequest::new(GOAL), &mut AiContext::new(), &StopRepair(stop));
+        assert_eq!(outcome.stop, if stop { GoalStop::Unmet } else { GoalStop::PlanningFailed });
+        assert_eq!(outcome.attempts.len(), 1);
+        assert!(!outcome.final_state_unverified);
+        assert_eq!(host.calls, vec!["layer.duplicate"]);
+    }
+}
+
+#[test]
+fn changed_pixel_digest_and_completed_steps_do_not_substitute_for_goal_satisfaction() {
+    let mut host = Host::new(Mode::DigestChanges);
+    let outcome = engine(duplicate()).process_goal_in(&mut host, &GoalRequest::new(GOAL), &mut AiContext::new(), &NoGoalRepair);
+    assert_eq!(outcome.stop, GoalStop::NeedsInput);
+    let attempt = &outcome.attempts[0];
+    assert!(attempt.execution.as_ref().unwrap().is_success);
+    assert!(!attempt.evaluation.as_ref().unwrap().intent_satisfied);
+    assert_eq!(attempt.evidence.as_ref().unwrap().steps[0].visual.class,
+        fotodit_automation::ai::VisualEvidenceClass::Changed);
+}
+
+#[test]
+fn unsupported_digest_is_explicit_unknown_not_a_success_measure() {
+    let mut host = Host::new(Mode::Normal);
+    let outcome = engine(duplicate()).process_goal_in(&mut host, &GoalRequest::new(GOAL), &mut AiContext::new(), &NoGoalRepair);
+    assert_eq!(outcome.stop, GoalStop::NeedsInput);
+    assert_eq!(outcome.attempts[0].evidence.as_ref().unwrap().steps[0].visual.class,
+        fotodit_automation::ai::VisualEvidenceClass::Unknown);
+}

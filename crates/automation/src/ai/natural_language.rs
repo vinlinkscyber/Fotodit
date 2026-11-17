@@ -131,8 +131,18 @@ impl NaturalLanguageEngine {
         // Resolve target layer using scene analysis and context
         let (target_layer, target_layer_id) = self.resolve_target_layer(&p_lower, scene, context);
 
-        // Extract any explicit text string if user is specifying text
-        let text_content = self.extract_quoted_text(prompt);
+        // Extract any explicit text string if user is specifying text: quoted
+        // spans first, then names introduced by "called"/"named" (preserved as
+        // typed - the user's own words are the design's required content).
+        // Named-entity fallback is scoped to design intent so prompts like
+        // "retouch the photo called sunset" do not gain spurious text content.
+        let text_content = self.extract_quoted_text(prompt).or_else(|| {
+            if matches!(category, IntentCategory::GraphicDesign | IntentCategory::TypographyRefinement) {
+                extract_named_entity(prompt)
+            } else {
+                None
+            }
+        });
 
         Ok(EditingIntent {
             raw_prompt: prompt.to_string(),
@@ -248,17 +258,24 @@ impl NaturalLanguageEngine {
     }
 
     fn extract_quoted_text(&self, text: &str) -> Option<String> {
-        if let Some(start) = text.find('"') {
-            if let Some(end) = text[start + 1..].find('"') {
-                return Some(text[start + 1..start + 1 + end].to_string());
+        extract_quoted_span(text)
+    }
+
+    /// User-supplied subject terms that a design must carry: quoted spans and
+    /// names introduced by "called"/"named", preserved exactly as typed (case,
+    /// spaces, punctuation). Empty when the prompt names nothing - callers must
+    /// not invent substitute content.
+    pub(crate) fn subject_terms(&self, prompt: &str) -> Vec<String> {
+        let mut terms: Vec<String> = Vec::new();
+        if let Some(quoted) = extract_quoted_span(prompt) {
+            terms.push(quoted);
+        }
+        if let Some(named) = extract_named_entity(prompt) {
+            if !terms.iter().any(|t| t.eq_ignore_ascii_case(&named)) {
+                terms.push(named);
             }
         }
-        if let Some(start) = text.find('\'') {
-            if let Some(end) = text[start + 1..].find('\'') {
-                return Some(text[start + 1..start + 1 + end].to_string());
-            }
-        }
-        None
+        terms
     }
 
     fn resolve_target_layer(
@@ -306,6 +323,200 @@ impl NaturalLanguageEngine {
 
         (None, None)
     }
+}
+
+/// Case-insensitive search for an ASCII marker that returns the byte offset
+/// in the ORIGINAL string. Byte-window matching is boundary-safe: ASCII marker
+/// bytes can never match UTF-8 continuation bytes (>= 0x80), so every match
+/// starts and ends on a char boundary. Lowercasing first would be wrong here:
+/// it can expand a character (`'İ'` -> `"i\u{307}"`), shifting offsets so a
+/// slice into the original string lands mid-character and panics.
+fn find_ascii_ci(haystack: &str, marker: &str) -> Option<usize> {
+    debug_assert!(marker.is_ascii() && !marker.is_empty());
+    haystack
+        .as_bytes()
+        .windows(marker.len())
+        .position(|w| w.eq_ignore_ascii_case(marker.as_bytes()))
+}
+
+/// True when `pos` starts a fresh word (prompt start or preceded by
+/// whitespace), so "renamed" or "so-called" do not trigger the
+/// "named"/"called" markers.
+fn at_word_boundary(text: &str, pos: usize) -> bool {
+    pos == 0 || text[..pos].chars().next_back().is_some_and(char::is_whitespace)
+}
+
+/// Cut a trailing purpose clause ("chndrax to promote it" -> "chndrax") only
+/// when the word after the separator is a purpose verb. Names that
+/// legitimately contain "to"/"for"/"with" ("A to Z", "Fit For Life") are
+/// kept whole because what follows is not a purpose verb.
+fn cut_purpose_clause(entity: &str) -> &str {
+    const PURPOSE_VERBS: [&str; 12] = [
+        "promote", "promoting", "advertise", "advertising", "sell", "selling",
+        "showcase", "announce", "announcing", "market", "marketing", "attract",
+    ];
+    for marker in [" to ", " for ", " with ", " that "] {
+        if let Some(pos) = find_ascii_ci(entity, marker) {
+            let next_word = entity[pos + marker.len()..].split_whitespace().next().unwrap_or("");
+            if PURPOSE_VERBS.iter().any(|v| next_word.eq_ignore_ascii_case(v)) {
+                return entity[..pos].trim_end();
+            }
+        }
+    }
+    entity
+}
+
+/// First quoted span in the prompt, if any.
+pub(crate) fn extract_quoted_span(text: &str) -> Option<String> {
+    extract_delimited(text, '"').or_else(|| extract_delimited(text, '\''))
+}
+
+/// Span between a matched delimiter pair. A single quote only opens a span at
+/// a word boundary, so possessives ("chndrax's") are not mistaken for quoted
+/// text.
+fn extract_delimited(text: &str, quote: char) -> Option<String> {
+    let mut start: Option<usize> = None;
+    for (i, c) in text.char_indices() {
+        if c != quote {
+            continue;
+        }
+        match start {
+            None => {
+                if quote == '\'' && !at_word_boundary(text, i) {
+                    continue;
+                }
+                start = Some(i);
+            }
+            Some(s) => {
+                let inner = text[s + quote.len_utf8()..i].trim();
+                if !inner.is_empty() {
+                    return Some(inner.to_string());
+                }
+                start = None;
+            }
+        }
+    }
+    None
+}
+
+/// Name the user gave their subject, introduced by "called X", "named X" or
+/// "name is X" at a word boundary, cut at the end of that clause and preserved
+/// exactly as typed.
+pub(crate) fn extract_named_entity(prompt: &str) -> Option<String> {
+    for marker in ["called ", "named ", "name is "] {
+        let mut from = 0;
+        while let Some(rel) = find_ascii_ci(&prompt[from..], marker) {
+            let pos = from + rel;
+            if at_word_boundary(prompt, pos) {
+                let rest = &prompt[pos + marker.len()..];
+                let end = rest
+                    .find(|c: char| matches!(c, ',' | '.' | '!' | '?' | ';' | '\n'))
+                    .unwrap_or(rest.len());
+                let entity = rest[..end]
+                    .trim()
+                    .trim_matches(|c: char| c == '"' || c == '\'')
+                    .trim();
+                let entity = cut_purpose_clause(entity);
+                if !entity.is_empty() {
+                    return Some(entity.to_string());
+                }
+            }
+            from = pos + 1;
+        }
+    }
+    None
+}
+
+/// Purpose phrase the user stated for the design ("for my taxi business" ->
+/// "taxi business"), preserved as typed. None when no "for ..." clause exists.
+pub(crate) fn subject_purpose(prompt: &str) -> Option<String> {
+    let mut from = 0;
+    let start = loop {
+        let rel = find_ascii_ci(&prompt[from..], "for ")?;
+        let pos = from + rel;
+        if at_word_boundary(prompt, pos) {
+            break pos + 4;
+        }
+        from = pos + 1;
+    };
+    let rest = prompt[start..].trim_start();
+    let rest = rest
+        .strip_prefix("my ")
+        .or_else(|| rest.strip_prefix("a "))
+        .or_else(|| rest.strip_prefix("an "))
+        .or_else(|| rest.strip_prefix("the "))
+        .unwrap_or(rest);
+    let end = rest
+        .find(|c: char| matches!(c, ',' | '.' | '!' | '?' | ';' | '\n'))
+        .unwrap_or(rest.len());
+    let phrase = rest[..end].trim();
+    // A following "called"/"named" clause names the subject; it is not part
+    // of the purpose phrase.
+    let phrase = [" called ", " named "]
+        .iter()
+        .fold(phrase, |p, m| match find_ascii_ci(p, m) {
+            Some(i) => p[..i].trim_end(),
+            None => p,
+        });
+    let phrase = cut_purpose_clause(phrase);
+    if phrase.is_empty() {
+        None
+    } else {
+        Some(phrase.to_string())
+    }
+}
+
+/// Display-copy cleanup for purpose phrases the planner places on a design.
+/// The user's named subject (quoted or "called"/"named") is preserved
+/// verbatim elsewhere; a purpose phrase is read for intent, not copied
+/// blindly - whitespace is collapsed, the first letter is capitalized, and a
+/// short list of common English misspellings is corrected word-by-word.
+/// Nothing is invented: unrecognized words pass through unchanged.
+pub(crate) fn normalize_display_copy(text: &str) -> String {
+    const COMMON_MISSPELLINGS: &[(&str, &str)] = &[
+        ("busines", "business"),
+        ("recieve", "receive"),
+        ("seperate", "separate"),
+        ("adress", "address"),
+        ("occassion", "occasion"),
+        ("definately", "definitely"),
+        ("restaraunt", "restaurant"),
+        ("teh", "the"),
+        ("untill", "until"),
+        ("wich", "which"),
+    ];
+    let mut out = String::new();
+    for (index, word) in text.split_whitespace().enumerate() {
+        if index > 0 {
+            out.push(' ');
+        }
+        // Correct the alphabetic core so trailing punctuation ("busines.")
+        // still matches.
+        let core_end = word.find(|c: char| !c.is_alphabetic()).unwrap_or(word.len());
+        let (core, rest) = word.split_at(core_end);
+        let corrected = COMMON_MISSPELLINGS
+            .iter()
+            .find(|(wrong, _)| core.eq_ignore_ascii_case(wrong))
+            .map(|(_, right)| {
+                if core.chars().any(char::is_alphabetic) && !core.chars().any(char::is_lowercase) {
+                    right.to_uppercase()
+                } else {
+                    right.to_string()
+                }
+            })
+            .unwrap_or_else(|| core.to_string());
+        if index == 0 {
+            let mut chars = corrected.chars();
+            if let Some(first) = chars.next() {
+                out.extend(first.to_uppercase());
+                out.push_str(chars.as_str());
+            }
+        } else {
+            out.push_str(&corrected);
+        }
+        out.push_str(rest);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -372,6 +583,86 @@ mod tests {
         assert_eq!(intent.target_layer_id, Some(10));
         assert_eq!(intent.direction, Some([0, -40]));
         assert_eq!(intent.numeric_value, Some(36.0));
+    }
+
+    #[test]
+    fn parse_poster_prompt_preserves_business_name() {
+        let engine = NaturalLanguageEngine::new();
+        let scene = VisualScene::default();
+        let context = AiContext::new();
+
+        let intent = engine
+            .parse_intent("create a poster for my taxi busines to promote it its called chndrax", &scene, &context)
+            .unwrap();
+
+        assert_eq!(intent.category, IntentCategory::GraphicDesign);
+        assert_eq!(intent.text_content.as_deref(), Some("chndrax"));
+    }
+
+    #[test]
+    fn subject_terms_prefers_quoted_then_named_entity() {
+        let engine = NaturalLanguageEngine::new();
+        assert_eq!(
+            engine.subject_terms("make a poster called chndrax"),
+            vec!["chndrax".to_string()]
+        );
+        assert_eq!(
+            engine.subject_terms("make a poster \"Grand Opening\" called chndrax"),
+            vec!["Grand Opening".to_string(), "chndrax".to_string()]
+        );
+        assert!(engine.subject_terms("make it look professional").is_empty());
+    }
+
+    #[test]
+    fn named_entity_respects_marker_word_boundaries() {
+        assert_eq!(extract_named_entity("the layer renamed Sunset Hills"), None);
+        assert_eq!(extract_named_entity("a so-called premium look"), None);
+        assert_eq!(extract_named_entity("make a poster called chndrax"), Some("chndrax".to_string()));
+        assert_eq!(extract_named_entity("it is named Corner Cafe"), Some("Corner Cafe".to_string()));
+    }
+
+    #[test]
+    fn named_entity_keeps_names_with_clause_words() {
+        // "for"/"to" inside a name are not purpose clauses.
+        assert_eq!(extract_named_entity("a poster called Fit For Life"), Some("Fit For Life".to_string()));
+        assert_eq!(extract_named_entity("a poster called A to Z"), Some("A to Z".to_string()));
+        assert_eq!(extract_named_entity("called chndrax to promote it"), Some("chndrax".to_string()));
+    }
+
+    #[test]
+    fn named_entity_preserves_multibyte_text_without_panic() {
+        // Lowercasing-based offset lookup would mis-slice or panic on these;
+        // boundary-safe matching must preserve the original bytes exactly.
+        assert_eq!(extract_named_entity("make a poster called İstanbul Eats"), Some("İstanbul Eats".to_string()));
+        assert_eq!(extract_named_entity("poster for café Üniqe called Zürich Bäckerei"), Some("Zürich Bäckerei".to_string()));
+    }
+
+    #[test]
+    fn quoted_span_ignores_possessive_apostrophes() {
+        assert_eq!(extract_quoted_span("fix chndrax's colors"), None);
+        assert_eq!(extract_quoted_span("a poster titled 'Grand Opening' tonight"), Some("Grand Opening".to_string()));
+        assert_eq!(extract_quoted_span("a poster titled \"Grand Opening\""), Some("Grand Opening".to_string()));
+    }
+
+    #[test]
+    fn subject_purpose_extracts_user_phrase() {
+        assert_eq!(
+            subject_purpose("create a poster for my taxi busines to promote it its called chndrax"),
+            Some("taxi busines".to_string())
+        );
+        assert_eq!(subject_purpose("make a banner for the bakery"), Some("bakery".to_string()));
+        assert_eq!(subject_purpose("enhance this photo"), None);
+    }
+
+    #[test]
+    fn normalize_display_copy_interprets_purpose_without_inventing() {
+        assert_eq!(normalize_display_copy("taxi busines"), "Taxi business");
+        assert_eq!(normalize_display_copy("  grand   opening "), "Grand opening");
+        assert_eq!(normalize_display_copy("BAKERY"), "BAKERY");
+        assert_eq!(normalize_display_copy("busines."), "Business.");
+        // Unknown words pass through unchanged; nothing is invented.
+        assert_eq!(normalize_display_copy("zxqwv quux"), "Zxqwv quux");
+        assert_eq!(normalize_display_copy(""), "");
     }
 
     #[test]

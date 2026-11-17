@@ -226,6 +226,95 @@ fn dry_run_is_nonmutating_but_execution_and_generic_fallback_are_guarded() {
 }
 
 #[test]
+fn admitted_documents_receive_initial_color_analysis_before_planning() {
+    for smart in [false, true] {
+        let mut host = fixture();
+        if smart {
+            host.command_run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        }
+        let doc = inspect(&host);
+        let mut mock = MockSession { document: Some(doc), ..Default::default() };
+        let mut context = AiContext::new();
+        let result = AiEngine::new().process_instruction_in(&mut mock, PROMPT, &mut context).unwrap();
+        assert!(result.execution.is_success);
+        assert_eq!(
+            mock.calls.first().map(String::as_str),
+            Some("image.analysis.colorStats"),
+            "admitted document must receive initial analysis, got {:?}",
+            mock.calls
+        );
+        assert_eq!(
+            mock.calls.last().map(String::as_str),
+            Some("image.analysis.colorStats"),
+            "admitted document keeps the post-execution analysis, got {:?}",
+            mock.calls
+        );
+    }
+}
+
+#[test]
+fn refused_enhancement_states_skip_initial_analysis_and_dispatch_nothing() {
+    let host = fixture();
+    let cases: [(fn(&mut Value), &str); 3] = [
+        (|doc| doc["hasSelection"] = json!(true), "selection"),
+        (|doc| doc["quickMask"] = json!(true), "Quick Mask"),
+        (
+            |doc| {
+                doc.as_object_mut().unwrap().remove("hasSelection");
+            },
+            "missing or malformed",
+        ),
+    ];
+    for (mutate, reason) in cases {
+        let mut doc = inspect(&host);
+        mutate(&mut doc);
+        let mut mock = MockSession { document: Some(doc), ..Default::default() };
+        let error = AiEngine::new().process_instruction_in(&mut mock, PROMPT, &mut AiContext::new()).unwrap_err();
+        assert!(error.to_string().contains(reason), "{error}");
+        assert!(mock.calls.is_empty(), "refused state dispatched {:?}", mock.calls);
+    }
+}
+
+#[test]
+fn multiple_violations_refuse_in_inspection_order_without_dispatch() {
+    let host = fixture();
+    let mut doc = inspect(&host);
+    doc["hasSelection"] = json!(true);
+    doc["quickMask"] = json!(true);
+    let mut mock = MockSession { document: Some(doc), ..Default::default() };
+    let error = AiEngine::new().process_instruction_in(&mut mock, PROMPT, &mut AiContext::new()).unwrap_err();
+    assert!(error.to_string().contains("selection"), "{error}");
+    assert!(mock.calls.is_empty(), "refused state dispatched {:?}", mock.calls);
+}
+
+#[test]
+fn no_document_without_creative_intent_errors_before_any_dispatch() {
+    let mut mock = MockSession::default();
+    let error = AiEngine::new()
+        .process_instruction_in(&mut mock, "Do something useful", &mut AiContext::new())
+        .unwrap_err();
+    assert!(matches!(error, AiError::NoDocumentOpen), "{error}");
+    assert!(mock.calls.is_empty(), "no-document path dispatched {:?}", mock.calls);
+}
+
+#[test]
+fn valid_non_enhancement_runs_with_absent_initial_and_permitted_final_stats() {
+    let host = fixture();
+    let mut doc = inspect(&host);
+    doc["hasSelection"] = json!(true);
+    let mut mock = MockSession { document: Some(doc), ..Default::default() };
+    let mut context = AiContext::new();
+    let result = AiEngine::new()
+        .process_instruction_in(&mut mock, "Create an elegant wedding invitation", &mut context)
+        .unwrap();
+    assert_eq!(result.plan.category, fotodit_automation::ai::IntentCategory::GraphicDesign);
+    assert!(result.execution.is_success);
+    let analyses = mock.calls.iter().filter(|c| c.as_str() == "image.analysis.colorStats").count();
+    assert_eq!(analyses, 1, "only the permitted final analysis, got {:?}", mock.calls);
+    assert_eq!(mock.calls.last().map(String::as_str), Some("image.analysis.colorStats"));
+}
+
+#[test]
 fn real_selection_refusal_preserves_pixels_selection_history_and_context() {
     let mut host = fixture();
     host.command_run("select.all", json!({})).unwrap();

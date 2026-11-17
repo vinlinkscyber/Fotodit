@@ -66,7 +66,7 @@ impl CommandCatalog {
                 id: "type.create".into(),
                 label: "New Type Layer".into(),
                 category: "Type".into(),
-                params_schema: r##"{"x": px, "y": px, "text": str, "font": str?, "sizePt": pt?, "color": "#rrggbb"?}"##.into(),
+                params_schema: r##"{"x": px, "y": px, "text": str, "font": str?, "size": pt?, "color": "#rrggbb"?}"##.into(),
                 description: "Create an editable vector type layer with position, font, size, and color".into(),
             },
             CommandCapability {
@@ -80,7 +80,7 @@ impl CommandCatalog {
                 id: "type.setStyle".into(),
                 label: "Set Type Style".into(),
                 category: "Type".into(),
-                params_schema: r##"{"layer": id?, "font": str?, "sizePt": pt?, "color": "#rrggbb"?}"##.into(),
+                params_schema: r##"{"layer": id?, "font": str?, "size": pt?, "color": "#rrggbb"?}"##.into(),
                 description: "Update typography styling attributes of a type layer".into(),
             },
             CommandCapability {
@@ -255,6 +255,38 @@ impl CommandCatalog {
             });
         }
 
+        // Native type commands silently ignore unknown JSON keys. Catch schema
+        // drift here so a planner typo such as `sizePt` cannot report success
+        // while rendering the engine's default 12pt type.
+        if matches!(id, "type.create" | "type.setStyle") {
+            const TYPE_KEYS: &[&str] = &[
+                "x", "y", "text", "box", "name", "orientation", "layer", "layers", "range",
+                "font", "family", "fontStyle", "postscriptName", "weight", "italic", "size",
+                "color", "tracking", "leading", "baselineShift", "horizontalScale", "verticalScale",
+                "underline", "strikethrough", "fauxBold", "fauxItalic", "kerning", "caps", "baseline",
+                "ligatures", "discretionaryLigatures", "features", "variations", "language", "align",
+                "firstLineIndent", "startIndent", "endIndent", "spaceBefore", "spaceAfter", "autoLeading",
+                "direction", "hyphenate", "metricsAsShown", "leadingBy", "baselineShiftBy", "trackingBy",
+            ];
+            if let Some(map) = params.as_object() {
+                for key in map.keys() {
+                    if !TYPE_KEYS.contains(&key.as_str()) {
+                        return Err(AiError::ValidationError { command: id.into(), message: format!("unsupported native type parameter '{key}'") });
+                    }
+                }
+                if let Some(size) = map.get("size") {
+                    if !size.as_f64().is_some_and(|v| v.is_finite() && (0.1..=1296.0).contains(&v)) {
+                        return Err(AiError::ValidationError { command: id.into(), message: "size must be a number between 0.1 and 1296 points".into() });
+                    }
+                }
+                for key in ["font", "family", "fontStyle", "postscriptName"] {
+                    if map.get(key).is_some_and(|v| !v.is_string()) {
+                        return Err(AiError::ValidationError { command: id.into(), message: format!("'{key}' must be a string") });
+                    }
+                }
+            }
+        }
+
         // Schema-specific validation rules
         match id {
             "file.new" => {
@@ -355,13 +387,28 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn reject_ignored_typography_parameters_and_invalid_size() {
+        let catalog = CommandCatalog::new();
+        for command in ["type.create", "type.setStyle"] {
+            for bad in [json!({"x": 0, "y": 0, "text": "Hi", "sizePt": 80}),
+                        json!({"x": 0, "y": 0, "text": "Hi", "fontSzie": 80}),
+                        json!({"x": 0, "y": 0, "text": "Hi", "size": "80"}),
+                        json!({"x": 0, "y": 0, "text": "Hi", "size": 0}),
+                        json!({"x": 0, "y": 0, "text": "Hi", "font": null})] {
+                assert!(catalog.validate_command(command, &bad).is_err(), "{command} accepted {bad}");
+            }
+            assert!(catalog.validate_command(command, &json!({"x": 0, "y": 0, "text": "Hi", "size": 80, "font": "Inter", "align": "center"})).is_ok());
+        }
+    }
+
+    #[test]
     fn validate_valid_type_create() {
         let catalog = CommandCatalog::new();
         let params = json!({
             "x": 100,
             "y": 200,
             "text": "Header Text",
-            "sizePt": 24.0,
+            "size": 24.0,
             "color": "#ffffff"
         });
 
