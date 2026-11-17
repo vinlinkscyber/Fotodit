@@ -20,7 +20,6 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use super::AiError;
 use super::provider_bridge::{HttpTransport, ProviderId};
 
 /// What a key check found. Never carries the key.
@@ -153,6 +152,7 @@ pub fn describe(result: &KeyCheck) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::super::AiError;
     use super::*;
     use serde_json::json;
     use std::sync::Mutex;
