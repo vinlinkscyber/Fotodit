@@ -724,7 +724,7 @@ fn color_stats(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let hex = |r: f64, g: f64, b: f64| format!("#{:02X}{:02X}{:02X}", (r * 255.0).round() as u8, (g * 255.0).round() as u8, (b * 255.0).round() as u8);
     let mut top: Vec<(usize, u64)> = bins.iter().copied().enumerate().filter(|(_, c)| *c > 0).collect();
-    top.sort_by(|a, b| b.1.cmp(&a.1));
+    top.sort_by_key(|a| std::cmp::Reverse(a.1));
     top.truncate(max_colors);
     let dominant: Vec<Value> = top
         .into_iter()
@@ -759,8 +759,8 @@ fn color_stats(s: &mut Session, p: &Value) -> Result<Value> {
 /// Unlike color statistics, the digest mixes sampled RGBA values in scan order
 /// (FNV-1a 64 over the quantized bytes, seeded with the geometry), so pixel
 /// rearrangements that preserve a histogram or dominant colors still change it.
-/// The selection is deliberately IGNORED and every pixel - transparent included
-/// - contributes: the digest is a comparison tool, and a step that only changes
+/// The selection is deliberately IGNORED and every pixel (transparent included)
+/// contributes: the digest is a comparison tool, and a step that only changes
 /// the selection must not move the compared domain.
 ///
 /// Claim boundary: the digest covers the SAMPLED, 8-bit-clamped RGBA grid only.

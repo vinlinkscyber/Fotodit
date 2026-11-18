@@ -20,8 +20,6 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
-#[cfg(test)]
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -1076,6 +1074,10 @@ fn strip_markdown_fences(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     #[test]
     fn provider_slots_match_the_settings_screen_list() {
         let ids = [ProviderId::Gemini, ProviderId::OpenRouter, ProviderId::Cohere, ProviderId::Pollinations, ProviderId::Lajiwa];
@@ -1350,7 +1352,7 @@ mod tests {
     }
 
     #[test]
-    fn provider_bridge_cascades_from_gemini_to_cohere_when_openrouter_disabled_on_429() {
+    fn provider_bridge_cascades_from_gemini_to_cohere_when_openrouter_disabled_on_429() -> Result<(), AiError> {
         let config = ProviderConfig {
             gemini_api_key: Some("k1".into()),
             openrouter_api_key: Some("k2".into()),
@@ -1384,13 +1386,14 @@ mod tests {
         let scene = VisualScene::default();
         let context = AiContext::default();
 
-        let plan = bridge.plan_editing(&intent, &scene, &context).expect("Fallback plan to Cohere should succeed");
+        let plan = bridge.plan_editing(&intent, &scene, &context)?;
         assert_eq!(plan.title, "Cohere Fallback Plan");
         assert_eq!(call_count.load(Ordering::SeqCst), 2, "Should try Gemini (failed 429) then Cohere (succeeded), skipping disabled OpenRouter");
+        Ok(())
     }
 
     #[test]
-    fn provider_bridge_cascades_from_gemini_to_openrouter_when_enabled_on_429() {
+    fn provider_bridge_cascades_from_gemini_to_openrouter_when_enabled_on_429() -> Result<(), AiError> {
         let config = ProviderConfig {
             gemini_api_key: Some("k1".into()),
             openrouter_api_key: Some("k2".into()),
@@ -1422,13 +1425,14 @@ mod tests {
         let scene = VisualScene::default();
         let context = AiContext::default();
 
-        let plan = bridge.plan_editing(&intent, &scene, &context).expect("Fallback plan should succeed");
+        let plan = bridge.plan_editing(&intent, &scene, &context)?;
         assert_eq!(plan.title, "OpenRouter Fallback Plan");
         assert_eq!(call_count.load(Ordering::SeqCst), 2, "Should try Gemini (failed 429) then OpenRouter (succeeded)");
+        Ok(())
     }
 
     #[test]
-    fn image_generation_falls_back_from_pollinations_to_gemini() {
+    fn image_generation_falls_back_from_pollinations_to_gemini() -> Result<(), AiError> {
         let config = ProviderConfig {
             gemini_api_key: Some("k1".into()),
             pollinations_api_key: Some("k2".into()),
@@ -1443,8 +1447,9 @@ mod tests {
         });
 
         let bridge = AiProviderBridge::with_transport(config, catalog, mock);
-        let img_bytes = bridge.generate_image("sunset texture", 512, 512).expect("Gemini fallback should provide image");
+        let img_bytes = bridge.generate_image("sunset texture", 512, 512)?;
         assert_eq!(img_bytes.len(), 8, "Mock PNG bytes returned from Gemini");
+        Ok(())
     }
     // Offline image-attempt fixtures. A message deliberately containing 429/402
     // must not turn a transport or response-shape failure into an HTTP failure.

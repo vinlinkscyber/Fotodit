@@ -386,7 +386,7 @@ fn render_start_actions_row(app: &mut FotoditApp, ui: &mut egui::Ui, avail_w: f3
 fn new_file_button(app: &mut FotoditApp, ui: &mut egui::Ui, w: f32, h: f32) {
     let new_label = tl!("New file");
     let (new_rect, new_resp) = ui.allocate_exact_size(egui::vec2(w, h), Sense::click());
-    new_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, new_label.clone()));
+    new_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, new_label));
     let new_resp = new_resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     let new_bg = if new_resp.hovered() { egui::Color32::from_rgb(80, 128, 248) } else { ACCENT };
     ui.painter().rect_filled(new_rect, 8.0, new_bg);

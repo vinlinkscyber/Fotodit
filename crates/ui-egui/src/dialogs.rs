@@ -368,7 +368,7 @@ fn dialog_body(app: &mut FotoditApp, ui: &mut egui::Ui, d: &Dialog, fields: &mut
             }
         }
         DialogKind::About => {
-            about_tab_body(app, ui, "about");
+            about_tab_body(app, ui, about_tab(fields));
         }
         DialogKind::Command => outcome = command_body(app, ui, d, fields, id, interactive),
         DialogKind::LayerStyle => outcome = crate::layer_style::body_with_response(app, ui, fields, interactive),
