@@ -186,7 +186,7 @@ use std::sync::{Arc, Mutex};
 #[test]
 fn appearance_resolves_both_saved_themes_and_follows_system() {
     let mut interface = prefs::Interface { appearance_mode: AppearanceMode::Auto, ..prefs::Interface::default() };
-    assert_eq!(selected_theme(&interface, Some(egui::Theme::Dark)), ThemeKind::ProMedium);
+    assert_eq!(selected_theme(&interface, Some(egui::Theme::Dark)), ThemeKind::ProNavy);
     assert_eq!(selected_theme(&interface, Some(egui::Theme::Light)), ThemeKind::ProLight);
     interface.dark_theme = DarkTheme::Studio;
     interface.light_theme = LightTheme::Classic;
@@ -250,7 +250,7 @@ fn darken_and_lighten_interface_step_through_photoshops_brightnesses_and_stop_at
     let ctx = egui::Context::default();
     let mut app = FotoditApp::new(fotodit_engine::Session::new(), crate::Services::default());
     sync_appearance(&mut app, &ctx);
-    assert_eq!(app.ui.theme, ThemeKind::ProMedium, "Photoshop's default brightness");
+    assert_eq!(app.ui.theme, ThemeKind::ProNavy, "the Navy Glass default sits outside the four Photoshop brightnesses");
     let press = |app: &mut FotoditApp, id: &str| crate::menus::invoke(app, &ctx, id, json!({})).unwrap();
     for expected in [ThemeKind::ProLightGray, ThemeKind::ProLight, ThemeKind::ProLight] {
         press(&mut app, "view.lightenInterface");
@@ -305,11 +305,14 @@ fn ctrl_shift_f1_and_f2_darken_and_lighten_the_interface() {
 }
 
 fn appearance_frame(app: &mut FotoditApp, ctx: &egui::Context, appearance: Option<egui::Theme>) {
+    eprintln!("qualification appearance frame before: app={:?}, tokens={:?}, system_input={appearance:?}, preference={:?}, saved_mode={:?}, saved_dark={:?}, saved_light={:?}", app.ui.theme, Tokens::get(ctx).kind, ctx.options(|o| o.theme_preference), app.session.prefs().interface.appearance_mode, app.session.prefs().interface.dark_theme, app.session.prefs().interface.light_theme);
     ctx.run_ui(egui::RawInput { system_theme: appearance, ..Default::default() }, |ui| tick(app, ui.ctx())).textures_delta.clear();
+    eprintln!("qualification appearance frame after: app={:?}, tokens={:?}, preference={:?}", app.ui.theme, Tokens::get(ctx).kind, ctx.options(|o| o.theme_preference));
 }
 
 fn assert_palette(ctx: &egui::Context, kind: ThemeKind) {
     let t = Tokens::get(ctx);
+    eprintln!("qualification assert_palette: expected={kind:?}, actual={:?}, global_fill={:?}, light_fill={:?}, dark_fill={:?}, token_chrome={:?}, preference={:?}", t.kind, ctx.global_style().visuals.panel_fill, ctx.style_of(egui::Theme::Light).visuals.panel_fill, ctx.style_of(egui::Theme::Dark).visuals.panel_fill, t.chrome, ctx.options(|o| o.theme_preference));
     assert_eq!(t.kind, kind);
     for style in [ctx.global_style(), ctx.style_of(egui::Theme::Light), ctx.style_of(egui::Theme::Dark)] {
         assert_eq!(style.visuals.panel_fill, t.chrome);
@@ -405,7 +408,7 @@ fn auto_appearance_replaces_a_restored_egui_dark_pin() {
     assert_eq!(ctx.options(|o| o.theme_preference), egui::ThemePreference::System);
     assert_palette(&ctx, ThemeKind::ProLight);
     appearance_frame(&mut app, &ctx, Some(egui::Theme::Dark));
-    assert_palette(&ctx, ThemeKind::ProMedium);
+    assert_palette(&ctx, ThemeKind::ProNavy);
     assert_eq!(app.session.prefs().interface.appearance_mode, AppearanceMode::Auto);
 }
 

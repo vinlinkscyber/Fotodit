@@ -321,7 +321,7 @@ fn every_save_dialog_leads_with_its_own_extension() {
 #[test]
 fn save_as_offers_only_writable_formats_including_ico() {
     // Layered formats, and PDF, are written by `fotodit-io`, not a codec.
-    let layered = ["psd", "psb", "plyra", "ora", "pdf"];
+    let layered = ["psd", "psb", fotodit_format::EXTENSION, fotodit_format::LEGACY_EXTENSION, "ora", "pdf"];
     for (name, exts) in SAVE_FILTERS {
         for ext in exts.iter().filter(|e| !layered.contains(e)) {
             let format = fotodit_codecs::from_extension(ext).unwrap_or_else(|| panic!("{name}: .{ext} is no known format"));

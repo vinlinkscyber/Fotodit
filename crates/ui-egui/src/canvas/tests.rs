@@ -1412,10 +1412,10 @@ fn clone_overlay_is_clipped_to_a_shaped_tip() {
 fn wayland_start_screen_hint_does_not_claim_file_drop_works() {
     let x11 = FotoditApp::new(fotodit_engine::Session::new(), Default::default());
     let wayland = FotoditApp::new(fotodit_engine::Session::new(), crate::Services { is_wayland: true, ..Default::default() });
-    assert!(start_screen_drop_hint(&x11).starts_with("Drop"));
+    assert!(start_screen_drop_hint(&x11).starts_with("Drag & drop"));
     // Pasting a copied image file works on Wayland (#338): the hint says how.
     let hint = start_screen_drop_hint(&wayland);
-    assert!(!hint.contains("Drop"), "{hint}");
+    assert!(!hint.to_lowercase().contains("drop"), "{hint}");
     assert!(hint.ends_with(&format!("paste a copied image with {}.", crate::notices::paste_hint(&wayland))), "{hint}");
 }
 
@@ -1521,8 +1521,10 @@ fn home_recent_entries_can_be_removed() {
     assert_eq!(listed(&h), ["a.png", "b.psd", "c.tif"]);
     assert!(h.query_by_label("Remove b.psd from Recent").is_none(), "the × shows on the hovered row only");
 
+    let before_hover = h.query_all_by_label("b.psd").map(|q| q.rect()).collect::<Vec<_>>();
     h.get_by_label("b.psd").hover();
     h.run_steps(2);
+    eprintln!("qualification Recent hover: before={before_hover:?}, after={:?}, pointer={:?}, remove={:?}, theme={:?}, recent_count={}", h.query_all_by_label("b.psd").map(|q| q.rect()).collect::<Vec<_>>(), h.ctx.input(|i| i.pointer.hover_pos()), h.query_all_by_label("Remove b.psd from Recent").map(|q| q.rect()).collect::<Vec<_>>(), h.state().0.ui.theme, h.state().0.ui.recent_files.len());
     h.get_by_label("Remove b.psd from Recent").click();
     h.run_steps(2);
     assert_eq!(listed(&h), ["a.png", "c.tif"]);

@@ -29,7 +29,12 @@ fn panel(open_document: bool) -> Harness<'static, FotoditApp> {
 /// A point in the Layers panel well below its last row (above the panel's bottom buttons).
 fn empty_point(h: &Harness<'static, FotoditApp>) -> Pos2 {
     let button = h.get_by_label("Create a new layer").rect();
-    pos2(button.center().x - 20.0, button.top() - 80.0)
+    let viewport = h.ctx.data(|data| data.get_temp::<(egui::Rect, egui::Rect, f32, Vec<(fotodit_doc::LayerId, egui::Rect)>)>(egui::Id::unique("qualification-layer-rows")));
+    eprintln!("qualification Layers actual scroll clip, content, rows_bottom, drawn={viewport:?}");
+    let point = pos2(button.center().x - 20.0, button.top() - 80.0);
+    let widgets: Vec<_> = h.ctx.viewport(|v| v.prev_pass.widgets.layers().flat_map(|(_, w)| w.iter()).filter(|w| w.rect.contains(point) || w.rect == button).map(|w| (w.rect, w.interact_rect)).collect());
+    eprintln!("qualification Layers empty point: point={point:?}, footer={button:?}, bodies={:?}, candidate_widgets={widgets:?}, theme={:?}", crate::panel_docking::last_bodies(&h.ctx), h.state().ui.theme);
+    point
 }
 
 fn click(h: &mut Harness<'static, FotoditApp>, p: Pos2, button: PointerButton) {
@@ -44,6 +49,7 @@ fn click(h: &mut Harness<'static, FotoditApp>, p: Pos2, button: PointerButton) {
 fn open_menu(h: &mut Harness<'static, FotoditApp>) {
     let p = empty_point(h);
     click(h, p, PointerButton::Secondary);
+    eprintln!("qualification Layers after secondary click: point={p:?}, menu_open={}, choices={:?}", SIZES.iter().chain(CLIPS.iter()).any(|label| h.query_all_by_label(label).next().is_some()), SIZES.iter().chain(CLIPS.iter()).map(|label| (*label, h.query_all_by_label(label).next().map(|q| q.rect()))).collect::<Vec<_>>());
 }
 
 fn pick(h: &mut Harness<'static, FotoditApp>, label: &str) {

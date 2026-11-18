@@ -59,6 +59,7 @@ fn app_harness_stepped(kind: &str, mode: &str, depth: u32, step_dt: f32) -> Harn
 fn layer(h: &Harness<'_, FotoditApp>) -> (LayerId, Adjustment) {
     let st = h.state().session.active().unwrap();
     let id = st.active_layer.unwrap();
+    eprintln!("qualification adjustment active layer: id={id:?}, history={}, is_adjustment={}", st.history.past_len(), st.doc.layer(id).is_some_and(|l| matches!(&l.content, LayerContent::Adjustment(_))));
     match &st.doc.layer(id).unwrap().content {
         LayerContent::Adjustment(a) => (id, a.clone()),
         other => panic!("{other:?}"),
@@ -66,6 +67,7 @@ fn layer(h: &Harness<'_, FotoditApp>) -> (LayerId, Adjustment) {
 }
 
 fn drag(h: &mut Harness<'_, FotoditApp>, from: Pos2, to: Pos2) {
+    eprintln!("qualification curves pointer drag: from={from:?}, to={to:?}, bodies={:?}", crate::panel_docking::last_bodies(&h.ctx));
     h.hover_at(from);
     h.run_steps(1);
     h.drag_at(from);
@@ -79,6 +81,7 @@ fn drag(h: &mut Harness<'_, FotoditApp>, from: Pos2, to: Pos2) {
 }
 
 fn click(h: &mut Harness<'_, FotoditApp>, at: Pos2) {
+    eprintln!("qualification curves pointer click: at={at:?}, bodies={:?}", crate::panel_docking::last_bodies(&h.ctx));
     h.hover_at(at);
     h.run_steps(1);
     h.drag_at(at);
@@ -98,7 +101,9 @@ fn label_rect(h: &Harness<'_, FotoditApp>, text: &str) -> Option<Rect> {
 }
 
 fn curves_graph(h: &Harness<'_, FotoditApp>, id: LayerId) -> Rect {
-    h.ctx.data(|d| d.get_temp::<Rect>(egui::Id::unique(("adjust-layer", id.0)).with("curves-graph"))).expect("curves graph drawn")
+    let graph = h.ctx.data(|d| d.get_temp::<Rect>(egui::Id::unique(("adjust-layer", id.0)).with("curves-graph")));
+    eprintln!("qualification curves: graph={graph:?}, theme={:?}, tokens={:?}, canvas={:?}, bodies={:?}, requested_properties_height={:?}", h.state().ui.theme, crate::theme::Tokens::get(&h.ctx).kind, h.state().last_canvas_rect, crate::panel_docking::last_bodies(&h.ctx), h.state().ui.dock.heights.get(&crate::dock::Group::Properties));
+    graph.expect("curves graph drawn")
 }
 
 /// Issue #12: every adjustment kind, on a new document at 8/16/32 bits and in RGB, Grayscale,
@@ -304,6 +309,7 @@ fn curves_fast_release_commits_one_edit_and_undo_restores_the_curve() {
     h.drop_at(at + vec2(40.0, -32.0));
     h.run_steps(3);
     let after = curve_of(&layer(&h).1);
+    eprintln!("qualification curves fast release: graph={graph:?}, from={at:?}, to={:?}, before={:?}, after={after:?}, history_before={steps}, history_after={}", at + vec2(40.0, -32.0), curve_of(&before), h.state().session.active().unwrap().history.past_len());
     assert_eq!(after.len(), 3);
     assert!(after[1][0] > 150.0 && after[1][1] > 150.0, "{after:?}");
     assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);

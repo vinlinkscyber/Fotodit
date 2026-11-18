@@ -1652,11 +1652,11 @@ mod embedding_tests {
         h.query_by_label("Color & Swatches").is_some()
     }
 
-    /// An app that embeds the UI can hide the icon rail and the menu bar; both are on by default.
+    /// An app that embeds the UI can hide the icon rail and the menu bar; the menu bar is on by default and the rail is off.
     #[test]
     fn rail_and_menu_bar_follow_their_panel_flags() {
         let panels = crate::state::Panels::default();
-        assert!(panels.rail && panels.menu_bar);
+        assert!(!panels.rail && panels.menu_bar);
 
         let h = whole_app(true, true);
         assert!(rail_drawn(&h) && drawn(&h, "title_bar"));

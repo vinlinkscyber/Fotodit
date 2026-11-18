@@ -25,6 +25,8 @@ fn harness(docs: usize, theme: ThemeKind) -> Harness<'static, FotoditApp> {
         app
     });
     h.run_steps(4);
+    eprintln!("qualification tabs: requested={theme:?}, effective={:?}, tokens={:?}, canvas={:?}, assistant={}, rail={}, dock={}, strip={:?}", h.state().ui.theme, crate::theme::Tokens::get(&h.ctx).kind, h.state().last_canvas_rect, h.state().ui.panels.assistant, h.state().ui.panels.rail, h.state().ui.panels.dock, h.state().tab_strip.as_ref().map(|s| (s.rect, &s.tabs)));
+    eprintln!("qualification tabs: bodies={:?}; titles={:?}", crate::panel_docking::last_bodies(&h.ctx), (0..docs).map(|i| pro_tab_title(h.state(), i)).collect::<Vec<_>>());
     h
 }
 

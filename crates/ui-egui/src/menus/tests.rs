@@ -60,6 +60,26 @@ fn sync_with_system_menu_keeps_saved_slots_and_its_checkmark_across_palettes() {
 }
 
 #[test]
+fn pro_navy_is_a_theme_menu_item_that_selects_persists_and_checks() {
+    use fotodit_engine::prefs::{AppearanceMode, DarkTheme};
+    let mut app = FotoditApp::new(fotodit_engine::Session::new(), Default::default());
+    let ctx = egui::Context::default();
+    let items = menu_items(&app);
+    let item = items.iter().find(|i| i.id == "window.theme.proNavy").expect("Window > Theme lists Pro Navy Glass");
+    assert_eq!(item.path, ["Window", "Theme", "Dark Theme"]);
+    assert!(item.enabled && is_live("window.theme.proNavy"));
+    invoke(&mut app, &ctx, "window.theme.studio", json!({})).unwrap();
+    assert_eq!(checked(&app, "window.theme.proNavy"), Some(false));
+    invoke(&mut app, &ctx, "window.theme.proNavy", json!({})).unwrap();
+    assert_eq!(app.ui.theme, crate::theme::ThemeKind::ProNavy);
+    // In-session saved-preference state (not a disk round trip).
+    let i = &app.session.prefs().interface;
+    assert_eq!((i.appearance_mode, i.dark_theme), (AppearanceMode::Dark, DarkTheme::ProNavy));
+    assert_eq!(checked(&app, "window.theme.proNavy"), Some(true));
+    assert_eq!(checked(&app, "window.theme.studio"), Some(false));
+}
+
+#[test]
 fn submenu_header_is_disabled_when_every_item_is() {
     let item = |label: &str, enabled: bool| MenuItem {
         id: label.into(),

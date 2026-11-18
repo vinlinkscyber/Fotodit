@@ -11,7 +11,7 @@ use crate::theme::ThemeKind;
 #[test]
 fn bad_stored_values_are_sanitised() {
     let mut l = DockLayout { order: vec![Group::Layers, Group::Layers, Group::Color], ..Default::default() };
-    assert_eq!(l.order(), vec![Group::Layers, Group::Brushes, Group::Color, Group::Properties, Group::Character, Group::Navigator, Group::History]);
+    assert_eq!(l.order(), vec![Group::Layers, Group::Brushes, Group::Assistant, Group::Color, Group::Properties, Group::Character, Group::Navigator, Group::History]);
     for bad in [f32::NAN, -10.0, f32::INFINITY, 1e12] {
         l.heights.insert(Group::Color, bad);
         let h = l.height(Group::Color);
@@ -19,7 +19,7 @@ fn bad_stored_values_are_sanitised() {
     }
     // Unknown fields, wrong types and old UI state all load.
     let back: DockLayout = serde_json::from_value(json!({"order": ["layers"], "bogus": 1})).unwrap();
-    assert_eq!(back.order(), vec![Group::Layers, Group::Brushes, Group::Color, Group::Properties, Group::Character, Group::Navigator, Group::History]);
+    assert_eq!(back.order(), vec![Group::Layers, Group::Brushes, Group::Assistant, Group::Color, Group::Properties, Group::Character, Group::Navigator, Group::History]);
     let mut ui = serde_json::to_value(crate::state::UiState::default()).unwrap();
     ui.as_object_mut().unwrap().remove("dock");
     let ui: crate::state::UiState = serde_json::from_value(ui).unwrap();
@@ -517,10 +517,15 @@ fn rows_in_view(h: &Harness<'static, FotoditApp>, n: usize) -> usize {
 /// 900 pt window, and a usable list on a 720 pt one.
 #[test]
 fn default_layout_shows_ten_layer_rows_at_900pt() {
+    use egui_kittest::kittest::Queryable;
     for (size, want) in [(vec2(1440.0, 900.0), 10), (vec2(1280.0, 720.0), 4)] {
         let h = app_harness_rows(size, ThemeKind::ProMedium, 40);
         let rows = rows_in_view(&h, 40);
         let groups = crate::panel_docking::last_bodies(&h.ctx);
+        let viewport = h.ctx.data(|data| data.get_temp::<(egui::Rect, egui::Rect, f32, Vec<(fotodit_doc::LayerId, egui::Rect)>)>(egui::Id::unique("qualification-layer-rows")));
+        eprintln!("qualification Layers actual scroll clip, content, rows_bottom, drawn={viewport:?}");
+        let measured_rows: Vec<_> = (0..40).map(|i| (i, h.query_all_by_label(&format!("Row {i:02}")).map(|q| q.rect()).collect::<Vec<_>>())).collect();
+        eprintln!("qualification Layers rows: size={size:?}, theme={:?}, tokens={:?}, canvas={:?}, groups={groups:?}, rows={measured_rows:?}, footer={:?}", h.state().ui.theme, crate::theme::Tokens::get(&h.ctx).kind, h.state().last_canvas_rect, h.query_all_by_label("Create a new layer").next().map(|q| q.rect()));
         assert!(rows >= want, "{size:?}: {rows} rows visible, want ≥ {want}: {groups:?}");
         // Color and Properties stay open, just not at the expense of Layers.
         for g in [Group::Color, Group::Properties] {
@@ -587,7 +592,7 @@ fn window_character_opens_its_own_group_and_keeps_properties() {
     let old = DockLayout { order: vec![Group::Color, Group::Properties, Group::Navigator, Group::History, Group::Layers], ..Default::default() };
     assert_eq!(old.order(), Group::ALL.to_vec());
     let moved = DockLayout { order: vec![Group::Layers, Group::Color], ..Default::default() };
-    assert_eq!(moved.order(), vec![Group::Layers, Group::Brushes, Group::Color, Group::Properties, Group::Character, Group::Navigator, Group::History]);
+    assert_eq!(moved.order(), vec![Group::Layers, Group::Brushes, Group::Assistant, Group::Color, Group::Properties, Group::Character, Group::Navigator, Group::History]);
 }
 
 #[test]
@@ -691,6 +696,7 @@ fn navigator_preview_fills_its_group_and_keeps_aspect() {
             h.run_steps(8);
             let group = rect_of(&h, Group::Navigator);
             let preview = crate::panels::last_navigator_preview(&h.ctx).unwrap_or_else(|| panic!("{theme:?} {tall}: no preview drawn"));
+            eprintln!("qualification Navigator: requested_theme={theme:?}, effective={:?}, requested_height={tall}, group={group:?}, preview={preview:?}, bodies={:?}", h.state().ui.theme, crate::panel_docking::last_bodies(&h.ctx));
             assert!((group.height() - tall).abs() < 1.0, "{theme:?}: group {group:?}");
             assert!(group.contains_rect(preview), "{theme:?} {tall}: preview {preview:?} outside {group:?}");
             assert!((preview.width() / preview.height() - 2.0 / 3.0).abs() < 0.02, "{theme:?} {tall}: aspect {preview:?}");

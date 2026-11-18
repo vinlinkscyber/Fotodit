@@ -681,7 +681,7 @@ fn color_stats_selection_counts_only_majority_coverage() {
 #[test]
 fn color_stats_reports_fully_transparent_canvas() {
     let mut s = session(32, 32, 8);
-    s.execute("layer.visibility", json!({"visible": false})).unwrap();
+    s.execute("layer.setProps", json!({"visible": false})).unwrap();
     let v = s.execute("image.analysis.colorStats", json!({})).unwrap();
     assert_eq!(v["transparentShare"], 1.0);
     assert!(v["meanColor"].is_null());

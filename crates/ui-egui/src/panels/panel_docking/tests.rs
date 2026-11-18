@@ -223,7 +223,9 @@ fn a_tab_dropped_on_the_canvas_floats_there_and_redocks() {
     let canvas = canvas_rect(&h);
     let source = tab_rect(&h, "layers").center();
     let target = egui::pos2(canvas.left() + canvas.width() / 6.0, canvas.center().y);
+    eprintln!("qualification docking drag before: canvas={canvas:?}, source={source:?}, target={target:?}, bodies={:?}, assistant={}, collapsed={}", last_bodies(&h.ctx), h.state().ui.panels.assistant, h.state().ui.dock.is_collapsed(Group::Assistant));
     drag(&mut h, source, target);
+    eprintln!("qualification docking drag after: bodies={:?}, layer_tab={:?}", last_bodies(&h.ctx), craft_ui::docking::DockArea::<String>::hit_rects(&h.ctx, area_id()));
     let layout = lay(h.state());
     assert!(valid(layout));
     assert!(!canvas_side(layout).contains(&"layers".to_string()) && !in_dock_column(layout, "layers"), "{layout:?}");
@@ -694,6 +696,8 @@ fn custom_group_commands_preserve_members_and_workspace_timeline() {
 #[test]
 fn customized_panel_menus_and_rail_remain_reachable_after_float_and_restore() {
     let mut app = app();
+    // The rail is off by default now; this test is about the rail, so turn it on.
+    app.ui.panels.rail = true;
     app.run("window.panel.float", json!({"panel":"swatches","x":20,"y":40})).unwrap();
     let mut h = harness(app, vec2(1280.0, 800.0));
     assert!(h.query_all_by_label("Panel menu").count() > 0);
@@ -902,8 +906,22 @@ fn main_workspace_file_loads_as_the_default_and_saves_as_a_workspace() {
     );
     assert!(in_dock_column(layout, "layers") && panel_active(layout, "actions"));
     for (panel, _, _) in PANELS {
+        // The Assistant is the start-edge rail, never a dock group (legacy_layout drops it); it is
+        // reopened by Window > Assistant, checked separately below.
         let panel = panel.to_string();
+        if panel == "assistant" {
+            continue;
+        }
         assert!(layout.contains(&panel) || workspace.hidden.iter().any(|(id, _)| *id == panel), "{panel} is shown or can be reopened");
+    }
+    {
+        let ctx = egui::Context::default();
+        assert!(!app.ui.dock.is_collapsed(crate::dock::Group::Assistant), "precondition: not collapsed, so the toggle inverts rather than revealing");
+        let before = app.ui.panels.assistant;
+        crate::menus::invoke(&mut app, &ctx, "window.toggle.assistant", json!({})).unwrap();
+        assert_eq!(app.ui.panels.assistant, !before, "Window > Assistant shows or hides the rail-only Assistant");
+        crate::menus::invoke(&mut app, &ctx, "window.toggle.assistant", json!({})).unwrap();
+        assert_eq!(app.ui.panels.assistant, before);
     }
 
     app.run("window.panel.float", json!({"panel":"properties"})).unwrap();

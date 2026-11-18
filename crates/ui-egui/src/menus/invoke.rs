@@ -1040,6 +1040,7 @@ fn invoke_window_command(app: &mut FotoditApp, ctx: &egui::Context, id: &str, co
         })),
         "window.theme.pro"
         | "window.theme.proMedium"
+        | "window.theme.proNavy"
         | "window.theme.proLightGray"
         | "window.theme.proLight"
         | "window.theme.studio"

@@ -185,21 +185,7 @@ pub fn menu_items(app: &FotoditApp) -> Vec<MenuItem> {
             items.insert(after + 1 + k, it);
         }
     }
-    // Keep the update command with the links, ahead of System Info and About.
-    if let Some(at) = items.iter().position(|i| i.id == "help.checkForUpdates") {
-        let update = items.remove(at);
-        let before = items.iter().position(|i| i.id == "help.systemInfo" || i.id == "help.about").unwrap_or(items.len());
-        items.insert(before, update);
-    }
-    // Help: separator ahead of System Info and About if preceded by another Help item
-    if let Some(at) = items.iter().position(|i| i.id == "help.systemInfo" || i.id == "help.about") {
-        if at > 0 && items[at - 1].path.first().map(String::as_str) == Some("Help") && items[at - 1].id != "---" {
-            items.insert(
-                at,
-                MenuItem { id: "---".into(), label: "---".into(), path: vec!["Help".into()], shortcut: None, enabled: false, checked: None, color: None },
-            );
-        }
-    }
+    arrange_help_items(&mut items);
     // Window: the open documents in tab order, after a separator, the active one checked.
     if let Some(last) = items.iter().rposition(|i| i.path.first().map(String::as_str) == Some("Window")) {
         let window = || vec!["Window".to_string()];
@@ -248,6 +234,24 @@ pub fn menu_items(app: &FotoditApp) -> Vec<MenuItem> {
         item.enabled = is_enabled(app, &item.id);
     }
     items
+}
+
+fn arrange_help_items(items: &mut Vec<MenuItem>) {
+    // Keep the update command with the links, ahead of System Info and About.
+    if let Some(at) = items.iter().position(|i| i.id == "help.checkForUpdates") {
+        let update = items.remove(at);
+        let before = items.iter().position(|i| i.id == "help.systemInfo" || i.id == "help.about").unwrap_or(items.len());
+        items.insert(before, update);
+    }
+    // Help: separator ahead of System Info and About if preceded by another Help item
+    if let Some(at) = items.iter().position(|i| i.id == "help.systemInfo" || i.id == "help.about")
+        && at > 0 && items[at - 1].path.first().map(String::as_str) == Some("Help") && items[at - 1].id != "---"
+    {
+        items.insert(
+            at,
+            MenuItem { id: "---".into(), label: "---".into(), path: vec!["Help".into()], shortcut: None, enabled: false, checked: None, color: None },
+        );
+    }
 }
 
 /// Background tint of an Edit › Menus colour name.

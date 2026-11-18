@@ -330,10 +330,13 @@ mod tests {
         assert!(sy >= hy + hh, "subheading below the headline without overlap: headline y={hy} h={hh}, sub y={sy}");
         assert!(sy + sh <= 1600, "subheading on-canvas vertically: y={sy} h={sh}");
         assert!(sw > 0 && sx >= 0 && sx + sw <= 1200, "subheading ink on-canvas: x={sx} w={sw}");
-        // The actual output pixels, exported for inspection during qualification.
+        // Export actual output pixels and verify a temporary PNG write/readback.
         let png = fotodit_io::export(&app.session.active().unwrap().doc, "png", &fotodit_io::ExportOptions::default()).unwrap();
         assert!(png.bytes.starts_with(&[0x89, b'P', b'N', b'G']), "a real PNG render of the poster");
-        std::fs::write("/tmp/poster_render.png", &png.bytes).unwrap();
+        let output = tempfile::tempdir().unwrap();
+        let path = output.path().join("poster_render.png");
+        std::fs::write(&path, &png.bytes).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), png.bytes, "rendered PNG is written intact");
     }
 
     #[test]
@@ -354,7 +357,10 @@ mod tests {
             assert!(x >= 0 && y >= 0 && x+w <= 1200 && y+h <= 1600, "wrapped text must stay on canvas: {layer}");
         }
         let png = fotodit_io::export(&app.session.active().unwrap().doc, "png", &fotodit_io::ExportOptions::default()).unwrap();
-        std::fs::write("/tmp/wedding_render.png", &png.bytes).unwrap();
+        let output = tempfile::tempdir().unwrap();
+        let path = output.path().join("wedding_render.png");
+        std::fs::write(&path, &png.bytes).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), png.bytes, "rendered PNG is written intact");
     }
 
     /// The original failing workflow at outcome level: "Enhance image quality" on a plain

@@ -260,7 +260,7 @@ pub(crate) fn assistant_panel(app: &mut FotoditApp, ui: &mut egui::Ui) {
 fn paint_pin(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
     let s = rect.width() / 20.0;
     let c = rect.center();
-    let axis = egui::vec2(-0.7071, 0.7071); // down-left along the pin's shaft
+    let axis = egui::vec2(-std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::FRAC_1_SQRT_2); // down-left along the pin's shaft
     let head = c - axis * 3.6 * s;
     let tip = c + axis * 6.2 * s;
     let perp = egui::vec2(-axis.y, axis.x);
@@ -292,13 +292,13 @@ fn panel_chrome(ui: &mut egui::Ui, state: &mut AssistantState, mut app: Option<&
     egui::Frame::NONE
         .inner_margin(egui::Margin { left: 14, right: 14, top: 14, bottom: 10 })
         .show(ui, |ui| {
-            header(ui, state, app.as_mut().map(|a| &mut **a));
+            header(ui, state, app.as_deref_mut());
             ui.add_space(10.0);
             tabs(ui, state);
             ui.add_space(14.0);
             match state.tab {
-                Tab::Chat => chat_body(ui, state, bottom_inset, app.as_mut().map(|a| &mut **a)),
-                Tab::QuickActions => quick_actions_body(ui, state, app.as_mut().map(|a| &mut **a)),
+                Tab::Chat => chat_body(ui, state, bottom_inset, app.as_deref_mut()),
+                Tab::QuickActions => quick_actions_body(ui, state, app.as_deref_mut()),
             }
         });
 }
@@ -328,10 +328,10 @@ fn header(ui: &mut egui::Ui, state: &mut AssistantState, app: Option<&mut Fotodi
                 ui.painter().rect_filled(chev_rect, 6.0, CHIP_BG_HOVER);
             }
             crate::icons::paint(ui, chev_rect, "chevron-down", 14.0, TEXT_SOFT);
-            if chev.clicked() {
-                if let Some(app) = app {
-                    app.ui.panels.assistant = false;
-                }
+            if chev.clicked()
+                && let Some(app) = app
+            {
+                app.ui.panels.assistant = false;
             }
         });
     });
@@ -350,9 +350,9 @@ fn tabs(ui: &mut egui::Ui, state: &mut AssistantState) {
     let lead = ((width - pair) / 2.0).max(0.0);
     ui.horizontal(|ui| {
         ui.add_space(lead);
-        tab_label(ui, state, Tab::Chat, &tl!("Chat"), chat_w + 18.0);
+        tab_label(ui, state, Tab::Chat, tl!("Chat"), chat_w + 18.0);
         ui.add_space(26.0);
-        tab_label(ui, state, Tab::QuickActions, &tl!("Quick Actions"), qa_w + 18.0);
+        tab_label(ui, state, Tab::QuickActions, tl!("Quick Actions"), qa_w + 18.0);
     });
     let line = ui.cursor();
     let band = egui::Rect::from_min_size(egui::pos2(line.min.x, line.min.y - 7.0), egui::vec2(width, 1.0));
@@ -401,11 +401,11 @@ fn chip(ui: &mut egui::Ui, icon: &str, label: &str) -> egui::Response {
 fn quick_actions_body(ui: &mut egui::Ui, state: &mut AssistantState, mut app: Option<&mut FotoditApp>) {
     for &(icon, action) in QUICK_ACTIONS {
         if chip(ui, icon, action).clicked() {
-            send(app.as_mut().map(|a| &mut **a), ui.ctx(), state, action.to_string());
+            send(app.as_deref_mut(), ui.ctx(), state, action.to_string());
         }
         ui.add_space(6.0);
     }
-    if chip(ui, "ellipsis", &tl!("More options...")).clicked() {
+    if chip(ui, "ellipsis", tl!("More options...")).clicked() {
         state.tab = Tab::Chat;
     }
 }
@@ -423,11 +423,11 @@ fn chat_body(ui: &mut egui::Ui, state: &mut AssistantState, bottom_inset: f32, m
                 ui.add_space(18.0);
                 for &(icon, action) in QUICK_ACTIONS {
                     if chip(ui, icon, action).clicked() {
-                        send(app.as_mut().map(|a| &mut **a), ui.ctx(), state, action.to_string());
+                        send(app.as_deref_mut(), ui.ctx(), state, action.to_string());
                     }
                     ui.add_space(6.0);
                 }
-                if chip(ui, "ellipsis", &tl!("More options...")).clicked() {
+                if chip(ui, "ellipsis", tl!("More options...")).clicked() {
                     state.tab = Tab::QuickActions;
                 }
             }
@@ -438,7 +438,7 @@ fn chat_body(ui: &mut egui::Ui, state: &mut AssistantState, bottom_inset: f32, m
         });
 
     ui.add_space(8.0);
-    input_row(ui, state, app.as_mut().map(|a| &mut **a));
+    input_row(ui, state, app.as_deref_mut());
     ui.add_space((bottom_inset - 18.0).max(8.0));
 }
 

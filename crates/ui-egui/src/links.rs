@@ -44,10 +44,7 @@ pub fn link_row(_app: &mut FotoditApp, _ui: &mut egui::Ui) {}
 mod tests {
     use super::*;
 
-    #[test]
-    fn links_open_through_the_platform_service() {
-        // Issue #14: links (Help menu, Discord button, start-page links) must open in the browser.
-        // They route through the `open_url` service rather than the unreliable `ctx.open_url`.
+    fn recording_app() -> (FotoditApp, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
         use std::sync::{Arc, Mutex};
         let opened: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let rec = opened.clone();
@@ -58,53 +55,46 @@ mod tests {
             })),
             ..Default::default()
         };
-        let mut app = FotoditApp::new(fotodit_engine::Session::new(), services);
+        (FotoditApp::new(fotodit_engine::Session::new(), services), opened)
+    }
+
+    #[test]
+    fn links_open_through_the_platform_service() {
+        // Issue #14: links must open in the browser through the `open_url` service rather than
+        // the unreliable `ctx.open_url`. The branded upstream links are removed, so the service
+        // path is checked with an arbitrary URL, and every remaining link command (none today).
+        let (mut app, opened) = recording_app();
         let ctx = egui::Context::default();
-        // Every Help-menu link id reaches the service with its URL.
         for (id, url) in COMMANDS {
             crate::menus::invoke(&mut app, &ctx, id, json!({})).unwrap();
             assert_eq!(opened.lock().unwrap().last().map(String::as_str), Some(*url), "{id}");
         }
-        // The direct open() helper (Discord button / start-page links) also uses it.
-        open(&mut app, &ctx, DISCORD);
-        assert_eq!(opened.lock().unwrap().last().map(String::as_str), Some(DISCORD));
+        open(&mut app, &ctx, "https://example.com/docs");
+        assert_eq!(opened.lock().unwrap().last().map(String::as_str), Some("https://example.com/docs"));
+        assert_eq!(app.ui.status, "Opened https://example.com/docs");
     }
 
     #[test]
-    fn help_menu_lists_links_then_separator_then_system_info_and_about() {
+    fn help_menu_lists_updates_then_separator_then_system_info_and_about() {
         let app = FotoditApp::new(fotodit_engine::Session::new(), Default::default());
         let help: Vec<String> = crate::menus::menu_items(&app).into_iter().filter(|i| i.path == ["Help"]).map(|i| i.id).collect();
-        assert_eq!(
-            help,
-            [
-                "help.discord",
-                "help.website",
-                "help.plyraWebsite",
-                "help.github",
-                "help.reportIssue",
-                "help.checkForUpdates",
-                "---",
-                "help.systemInfo",
-                "help.about"
-            ]
-        );
+        assert_eq!(help, ["help.checkForUpdates", "---", "help.systemInfo", "help.about"]);
         for (id, _) in COMMANDS {
             assert!(crate::menus::is_live(id) && crate::menus::is_enabled(&app, id), "{id}");
         }
     }
 
     #[test]
-    fn link_commands_open_their_urls() {
-        let mut app = FotoditApp::new(fotodit_engine::Session::new(), Default::default());
-        let ctx = egui::Context::default();
-        for (id, url) in [
-            ("help.discord", ""),
-            ("help.website", ""),
-            ("help.github", "https://github.com/storytold/fotodit"),
-        ] {
-            let r = crate::menus::invoke(&mut app, &ctx, id, serde_json::json!({})).unwrap();
-            assert_eq!(r["url"], url);
-            assert_eq!(app.ui.status, format!("Opened {url}"));
+    fn removed_links_are_empty_and_opening_them_does_nothing() {
+        assert!(COMMANDS.is_empty());
+        for url in [DISCORD, PLYRA_WEBSITE, APP_PAGE, TUTORIALS, GITHUB, ISSUES] {
+            assert!(url.is_empty());
         }
+        let (mut app, opened) = recording_app();
+        let ctx = egui::Context::default();
+        let status = app.ui.status.clone();
+        assert_eq!(open(&mut app, &ctx, ""), json!({"url": ""}));
+        assert!(opened.lock().unwrap().is_empty(), "an empty URL never reaches the service");
+        assert_eq!(app.ui.status, status);
     }
 }

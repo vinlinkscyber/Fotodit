@@ -305,6 +305,8 @@ pub(super) fn layers(app: &mut FotoditApp, ui: &mut egui::Ui) {
             // The bottom of everything drawn: the last layer's effect and Smart Filter rows sit
             // under its own row (#8764).
             let rows_bottom = ui.min_rect().bottom();
+            #[cfg(test)]
+            ctx.data_mut(|data| data.insert_temp(egui::Id::unique("qualification-layer-rows"), (ui.clip_rect(), ui.max_rect(), rows_bottom, drawn.clone())));
             // #1721: the list takes drops everywhere, not only on a row (Photoshop): the space
             // between two rows lands above the lower one, the empty space below the bottom-most
             // row below it. Both copy with ⌥ held, move without.
