@@ -193,7 +193,7 @@ pub(crate) fn sync_appearance(app: &mut FotoditApp, ctx: &egui::Context) {
     ctx.set_theme(egui::ThemePreference::System);
     // The native service also covers Wayland sessions where winit has no system theme.
     let selected = selected_theme(&app.session.prefs().interface, system_theme(app, ctx));
-    if app.ui.theme != selected {
+    if app.ui.theme != selected || Tokens::get(ctx).kind != selected {
         app.apply_theme(ctx, selected);
     }
 }

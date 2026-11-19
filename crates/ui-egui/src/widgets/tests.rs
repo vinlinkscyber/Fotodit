@@ -237,6 +237,42 @@ fn panel_footer_buttons_are_not_clipped_by_the_body() {
     assert!(clip.contains_rect(button), "the whole button is inside the clip: {button:?} not in {clip:?}");
 }
 
+/// The margin overrun belongs to this frame, not the group or status bar below it.
+#[test]
+fn panel_footer_clip_stays_in_its_original_owner_when_content_overflows() {
+    for theme in [crate::theme::ThemeKind::Studio, crate::theme::ThemeKind::ProNavy] {
+        for overflow in [0.0, 40.0] {
+            let mut h = Harness::new_ui_state(
+                move |ui, state: &mut Option<(egui::Rect, egui::Rect, egui::Rect)>| {
+                    let margin = super::body_margin(super::Tokens::get(ui.ctx()).pro);
+                    let height = super::footer_height(ui) + margin.top as f32 + margin.bottom as f32;
+                    let owner = egui::Rect::from_min_size(ui.max_rect().min, egui::vec2(220.0, height));
+                    let mut owner_ui = ui.new_child(egui::UiBuilder::new().max_rect(owner));
+                    owner_ui.set_clip_rect(owner);
+                    egui::Frame::NONE.inner_margin(margin).show(&mut owner_ui, |body| {
+                        body.set_clip_rect(body.max_rect());
+                        body.add_space(overflow);
+                        super::panel_footer(body, |bar| {
+                            let button = crate::icons::button(bar, "square", 26.0, false, "Button");
+                            *state = Some((button.rect, bar.clip_rect(), owner));
+                        });
+                    });
+                },
+                None,
+            );
+            crate::FotoditApp::setup_context(&h.ctx, theme);
+            h.run();
+            let (button, clip, owner) = h.state().expect("footer button was drawn");
+            assert!(clip.bottom() <= owner.bottom(), "footer escaped its owning frame: {clip:?} vs {owner:?}");
+            if overflow == 0.0 {
+                assert!(clip.contains_rect(button), "fitting footer button was clipped: {button:?} vs {clip:?}");
+            } else {
+                assert!(button.bottom() > owner.bottom(), "fixture did not overflow: {button:?} vs {owner:?}");
+            }
+        }
+    }
+}
+
 /// #3789: a plain text field is one boxed, outline-free input whose text-selection colour stays
 /// local, so it isn't recoloured for the rest of the frame (selected rows, slider trails).
 #[test]

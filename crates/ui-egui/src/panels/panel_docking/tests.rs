@@ -143,15 +143,9 @@ fn drag(h: &mut Harness<'static, FotoditApp>, from: Pos2, to: Pos2) {
     h.run_steps(3);
 }
 
-/// The canvas's rect: from the area's start to the dock column's inner edge.
+/// The actual protected canvas body, excluding the fixed Assistant rail and dock column.
 fn canvas_rect(h: &Harness<'static, FotoditApp>) -> egui::Rect {
-    let hits = craft_ui::docking::DockArea::<String>::hit_rects(&h.ctx, area_id());
-    let divider = hits
-        .iter()
-        .find(|(hit, _)| matches!(hit, craft_ui::docking::Hit::Divider(craft_ui::docking::Divider::Column(_))))
-        .map(|(_, rect)| *rect)
-        .expect("the dock column's edge is drawn");
-    egui::Rect::from_min_max(egui::pos2(0.0, divider.top()), egui::pos2(divider.left(), divider.bottom()))
+    last_bodies(&h.ctx).into_iter().find(|(id, _)| id == CANVAS).expect("the canvas body is drawn").1
 }
 
 /// The panels of the root split's canvas side, which a drop beside the canvas splits.

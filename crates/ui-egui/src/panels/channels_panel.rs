@@ -343,8 +343,10 @@ pub fn show(app: &mut FotoditApp, ui: &mut egui::Ui) {
     let mut actions: Vec<(String, Value)> = Vec::new();
     // The buttons sit in a footer at the panel's bottom, like Photoshop's.
     let footer = widgets::footer_height(ui) + ui.spacing().item_spacing.y;
-    let fill = ui.available_height() > footer + 60.0;
-    let rows_h = if fill { ui.available_height() - footer } else { f32::INFINITY };
+    // A finite panel must reserve its footer even when the remaining list is short.
+    // Keep content-sized behavior only for an actually unbounded parent.
+    let fill = ui.available_height().is_finite();
+    let rows_h = if fill { (ui.available_height() - footer).max(0.0) } else { f32::INFINITY };
     let mut mask_click = None;
     let mut drawn = Vec::new();
     // An alpha or spot channel dragged over the rows reorders like Photoshop's (#9163): a line marks

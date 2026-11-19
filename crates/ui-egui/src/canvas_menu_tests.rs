@@ -200,7 +200,15 @@ fn secondary_taps_keep_other_canvas_tool_menus_open() {
             let mut h = harness(tool, true, scale);
             let center = fractional_point(&h, scale);
             let pasteboard = tool != Tool::Pen;
-            let at = if pasteboard { center + vec2(240.0, 0.0) } else { center };
+            let at = if pasteboard {
+                let canvas = crate::rulers::content_rect(h.state(), h.state().last_canvas_rect);
+                let point = pos2(((canvas.right() - 8.0) * scale).floor() / scale + 0.75 / scale, center.y);
+                let doc = crate::canvas::doc_point_at(h.state(), point).expect("pasteboard point is inside the canvas, not the dock");
+                assert!(crate::canvas_tool_menu::pasteboard_at(h.state(), tool, doc), "fixture point is outside the image: {point:?}, {doc:?}");
+                point
+            } else {
+                center
+            };
             for _ in 0..3 {
                 tap(&mut h, at, Modifiers::NONE, true);
                 let menu = h.state().ui.canvas_tool_menu.as_ref().expect("Pen or pasteboard menu stays open");

@@ -27,7 +27,13 @@ pub(super) fn history(app: &mut FotoditApp, ui: &mut egui::Ui) {
     let all = entries.iter().map(|e| (e.clone(), false)).chain(redo.iter().map(|e| (e.clone(), true)));
     // The dock gives History a fixed height: the rows scroll above the footer.
     let footer = if t.pro { widgets::footer_height(ui) + ui.spacing().item_spacing.y } else { 0.0 };
-    let max_h = (ui.available_height() - footer).max(40.0);
+    // Pro History owns a footer. Override egui's 64-point scroll minimum as well as
+    // its maximum so a squeezed finite owner can still reserve the footer. Studio
+    // has no footer and keeps its existing finite-owner list sizing.
+    let bounded_owner = ui.available_height().is_finite();
+    let bounded_footer = t.pro && bounded_owner;
+    let max_h = if bounded_footer { (ui.available_height() - footer).max(0.0) } else { (ui.available_height() - footer).max(40.0) };
+    let min_h = if bounded_footer { max_h } else { 64.0 };
     // Follow the current state when the history moves (a new step, Undo, a state row) or another
     // document comes up (`spot`), scrolling only if its row is hidden (#5909). Other changes (a
     // layer click, a channel eye) and a selected snapshot leave the list where the user put it.
@@ -38,7 +44,9 @@ pub(super) fn history(app: &mut FotoditApp, ui: &mut egui::Ui) {
         moved
     });
     let follow = moved && selected_snap.is_none();
-    egui::ScrollArea::vertical().id_salt("history-rows").max_height(max_h).auto_shrink([false, false]).show(ui, |ui| {
+    // An unbounded owner has no bottom to fill: size to the actual state/snapshot rows.
+    // Finite Studio owners retain the previous sizing and no-footer behavior.
+    egui::ScrollArea::vertical().id_salt("history-rows").max_height(max_h).min_scrolled_height(min_h).auto_shrink([false, !bounded_owner]).show(ui, |ui| {
         // Snapshots head the list and scroll with the states, so many of them never push the
         // footer out of a short dock.
         snap_cmd = snapshot_rows(app, ui, selected_snap);

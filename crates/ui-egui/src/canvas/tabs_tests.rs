@@ -14,7 +14,9 @@ use super::{TabStrip, pro_tab_title};
 
 /// A real app window with `docs` documents named "ch1-pNN.png".
 fn harness(docs: usize, theme: ThemeKind) -> Harness<'static, FotoditApp> {
-    let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).with_max_steps(64).build_eframe(move |cc| {
+    // Leave room for three natural-width tabs alongside the fixed Assistant and dock.
+    // Fourteen documents still overflow, preserving the crowded-strip assertions.
+    let mut h = Harness::builder().with_size(vec2(1600.0, 700.0)).with_max_steps(64).build_eframe(move |cc| {
         FotoditApp::setup_context(&cc.egui_ctx, theme);
         let mut app = FotoditApp::new(fotodit_engine::Session::new(), crate::Services::default());
         // The theme is an interface preference, applied on the first frame: set the preference.
@@ -257,5 +259,37 @@ fn the_overflow_button_is_pinned_to_the_right_end() {
         let ((a, last_a), (b, last_b)) = (at(14), at(23));
         assert!((last_a - last_b).abs() > 1.0, "{theme:?}: the fits must end at different places to tell");
         assert_eq!(a, b, "{theme:?}: the » button doesn't follow the last tab");
+    }
+}
+
+/// The fit fixture is wider, but the shipped side panels must still coexist at 1000 points.
+#[test]
+fn default_panels_leave_the_active_document_and_overflow_reachable_at_1000pt() {
+    let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).with_max_steps(64).build_eframe(|cc| {
+        FotoditApp::setup_context(&cc.egui_ctx, Default::default());
+        let mut app = FotoditApp::new(fotodit_engine::Session::new(), crate::Services::default());
+        for n in 0..3 {
+            app.run("file.new", json!({"width": 400, "height": 300, "name": format!("default-{n}.png")})).unwrap();
+        }
+        app
+    });
+    h.run_steps(8);
+    assert!(h.state().ui.panels.assistant && h.state().ui.panels.dock, "default panels stay open");
+    let assistant = egui::PanelState::load(&h.ctx, crate::panels::panel_state_id(&h.ctx, "assistant_rail")).expect("Assistant was allocated").outer_rect;
+    let body = crate::panel_docking::probe::panel_rect(&h.ctx, "canvas").expect("canvas body");
+    assert!(body.is_positive() && body.left() >= assistant.right(), "Assistant and canvas overlap: {assistant:?} vs {body:?}");
+    for (_, other) in crate::panel_docking::last_bodies(&h.ctx).into_iter().filter(|(id, _)| id != "canvas") {
+        assert!(!body.intersects(other), "dock and canvas overlap: {body:?} vs {other:?}");
+    }
+    assert!(body.contains_rect(h.state().last_canvas_rect), "document viewport escaped canvas owner");
+    for pick in 0..3 {
+        h.state_mut().session.set_active(pick);
+        h.run_steps(3);
+        let s = strip(&h);
+        let active = s.tabs.iter().find(|(index, _)| *index == pick).expect("active document tab stays reachable");
+        assert!(s.rect.contains_rect(active.1), "active tab escaped its strip");
+        for document in 0..h.state().session.documents().len() {
+            assert!(s.tabs.iter().any(|(index, _)| *index == document) || has_menu(&h), "document {document} has neither a visible tab nor overflow access");
+        }
     }
 }

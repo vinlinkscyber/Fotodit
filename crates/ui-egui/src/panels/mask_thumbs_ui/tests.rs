@@ -830,6 +830,9 @@ fn a_new_adjustment_layer_brings_properties_to_the_front() {
     let ctx = h.ctx.clone();
     let (req, _rx) = crate::control::ControlRequest::new("ui.set", json!({"dockTabs": {"properties": 1}}));
     crate::control::handle(h.state_mut(), &ctx, &req);
+    // Establish the collapsed precondition after selecting the tab. Selection can expand
+    // a customized docking workspace; the test should not depend on that implementation path.
+    h.state_mut().ui.dock.set_collapsed(crate::dock::Group::Properties, true);
     h.run_steps(2);
     assert!(h.state().ui.dock.is_collapsed(crate::dock::Group::Properties));
     h.state_mut().run("layer.newAdjustmentLayer.curves", json!({})).unwrap();

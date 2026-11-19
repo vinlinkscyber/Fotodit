@@ -671,6 +671,17 @@ fn a_canvas_over_the_texture_budget_draws_its_viewport_pages_on_the_gpu() {
     let Some(mut g) = gpu_app() else { return };
     g.harness.state_mut().run("file.new", json!({"width": 3000, "height": 2000, "background": "#336699"})).expect("new");
     g.harness.run_steps(3);
+    // The damage-area assertions below are for a 200-pixel square at 20% zoom.
+    // Fit-to-window now also accounts for the fixed Assistant rail, so set this fixture's zoom.
+    {
+        let app = g.harness.state_mut();
+        let index = app.session.active_index().expect("active document");
+        let view = app.ui.views.get_mut(index).expect("active view");
+        view.zoom = 0.2;
+        view.fit_pending = false;
+        view.request_zoom_animation(false);
+    }
+    g.harness.run_steps(3);
     assert!(on_gpu_canvas(&g));
     let whole = centre_pixel(&mut g);
     let gpu = g.harness.state().gpu.clone().expect("gpu canvas");

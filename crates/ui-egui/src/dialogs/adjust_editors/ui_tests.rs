@@ -52,6 +52,9 @@ fn app_harness_stepped(kind: &str, mode: &str, depth: u32, step_dt: f32) -> Harn
         app.ui.dock.heights.insert(crate::dock::Group::Properties, 560.0);
         app
     });
+    // Keep a deliberate narrow starting dock for these editor interactions. The product's
+    // current 420-point default makes the graph taller than this test's Properties viewport.
+    crate::panels::request_dock_width(&h.ctx, 290.0);
     h.run_steps(8);
     h
 }
@@ -1072,4 +1075,38 @@ fn selective_color_properties_method_radios_commit() {
     radio(&mut h, "Relative");
     assert!(matches!(layer(&h).1, Adjustment::SelectiveColor { relative: true, .. }));
     assert_eq!(steps(&h), start + 2);
+}
+
+/// The interaction fixtures resize the dock; the actual default editor must remain reachable
+/// by scrolling without sending endpoint keys to the Layers panel below it.
+#[test]
+fn default_width_curves_endpoint_is_reachable_inside_properties() {
+    let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_max_steps(64).build_eframe(|cc| {
+        FotoditApp::setup_context(&cc.egui_ctx, Default::default());
+        let mut session = fotodit_engine::Session::new();
+        session.execute("file.new", json!({"width": 96, "height": 64})).unwrap();
+        session.execute("layer.newAdjustmentLayer.curves", json!({})).unwrap();
+        FotoditApp::new(session, crate::Services::default())
+    });
+    h.run_steps(8);
+    let (id, initial) = layer(&h);
+    assert!(!h.state().ui.dock.heights.contains_key(&crate::dock::Group::Properties), "use the default group allocation");
+    assert!(h.state().ui.panels.assistant && h.state().ui.panels.dock);
+    let mut reached = false;
+    for _ in 0..20 {
+        let owner = crate::panel_docking::probe::panel_rect(&h.ctx, "properties").expect("Properties body");
+        let graph = curves_graph(&h, id);
+        let endpoint = graph.left_bottom() + vec2(1.0, -1.0);
+        if owner.shrink(8.0).contains(endpoint) {
+            click(&mut h, endpoint);
+            h.key_press(egui::Key::Delete);
+            h.run_steps(3);
+            assert_eq!(layer(&h).0, id, "endpoint key must not delete the adjustment layer");
+            assert_eq!(curve_of(&layer(&h).1), curve_of(&initial), "endpoint cannot be deleted");
+            reached = true;
+            break;
+        }
+        wheel_at(&mut h, owner.center(), -2.0, egui::Modifiers::NONE);
+    }
+    assert!(reached, "default-width graph endpoint could not be scrolled into Properties");
 }

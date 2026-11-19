@@ -175,8 +175,10 @@ pub fn paths_panel(app: &mut FotoditApp, ui: &mut egui::Ui) {
     let rename_id = rename_id(&doc);
     // The buttons sit in a footer at the panel's bottom, like Photoshop's.
     let footer = crate::widgets::footer_height(ui) + ui.spacing().item_spacing.y;
-    let fill = ui.available_height() > footer + 60.0;
-    let rows_h = if fill { ui.available_height() - footer } else { f32::INFINITY };
+    // A finite panel must reserve its footer even when the remaining list is short.
+    // Keep content-sized behavior only for an actually unbounded parent.
+    let fill = ui.available_height().is_finite();
+    let rows_h = if fill { (ui.available_height() - footer).max(0.0) } else { f32::INFINITY };
     egui::ScrollArea::vertical().id_salt("path-rows").max_height(rows_h).min_scrolled_height(if fill { rows_h } else { 0.0 }).auto_shrink([false, !fill]).show(
         ui,
         |ui| {

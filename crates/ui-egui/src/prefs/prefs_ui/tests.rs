@@ -326,6 +326,28 @@ fn assert_palette(ctx: &egui::Context, kind: ThemeKind) {
 }
 
 #[test]
+fn replacement_context_receives_the_selected_palette_without_changing_preferences() {
+    let (mut app, store) = app_with_saved(Some(json!({"interface": {"appearanceMode": "dark", "darkTheme": "proMedium"}}).to_string()));
+    let selected = ThemeKind::ProMedium;
+    let original = egui::Context::default();
+    FotoditApp::setup_context(&original, Default::default());
+    sync_appearance(&mut app, &original);
+    assert_eq!(app.ui.theme, selected);
+    let saved = store.lock().unwrap().clone();
+    let revision = app.session.prefs.rev();
+    let interface = app.session.prefs().interface.clone();
+    let fresh = egui::Context::default();
+    FotoditApp::setup_context(&fresh, ThemeKind::ProNavy);
+    assert_ne!(Tokens::get(&fresh).kind, selected, "the replacement context starts with a different palette");
+    sync_appearance(&mut app, &fresh);
+    assert_palette(&fresh, selected);
+    assert_eq!(app.ui.theme, selected);
+    assert_eq!(app.session.prefs().interface, interface);
+    assert_eq!(app.session.prefs.rev(), revision);
+    assert_eq!(*store.lock().unwrap(), saved);
+}
+
+#[test]
 fn auto_appearance_follows_live_changes_without_saving_resolved_palettes() {
     for (dark, light) in [(ThemeKind::ProMedium, ThemeKind::StudioLight), (ThemeKind::SolarizedDark, ThemeKind::Adwaita)] {
         let (mut app, store) = app_with_store();

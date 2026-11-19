@@ -297,8 +297,8 @@ fn panel_chrome(ui: &mut egui::Ui, state: &mut AssistantState, mut app: Option<&
             tabs(ui, state);
             ui.add_space(14.0);
             match state.tab {
-                Tab::Chat => chat_body(ui, state, bottom_inset, app.as_deref_mut()),
-                Tab::QuickActions => quick_actions_body(ui, state, app.as_deref_mut()),
+                Tab::Chat => chat_body(ui, state, bottom_inset, app),
+                Tab::QuickActions => quick_actions_body(ui, state, app),
             }
         });
 }
@@ -438,7 +438,7 @@ fn chat_body(ui: &mut egui::Ui, state: &mut AssistantState, bottom_inset: f32, m
         });
 
     ui.add_space(8.0);
-    input_row(ui, state, app.as_deref_mut());
+    input_row(ui, state, app);
     ui.add_space((bottom_inset - 18.0).max(8.0));
 }
 

@@ -1521,6 +1521,8 @@ fn home_recent_entries_can_be_removed() {
     assert_eq!(listed(&h), ["a.png", "b.psd", "c.tif"]);
     assert!(h.query_by_label("Remove b.psd from Recent").is_none(), "the × shows on the hovered row only");
 
+    h.get_by_label("b.psd").scroll_to_me();
+    h.run_steps(2);
     let before_hover = h.query_all_by_label("b.psd").map(|q| q.rect()).collect::<Vec<_>>();
     h.get_by_label("b.psd").hover();
     h.run_steps(2);
@@ -1530,12 +1532,16 @@ fn home_recent_entries_can_be_removed() {
     assert_eq!(listed(&h), ["a.png", "c.tif"]);
     assert!(h.state().0.session.documents().is_empty(), "the file was not opened");
 
+    h.get_by_label("c.tif").scroll_to_me();
+    h.run_steps(2);
     h.get_by_label("c.tif").click_secondary();
     h.run_steps(2);
     h.get_by_label("Remove from Recent").click();
     h.run_steps(2);
     assert_eq!(listed(&h), ["a.png"]);
 
+    h.get_by_label("a.png").scroll_to_me();
+    h.run_steps(2);
     h.get_by_label("a.png").click_secondary();
     h.run_steps(2);
     h.get_by_label("Clear Recent Files").click();

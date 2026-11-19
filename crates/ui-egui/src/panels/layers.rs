@@ -246,8 +246,11 @@ pub(super) fn layers(app: &mut FotoditApp, ui: &mut egui::Ui) {
     let rows = crate::layer_tree_ui::panel_rows(app, &doc);
     let ctx = ui.ctx().clone();
     let footer = widgets::footer_height(ui) + ui.spacing().item_spacing.y;
-    let fill = ui.available_height() > footer + 60.0;
-    let rows_h = if fill { ui.available_height() - footer } else { f32::INFINITY };
+    // Reserve the footer even when fewer than 60 points remain for rows. Switching a
+    // squeezed dock to an unbounded list consumes the footer's space and pushes it out.
+    // Only an actually unbounded parent uses the content-sized fallback.
+    let fill = ui.available_height().is_finite();
+    let rows_h = if fill { (ui.available_height() - footer).max(0.0) } else { f32::INFINITY };
     egui::ScrollArea::vertical()
         // Keep each document's position independent, even when tab indices change (#5522).
         .id_salt(("layer-rows", doc.id.0))

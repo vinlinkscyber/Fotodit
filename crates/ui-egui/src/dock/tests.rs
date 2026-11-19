@@ -488,6 +488,7 @@ fn app_harness_rows(size: egui::Vec2, theme: ThemeKind, n: usize) -> Harness<'st
     let mut h = Harness::builder().with_size(size).with_max_steps(64).build_eframe(move |cc| {
         FotoditApp::setup_context(&cc.egui_ctx, theme);
         let mut app = FotoditApp::new(fotodit_engine::Session::new(), crate::Services::default());
+        app.run("prefs.set", json!({"path": "interface.theme", "value": theme.id()})).unwrap();
         app.ui.theme = theme;
         app.run("file.new", json!({"width": 200, "height": 150})).unwrap();
         for i in 0..n {
@@ -686,6 +687,7 @@ fn navigator_preview_fills_its_group_and_keeps_aspect() {
             let mut h = Harness::builder().with_size(vec2(1200.0, 1000.0)).with_max_steps(64).build_eframe(move |cc| {
                 FotoditApp::setup_context(&cc.egui_ctx, theme);
                 let mut app = FotoditApp::new(fotodit_engine::Session::new(), crate::Services::default());
+                app.run("prefs.set", json!({"path": "interface.theme", "value": theme.id()})).unwrap();
                 app.ui.theme = theme;
                 app.ui.panels.navigator = true;
                 app.ui.dock.heights.insert(Group::Navigator, tall);
@@ -907,4 +909,205 @@ fn a_workspace_from_a_newer_version_shows_the_default_and_stays_saved() {
     frame(&mut app);
     let docking = &app.session.prefs().panel_layout["docking"];
     assert_eq!(docking["version"], json!(craft_ui::docking::Workspace::<String>::VERSION), "a changed layout replaces it: {docking}");
+}
+
+/// Footer containment alone is insufficient: the real short dock must keep its action usable
+/// above the status bar, with the other default groups and Assistant still present.
+#[test]
+fn short_default_dock_keeps_layer_footer_inside_owner_and_clickable() {
+    use egui_kittest::kittest::Queryable;
+    for height in [900.0, 720.0, 480.0] {
+        let mut h = Harness::builder().with_size(vec2(1280.0, height)).with_max_steps(64).build_eframe(|cc| {
+            FotoditApp::setup_context(&cc.egui_ctx, Default::default());
+            let mut app = FotoditApp::new(fotodit_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width": 200, "height": 150})).unwrap();
+            app
+        });
+        h.run_steps(8);
+        h.query_by_label("Create a new layer").expect("new-layer footer action").scroll_to_me();
+        h.run_steps(6);
+        let owner = probe::panel_rect(&h.ctx, "layers").expect("Layers owner");
+        let status = egui::PanelState::load(&h.ctx, crate::panels::panel_state_id(&h.ctx, "status_bar")).expect("status bar").outer_rect;
+        let button = h.query_by_label("Create a new layer").expect("new-layer footer action").rect();
+        assert!(owner.contains_rect(button), "{height}: footer outside Layers: {button:?} vs {owner:?}");
+        assert!(button.bottom() <= status.top(), "{height}: footer overlaps status bar: {button:?} vs {status:?}");
+        assert!(h.state().ui.panels.assistant && h.state().ui.panels.color && h.state().ui.panels.properties);
+        let before = h.state().session.active().unwrap().doc.layer_count();
+        click(&mut h, button.center());
+        assert_eq!(h.state().session.active().unwrap().doc.layer_count(), before + 1, "{height}: visible footer is not clickable");
+    }
+}
+
+/// A short but otherwise usable Layers body reserves its footer even when fewer than
+/// 60 points remain for rows. Exercise the panel body directly so shared dock allocation
+/// cannot mask the app's row-budget defect.
+#[test]
+fn squeezed_layers_rows_reserve_the_footer_before_content_growth() {
+    use egui_kittest::kittest::Queryable;
+    for (theme, height) in [
+        (ThemeKind::ProNavy, 156.0), (ThemeKind::ProNavy, 180.0), (ThemeKind::ProNavy, 260.0),
+        (ThemeKind::Studio, 220.0), (ThemeKind::Studio, 240.0), (ThemeKind::Studio, 320.0),
+    ] {
+        let (mut app, _, _) = app_with_layers();
+        for i in 0..30 {
+            app.run("layer.new.layer", json!({"name": format!("Budget row {i}")})).unwrap();
+        }
+        app.sync_views();
+        let mut h = Harness::builder().with_size(vec2(500.0, 600.0)).with_max_steps(64).build_ui_state(
+            move |ui, app: &mut FotoditApp| {
+                let owner = Rect::from_min_size(ui.max_rect().min, vec2(420.0, height));
+                let mut owner_ui = ui.new_child(egui::UiBuilder::new().max_rect(owner));
+                owner_ui.set_clip_rect(owner);
+                egui::Frame::NONE.inner_margin(crate::widgets::body_margin(theme.is_pro())).show(&mut owner_ui, |body| {
+                    body.spacing_mut().item_spacing.y = if theme.is_pro() { 0.0 } else { 6.0 };
+                    assert_eq!(body.spacing().item_spacing.y, if theme.is_pro() { 0.0 } else { 6.0 });
+                    crate::panels::dock_body(app, body, Group::Layers, 0);
+                });
+                ui.ctx().data_mut(|data| data.insert_temp(egui::Id::unique("row-budget-owner"), owner));
+            },
+            app,
+        );
+        FotoditApp::setup_context(&h.ctx, theme);
+        let ctx = h.ctx.clone();
+        h.state_mut().set_theme(&ctx, theme);
+        h.run_steps(8);
+        assert_eq!(crate::theme::Tokens::get(&h.ctx).kind, theme);
+        let owner = h.ctx.data(|data| data.get_temp::<Rect>(egui::Id::unique("row-budget-owner"))).unwrap();
+        let (clip, _, _, _) = h.ctx.data(|data| {
+            data.get_temp::<(Rect, Rect, f32, Vec<(fotodit_doc::LayerId, Rect)>)>(egui::Id::unique("qualification-layer-rows"))
+        }).expect("Layers row viewport recorded");
+        let button = h.query_by_label("Create a new layer").expect("new-layer action").rect();
+        assert!(clip.height() > 0.0 && clip.height().is_finite(), "{height}: row viewport must be usable: {clip:?}");
+        assert!(owner.contains_rect(clip), "{height}: rows escaped the owner: {clip:?} vs {owner:?}");
+        assert!(owner.contains_rect(button), "{height}: footer escaped the owner: {button:?} vs {owner:?}");
+        assert!(clip.bottom() <= button.top(), "{height}: rows overlap the footer: {clip:?} vs {button:?}");
+        let before = h.state().session.active().unwrap().doc.layer_count();
+        click(&mut h, button.center());
+        assert_eq!(h.state().session.active().unwrap().doc.layer_count(), before + 1, "{height}: footer action must work");
+    }
+}
+
+/// The other self-scrolling panels must leave their real footer controls inside a short
+/// owner. Lots of rows prevent an auto-shrinking list from hiding an over-allocation.
+#[test]
+fn squeezed_channels_paths_and_pro_history_keep_footer_controls_usable() {
+    use egui_kittest::kittest::Queryable;
+    for theme in [ThemeKind::ProNavy, ThemeKind::Studio] {
+        for (group, tab, action) in [(Group::Layers, 1, "Create new channel"), (Group::Layers, 2, "Create new path"), (Group::History, 0, "Create new snapshot")] {
+            if group == Group::History && !theme.is_pro() {
+                continue; // Studio History has no footer; covered separately below.
+            }
+            for height in [90.0, 112.0, 180.0] {
+                let (mut app, _, _) = app_with_layers();
+                for i in 0..20 {
+                    app.run("channel.new", json!({"name": format!("Budget alpha {i}")})).unwrap();
+                    app.run("path.set", json!({"name": format!("Budget path {i}"), "path": {"subpaths": []}})).unwrap();
+                    app.run("layer.new.layer", json!({"name": format!("Budget layer {i}")})).unwrap();
+                }
+                assert_eq!(app.session.active().unwrap().doc.paths.len(), 20, "empty saved paths are real rows");
+                app.run("history.options", json!({"showNewSnapshotDialogByDefault": false})).unwrap();
+                app.sync_views();
+                let mut h = Harness::builder().with_size(vec2(500.0, 600.0)).with_max_steps(64).build_ui_state(
+                    move |ui, app: &mut FotoditApp| {
+                        let owner = Rect::from_min_size(ui.max_rect().min, vec2(420.0, height));
+                        let mut owner_ui = ui.new_child(egui::UiBuilder::new().max_rect(owner));
+                        owner_ui.set_clip_rect(owner);
+                        egui::Frame::NONE.inner_margin(crate::widgets::body_margin(theme.is_pro())).show(&mut owner_ui, |body| {
+                            body.spacing_mut().item_spacing.y = if theme.is_pro() { 0.0 } else { 6.0 };
+                            crate::panels::dock_body(app, body, group, tab);
+                        });
+                        ui.ctx().data_mut(|data| data.insert_temp(egui::Id::unique("sibling-budget-owner"), owner));
+                    },
+                    app,
+                );
+                FotoditApp::setup_context(&h.ctx, theme);
+                let ctx = h.ctx.clone();
+                h.state_mut().set_theme(&ctx, theme);
+                h.run_steps(8);
+                assert_eq!(crate::theme::Tokens::get(&h.ctx).kind, theme);
+                let owner = h.ctx.data(|data| data.get_temp::<Rect>(egui::Id::unique("sibling-budget-owner"))).unwrap();
+                let button = h.query_by_label(action).expect("footer action").rect();
+                assert!(owner.contains_rect(button), "{theme:?} {group:?}/{tab} {height}: footer {button:?} outside {owner:?}");
+                h.hover_at(owner.center());
+                h.event(egui::Event::MouseWheel {
+                    source: egui::MouseWheelSource::Unknown, unit: egui::MouseWheelUnit::Point,
+                    delta: vec2(0.0, -200.0), phase: egui::TouchPhase::Move, modifiers: Modifiers::NONE,
+                });
+                h.run_steps(4);
+                assert_eq!(h.query_by_label(action).expect("footer after scroll").rect(), button, "{theme:?} {group:?}/{tab} {height}: scrolling moved the footer");
+                let count = |app: &FotoditApp| {
+                    let st = app.session.active().unwrap();
+                    match (group, tab) {
+                        (Group::Layers, 1) => st.doc.channels.len(),
+                        (Group::Layers, 2) => st.doc.paths.len(),
+                        _ => st.snapshots.len(),
+                    }
+                };
+                let before = count(h.state());
+                click(&mut h, button.center());
+                assert_eq!(count(h.state()), before + 1, "{theme:?} {group:?}/{tab} {height}: visible footer action did not work");
+            }
+        }
+    }
+}
+
+/// Studio History intentionally has no bottom toolbar. Keep its existing list behavior
+/// separate from the Pro-only footer reservation, including its normal 6-point row gaps.
+#[test]
+fn studio_history_keeps_no_footer_and_state_rows_reachable() {
+    use egui_kittest::kittest::Queryable;
+    let (mut app, _, _) = app_with_layers();
+    for _ in 0..20 {
+        app.run("layer.new.layer", json!({})).unwrap();
+    }
+    assert_eq!(app.session.active().unwrap().history.entries().last().map(String::as_str), Some("New Layer"), "history state label is separate from the generated layer name");
+    let mut h = Harness::builder().with_size(vec2(420.0, 180.0)).with_max_steps(64).build_ui_state(
+        |ui, app: &mut FotoditApp| {
+            ui.spacing_mut().item_spacing.y = 6.0;
+            crate::panels::dock_body(app, ui, Group::History, 0);
+        },
+        app,
+    );
+    FotoditApp::setup_context(&h.ctx, ThemeKind::Studio);
+    let ctx = h.ctx.clone();
+    h.state_mut().set_theme(&ctx, ThemeKind::Studio);
+    h.run_steps(8);
+    assert_eq!(crate::theme::Tokens::get(&h.ctx).kind, ThemeKind::Studio);
+    assert!(h.query_by_label("Create new snapshot").is_none(), "Studio History must not acquire a Pro footer");
+    let current = h.query_all_by_label("New Layer").last().expect("current state row").rect();
+    assert!(h.ctx.input(|i| i.viewport_rect()).contains_rect(current), "current row must remain reachable: {current:?}");
+}
+
+/// A genuinely unbounded parent is not a normal nested ScrollArea in this egui revision:
+/// build an infinite child explicitly and require content-sized, finite output. History's
+/// former unbounded auto_shrink=false path permits nonfinite geometry in this case.
+#[test]
+fn self_scrolling_panel_bodies_under_an_unbounded_parent_stay_content_sized() {
+    for theme in [ThemeKind::ProNavy, ThemeKind::Studio] {
+        for (group, tab) in [(Group::Layers, 0), (Group::Layers, 1), (Group::Layers, 2), (Group::History, 0)] {
+            let (mut app, _, _) = app_with_layers();
+            for i in 0..4 {
+                app.run("channel.new", json!({"name": format!("Unbounded alpha {i}")})).unwrap();
+                app.run("path.set", json!({"name": format!("Unbounded path {i}"), "path": {"subpaths": []}})).unwrap();
+            }
+            app.sync_views();
+            let mut h = Harness::builder().with_size(vec2(500.0, 800.0)).with_max_steps(64).build_ui_state(
+                move |ui, app: &mut FotoditApp| {
+                    let rect = Rect::from_min_max(ui.max_rect().min, egui::pos2(ui.max_rect().left() + 420.0, f32::INFINITY));
+                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+                    child.spacing_mut().item_spacing.y = if theme.is_pro() { 0.0 } else { 6.0 };
+                    assert_eq!(child.available_height(), f32::INFINITY, "fixture must actually select the unbounded branch");
+                    crate::panels::dock_body(app, &mut child, group, tab);
+                    let bounds = child.min_rect();
+                    assert!(bounds.is_finite() && bounds.height() > 0.0, "{theme:?} {group:?}/{tab}: unbounded parent produced nonfinite or empty geometry: {bounds:?}");
+                },
+                app,
+            );
+            FotoditApp::setup_context(&h.ctx, theme);
+            let ctx = h.ctx.clone();
+            h.state_mut().set_theme(&ctx, theme);
+            h.run_steps(8);
+            assert_eq!(crate::theme::Tokens::get(&h.ctx).kind, theme);
+        }
+    }
 }

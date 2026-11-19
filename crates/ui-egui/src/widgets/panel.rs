@@ -70,6 +70,11 @@ pub fn footer_height(ui: &Ui) -> f32 {
 pub fn panel_footer<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     let t = Tokens::get(ui.ctx());
     let m = body_margin(t.pro);
+    // Ui::max_rect expands as content is allocated. The stack retains the original body
+    // bounds, so an overflowing footer cannot enlarge its own clipping allowance.
+    let body_bottom = ui.stack().max_rect.bottom().min(ui.clip_rect().bottom());
+    let outer_bottom = body_bottom + m.bottom as f32;
+    let owner_bottom = ui.stack().parent.as_ref().map_or(outer_bottom, |parent| parent.max_rect.bottom().min(outer_bottom));
     let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), footer_height(ui)), Sense::hover());
     let y = r.top() + 0.5;
     ui.painter().line_segment([pos2(r.left() - m.left as f32, y), pos2(r.right() + m.right as f32, y)], Stroke::new(1.0, t.separator));
@@ -77,11 +82,10 @@ pub fn panel_footer<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     let mut bar_ui = ui.new_child(egui::UiBuilder::new().max_rect(bar).layout(egui::Layout::right_to_left(egui::Align::Center)));
     // The bar runs on over the body's bottom margin, past where the body's own clip ends: without
     // this its buttons were cut off there, a 26 px hover highlight drawn about 21 px tall.
-    // The union is capped at the body's own bottom edge: when a squeezed group leaves the footer
-    // allocated past the body (short dock columns), an uncapped union lets the bar paint into the
-    // status bar below (#short-height dock overlap).
+    // Cap at the original body plus its bottom margin, the owning frame's outer edge.
+    // Do not read the expanded max_rect after allocation when the group is squeezed.
     let mut clip = bar_ui.clip_rect().union(bar);
-    clip.max.y = clip.max.y.min(ui.max_rect().bottom());
+    clip.max.y = clip.max.y.min(owner_bottom);
     bar_ui.set_clip_rect(clip);
     bar_ui.spacing_mut().item_spacing.x = 2.0;
     add(&mut bar_ui)
