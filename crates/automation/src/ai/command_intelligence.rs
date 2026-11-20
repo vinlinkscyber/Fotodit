@@ -182,6 +182,13 @@ impl CommandCatalog {
                 description: "Duplicate a layer in the document".into(),
             },
             CommandCapability {
+                id: "edit.transform".into(),
+                label: "Free Transform".into(),
+                category: "Layer".into(),
+                params_schema: r##"{"layer": id, "dx": px?, "dy": px?, "scaleX": %?, "scaleY": %?, "rotate": deg?, "reference": "center|topLeft|top|topRight|left|right|bottomLeft|bottom|bottomRight"="center", "interpolation": "bicubic|bilinear|nearest|bicubicSharper|bicubicSmoother|bicubicAutomatic"="bicubic"}"##.into(),
+                description: "Move, scale or rotate a layer; type, shape and smart layers transform as a whole and stay editable".into(),
+            },
+            CommandCapability {
                 id: "filter.blur.gaussianBlur".into(),
                 label: "Gaussian Blur…".into(),
                 category: "Filter".into(),

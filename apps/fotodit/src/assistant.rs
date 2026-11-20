@@ -1023,6 +1023,91 @@ mod tests {
         (FotoditApp::new(fotodit_engine::Session::new(), services), calls, bodies)
     }
 
+    /// Records every request body; answers planning bodies with one fixed
+    /// plan and review bodies from a verdict queue. Never touches the network.
+    struct SymbolicPlanTransport {
+        bodies: std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+        plan: serde_json::Value,
+        verdicts: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<serde_json::Value>>>,
+    }
+    impl fotodit_automation::ai::HttpTransport for SymbolicPlanTransport {
+        fn execute_json(&self, method: &str, url: &str, _headers: &[(&str, &str)], body: Option<&serde_json::Value>,
+            _timeout: std::time::Duration) -> Result<(u16, serde_json::Value), fotodit_automation::ai::AiError> {
+            assert_eq!(method, "POST");
+            assert!(url.starts_with("https://generativelanguage.googleapis.com/"));
+            let body = body.expect("fixture requests carry a body").clone();
+            let instruction = body.pointer("/contents/0/parts/0/text").and_then(serde_json::Value::as_str).unwrap_or("").to_string();
+            self.bodies.lock().unwrap().push(body);
+            let payload = if instruction.contains("reviewing the result of an edit session") {
+                self.verdicts.lock().unwrap().pop_front()
+                    .unwrap_or_else(|| serde_json::json!({"satisfied": true, "critique": "", "corrective_steps": []}))
+            } else {
+                self.plan.clone()
+            };
+            Ok((200, serde_json::json!({"candidates":[{"content":{"parts":[{"text":payload.to_string()}]}}]})))
+        }
+        fn fetch_raw_bytes(&self, _url: &str, _headers: &[(&str, &str)], _timeout: std::time::Duration)
+            -> Result<(u16, Vec<u8>), fotodit_automation::ai::AiError> {
+            panic!("chat editing must not fetch images")
+        }
+    }
+
+    fn symbolic_fixture(plan: serde_json::Value, verdicts: Vec<serde_json::Value>)
+        -> (FotoditApp, std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>) {
+        use fotodit_automation::ai::{AiProviderBridge, CommandCatalog, ProviderConfig, ProviderId};
+        let bodies = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let verdicts = std::sync::Arc::new(std::sync::Mutex::new(verdicts.into_iter().collect::<std::collections::VecDeque<_>>()));
+        let (factory_bodies, factory_verdicts) = (bodies.clone(), verdicts.clone());
+        let mut assistant = GuiAssistant::new();
+        assistant.identity = |_| Ok([7; 32]);
+        assistant.planner_factory = Box::new(move |slot| {
+            assert_eq!(slot, "gemini");
+            let config = ProviderConfig { gemini_api_key: Some("fixture-not-a-real-key".into()), ..Default::default() };
+            let bridge = AiProviderBridge::with_transport(config, CommandCatalog::new(), Box::new(SymbolicPlanTransport {
+                bodies: factory_bodies.clone(), plan: plan.clone(), verdicts: factory_verdicts.clone(),
+            }));
+            Ok((SelectedPlanner { provider: ProviderId::Gemini, bridge }, [7; 32]))
+        });
+        let mut services = Services::default();
+        services.assistant_backend = Some(Box::new(assistant));
+        (FotoditApp::new(fotodit_engine::Session::new(), services), bodies)
+    }
+
+    #[test]
+    fn visual_loop_applies_intra_plan_references_and_reviews_the_refreshed_scene() {
+        let plan = serde_json::json!({"title":"t","rationale":"r","steps":[
+            {"command":"type.create","params":{"x":4,"y":16,"text":"Hi","size":14}},
+            {"command":"type.setStyle","params":{"layer":{"$step":1},"size":30}},
+            {"command":"edit.transform","params":{"layer":{"$step":1},"dx":3,"dy":2}}
+        ]});
+        let (mut app, bodies) = symbolic_fixture(plan, vec![serde_json::json!({"satisfied": true, "critique": "", "corrective_steps": []})]);
+        let ctx = egui::Context::default();
+        app.session.execute("file.new", serde_json::json!({"width":64,"height":64})).unwrap();
+        app.ai_providers.editing_consent_mut().request("gemini");
+        app.ai_providers.editing_consent_mut().confirm_identity([7; 32]);
+        app.ai_providers.editing_consent_mut().set_visual(true);
+        let initial = fotodit_ui_egui::panels::assistant::submit(&mut app, &ctx, "add the title Hi and make it bigger");
+        assert!(initial.contains("with the document image attached"), "{initial}");
+        let first = await_plan(&mut app, &ctx);
+        assert!(first.contains("Asking Gemini to check the result image"), "{first}");
+        let second = await_plan(&mut app, &ctx);
+        assert!(second.contains("reported the request satisfied"), "{second}");
+        // The plan's create-then-style-then-move chain ran against the real id.
+        let doc = fotodit_engine::inspect::document(app.session.active().unwrap());
+        let layers = doc["layers"].as_array().expect("inspection lists layers");
+        assert!(layers.iter().any(|l| l["kind"] == "Type"), "the created type layer exists after styling and transform");
+        // The result check went out with the POST-APPLY scene: the provider saw
+        // the created layer with its real id, so a corrective plan could target it.
+        let review = bodies.lock().unwrap().iter()
+            .filter_map(|b| b.pointer("/contents/0/parts/0/text").and_then(serde_json::Value::as_str).map(str::to_string))
+            .find(|t| t.contains("reviewing the result of an edit session"))
+            .expect("a result check was sent");
+        let review: serde_json::Value = serde_json::from_str(&review).unwrap();
+        let review_layers = review["scene"]["layers"].as_array().expect("review scene lists layers");
+        assert!(review_layers.iter().any(|l| l["kind"] == "Type"),
+            "the result-check scene shows the layer the plan created: {review_layers:?}");
+    }
+
     fn submit_visual(app: &mut FotoditApp, ctx: &egui::Context) {
         app.session.execute("file.new", serde_json::json!({"width":32,"height":32})).unwrap();
         app.ai_providers.editing_consent_mut().request("gemini");
