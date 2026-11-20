@@ -354,6 +354,7 @@ fn main() -> eframe::Result {
     fotodit_engine::malloc_tuning::apply();
     // Then, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
+    fotodit_ui_egui::ai_providers_ui::set_editing_identity(assistant::provider_identity);
     // The AI providers window's Test connection: one owner-confirmed request per click, never automatic.
     fotodit_ui_egui::ai_providers_ui::set_checker(fotodit_ui_egui::ai_providers_ui::Checker {
         availability: fotodit_automation::ai::key_check::availability,

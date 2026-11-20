@@ -23,6 +23,12 @@ pub struct Checker {
 }
 
 static CHECKER: OnceLock<Checker> = OnceLock::new();
+static EDITING_IDENTITY: OnceLock<fn(&str) -> Result<[u8; 32], String>> = OnceLock::new();
+
+/// Local credential/source identity only. Never sends a network request.
+pub fn set_editing_identity(check: fn(&str) -> Result<[u8; 32], String>) {
+    let _ = EDITING_IDENTITY.set(check);
+}
 
 /// Installs the key check. Call once at start-up.
 pub fn set_checker(checker: Checker) {
@@ -51,6 +57,32 @@ pub struct State {
     rows: Vec<Row>,
     /// Provider statuses, read from the key file when the window opens and after each action, not every frame.
     cache: Option<Vec<RowStatus>>,
+    editing: EditingConsent,
+}
+
+/// Session-only consent. Saving a credential never grants permission to send prompts.
+#[derive(Default, Debug)]
+pub struct EditingConsent {
+    active: Option<&'static str>,
+    pending: Option<&'static str>,
+    identity: Option<[u8; 32]>,
+    generation: u64,
+}
+
+impl EditingConsent {
+    pub fn active(&self) -> Option<&'static str> { self.active }
+    pub fn request(&mut self, slot: &'static str) {
+        self.disable();
+        if matches!(slot, "gemini" | "cohere" | "lajiwa") { self.pending = Some(slot); }
+    }
+    pub fn confirm_identity(&mut self, identity: [u8; 32]) { self.active = self.pending.take(); self.identity = self.active.map(|_| identity); }
+    pub fn binding(&self) -> (Option<&'static str>, Option<[u8; 32]>, u64) { (self.active, self.identity, self.generation) }
+    pub fn disable(&mut self) { self.active = None; self.pending = None; self.identity = None; self.generation = self.generation.wrapping_add(1); }
+}
+
+impl State {
+    pub fn editing_consent(&self) -> &EditingConsent { &self.editing }
+    pub fn editing_consent_mut(&mut self) -> &mut EditingConsent { &mut self.editing }
 }
 
 impl std::fmt::Debug for State {
@@ -207,6 +239,34 @@ pub fn show(app: &mut FotoditApp, ctx: &egui::Context) {
                         Err(e) => e,
                     });
                 }
+                if matches!(provider.slot, "gemini" | "cohere" | "lajiwa") {
+                    if st.editing.active == Some(provider.slot) {
+                        ui.label(tl!("Provider editing enabled for this session. Chat Send contacts this provider only."));
+                        if ui.button(tl!("Disable provider editing")).clicked() { st.editing.disable(); }
+                    } else if matches!(source, Some(Source::Saved | Source::External))
+                        && ui.button(tl!("Enable for editing...")).clicked() {
+                        st.editing.request(provider.slot);
+                    }
+                    if st.editing.pending == Some(provider.slot) {
+                        ui.label(match provider.slot {
+                            "gemini" => "Destination: Google, https://generativelanguage.googleapis.com",
+                            "cohere" => "Destination: Cohere, https://api.cohere.com",
+                            "lajiwa" => "Destination: third-party Lajiwa worker, https://lajiwa.roydeburgs.workers.dev (not Google or Cohere). This worker receives your key and prompt.",
+                            _ => "Unavailable",
+                        });
+                        ui.label(tl!("Chat Send will send your prompt, canvas size, active layer ID and layer names, text, IDs, kinds and bounds to this provider using your key. Context is capped at 64 layers, 128 characters per name and 512 characters per text layer; truncation is disclosed to the provider. Requests above 4000 prompt characters or 32KB context are refused. Editing is single-turn: earlier chat is not sent or remembered by the provider. Ambiguous follow-ups are refused; restate each edit completely. Requests may consume quota or cost money under your provider account. Fotodit cannot guarantee free use. No request is sent now. Other providers will not be used. Enable only if you accept these terms."));
+                        ui.horizontal(|ui| {
+                            if ui.button(tl!("I agree, enable for this session")).clicked() {
+                                match EDITING_IDENTITY.get().ok_or_else(|| "Editing is not connected in this build".to_string())
+                                    .and_then(|check| check(provider.slot)) {
+                                    Ok(identity) => st.editing.confirm_identity(identity),
+                                    Err(error) => { st.editing.disable(); row.notice = Some(error); }
+                                }
+                            }
+                            if ui.button(tl!("Cancel")).clicked() { st.editing.disable(); }
+                        });
+                    }
+                }
                 if saved {
                     match CHECKER.get() {
                         None => {
@@ -246,6 +306,7 @@ pub fn show(app: &mut FotoditApp, ctx: &egui::Context) {
             ui.label(tl!("Fotodit never sends a request to check a key on its own. Saving a key does not turn a provider on."));
         });
     if dirty {
+        st.editing.disable();
         st.cache = None;
     }
     if !open {
@@ -254,6 +315,7 @@ pub fn show(app: &mut FotoditApp, ctx: &egui::Context) {
             row.notice = None;
             row.confirm_test = false;
         }
+        st.editing.pending = None;
         st.open = false;
     }
 }
@@ -267,6 +329,29 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("fotodit-ai-providers-ui-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         (KeyStore::new(dir.join("keys.json"), MockSealer), dir)
+    }
+
+    #[test]
+    fn editing_consent_requires_confirmation_and_resets() {
+        let mut consent = EditingConsent::default();
+        assert_eq!(consent.active(), None);
+        consent.confirm_identity([7; 32]);
+        assert_eq!(consent.active(), None);
+        consent.request("gemini");
+        assert_eq!(consent.active(), None);
+        consent.confirm_identity([7; 32]);
+        assert_eq!(consent.active(), Some("gemini"));
+        consent.request("cohere");
+        assert_eq!(consent.active(), None, "switch disables the previous account before confirmation");
+        consent.disable();
+        consent.confirm_identity([7; 32]);
+        assert_eq!(consent.active(), None);
+        consent.request("pollinations");
+        consent.confirm_identity([7; 32]);
+        assert_eq!(consent.active(), None, "image-only provider cannot enable text editing");
+        consent.request("openrouter");
+        consent.confirm_identity([7; 32]);
+        assert_eq!(consent.active(), None, "unavailable provider remains disabled");
     }
 
     #[test]

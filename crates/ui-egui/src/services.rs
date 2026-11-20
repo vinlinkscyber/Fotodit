@@ -274,6 +274,9 @@ pub type AutomationCommandFn = Box<dyn Fn(&str, &Value) -> Result<(), String>>;
 /// connected; the panel reports that instead of simulating a reply.
 pub trait AssistantBackend {
     fn reply(&mut self, app: &mut crate::FotoditApp, ctx: &egui::Context, prompt: &str) -> Result<String, String>;
+    fn poll(&mut self, _app: &mut crate::FotoditApp, _ctx: &egui::Context) -> Option<String> { None }
+    fn busy(&self) -> bool { false }
+    fn cancel(&mut self) {}
 }
 
 /// Open a URL in the system browser (native) — reliable cross-platform, unlike `ctx.open_url`.

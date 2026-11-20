@@ -48,29 +48,171 @@ impl LiveEditSession for GuiSession<'_> {
 pub struct GuiAssistant {
     engine: AiEngine,
     context: AiContext,
+    planner_factory: Box<dyn Fn(&str) -> Result<(Box<dyn fotodit_automation::ai::AiPlanner>, [u8; 32]), String>>,
+    identity: fn(&str) -> Result<[u8; 32], String>,
+    pending: Option<PendingPlan>,
 }
 
 impl GuiAssistant {
-    /// Default: the offline deterministic planner. Provider planning is opt-in via the
-    /// FOTODIT_AI_PROVIDER=provider environment setting so no billable provider call can
-    /// happen unless explicitly enabled; without provider keys in the environment the
-    /// deterministic planner is always used.
+    /// Offline at startup. Only the in-app, session-only consent can enable a provider.
     pub fn new() -> Self {
-        let provider_opt_in = std::env::var("FOTODIT_AI_PROVIDER").map(|v| v.eq_ignore_ascii_case("provider")).unwrap_or(false);
-        let config = fotodit_automation::ai::ProviderConfig::from_env();
-        let has_keys = [fotodit_automation::ai::ProviderId::Gemini, fotodit_automation::ai::ProviderId::OpenRouter, fotodit_automation::ai::ProviderId::Cohere, fotodit_automation::ai::ProviderId::Pollinations, fotodit_automation::ai::ProviderId::Lajiwa]
-            .iter()
-            .any(|p| config.has_key(*p));
-        let engine = if provider_opt_in && has_keys { AiEngine::with_provider_config(config) } else { AiEngine::new() };
-        Self { engine, context: AiContext::new() }
+        Self { engine: AiEngine::new(), context: AiContext::new(), planner_factory: Box::new(provider_planner), identity: provider_identity, pending: None }
     }
+
+}
+
+struct PendingPlan {
+    receiver: std::sync::mpsc::Receiver<Result<EditingPlan, String>>,
+    prompt: String,
+    document: Option<serde_json::Value>,
+    document_id: Option<String>,
+    binding: (Option<&'static str>, Option<[u8; 32]>, u64),
+}
+
+fn document_id(app: &FotoditApp) -> Option<String> {
+    app.session.active().map(|d| format!("{:?}", d.doc.id))
+}
+
+struct FixedPlan(EditingPlan);
+impl fotodit_automation::ai::AiPlanner for FixedPlan {
+    fn plan(&self, _intent: &fotodit_automation::ai::EditingIntent, _scene: &fotodit_automation::ai::VisualScene,
+        _context: &AiContext) -> Result<EditingPlan, fotodit_automation::ai::AiError> { Ok(self.0.clone()) }
 }
 
 impl AssistantBackend for GuiAssistant {
     fn reply(&mut self, app: &mut FotoditApp, ctx: &egui::Context, prompt: &str) -> Result<String, String> {
-        let mut session = GuiSession { app, ctx };
-        self.run(&mut session, prompt)
+        if self.pending.is_some() { return Err("A provider request is already pending. Wait or cancel it first.".into()); }
+        let binding = app.ai_providers.editing_consent().binding();
+        if let Some(slot) = binding.0 {
+            // This bounded route is single-turn. Do not guess what an earlier request meant.
+            let lower = prompt.to_lowercase();
+            // Only bare conversational references are refused. Pronouns inside a full
+            // request (including the user's taxi-poster wording) are ordinary language.
+            if matches!(lower.trim().trim_end_matches(['.', '!', '?']), "do that again" | "same as previous" | "again" | "same" | "do it" | "do that") {
+                return Err("Provider editing is single-turn and does not share earlier chat. Restate the complete edit and name the target explicitly; nothing was sent.".into());
+            }
+            let document = app.session.active().map(fotodit_engine::inspect::document);
+            let scene = document.as_ref().map(|doc| fotodit_automation::ai::PerceptionEngine::new().perceive(doc)).unwrap_or_default();
+            let intent = fotodit_automation::ai::NaturalLanguageEngine::new().parse_intent(prompt, &scene, &AiContext::new()).map_err(|e| e.to_string())?;
+            if document.is_none() && intent.category != IntentCategory::GraphicDesign {
+                return Err("Open a document before editing, or make an explicit poster/banner creation request. Nothing was sent.".into());
+            }
+            let current_identity = match (self.identity)(slot) {
+                Ok(identity) => identity,
+                Err(error) => { app.ai_providers.editing_consent_mut().disable(); return Err(error); }
+            };
+            if binding.1 != Some(current_identity) {
+                app.ai_providers.editing_consent_mut().disable();
+                return Err("Provider credential or source changed. Enable editing again before sending.".into());
+            }
+            // Resolve only for this request; the planner and credential move to the worker.
+            let (planner, loaded_identity) = match (self.planner_factory)(slot) {
+                Ok(planner) => planner,
+                Err(error) => { app.ai_providers.editing_consent_mut().disable(); return Err(error); }
+            };
+            // Detect replacement during resolution too, before dispatching anything.
+            if loaded_identity != current_identity { app.ai_providers.editing_consent_mut().disable(); return Err("Provider credential changed. Enable editing again.".into()); }
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let repaint = ctx.clone();
+            std::thread::spawn(move || {
+                let result = planner.plan(&intent, &scene, &AiContext::new()).map_err(|e| e.to_string());
+                let _ = sender.send(result);
+                repaint.request_repaint();
+            });
+            self.pending = Some(PendingPlan { receiver, prompt: prompt.into(), document, document_id: document_id(app), binding });
+            Ok(format!("Provider planning ({slot}). No edit has been applied yet."))
+        } else {
+            let mut session = GuiSession { app, ctx };
+            self.run(&mut session, prompt).map(|answer| format!("Offline rules (no provider contacted). {answer}"))
+        }
     }
+    fn busy(&self) -> bool { self.pending.is_some() }
+    fn cancel(&mut self) { self.pending = None; }
+    fn poll(&mut self, app: &mut FotoditApp, ctx: &egui::Context) -> Option<String> {
+        let pending = self.pending.as_ref()?;
+        let slot = pending.binding.0?;
+        if app.ai_providers.editing_consent().binding() != pending.binding
+            || document_id(app) != pending.document_id {
+            self.pending = None;
+            return Some("Pending edit discarded because the document, credential or consent changed. No response was applied.".into());
+        }
+        let result = match pending.receiver.try_recv() {
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return None,
+            Err(_) => Err("Provider planning worker stopped. No edits were applied.".into()),
+        };
+        let pending = self.pending.take()?;
+        let plan = match result { Ok(plan) => plan, Err(error) => return Some(error) };
+        // Unseal/re-inspect once only, after a successful response and just before application.
+        if (self.identity)(slot).ok() != pending.binding.1
+            || app.session.active().map(fotodit_engine::inspect::document) != pending.document {
+            app.ai_providers.editing_consent_mut().disable();
+            return Some("Pending edit discarded because the document or credential changed. No response was applied.".into());
+        }
+        // UI-thread application only, after the immutable snapshot and consent still match.
+        let engine = AiEngine::with_planner(Box::new(FixedPlan(plan)));
+        let mut session = GuiSession { app, ctx };
+        let request = GoalRequest { max_attempts: 1, ..GoalRequest::new(&pending.prompt) };
+        let outcome = engine.process_goal_in(&mut session, &request, &mut AiContext::new(), &SemanticGoalRepair::new());
+        let completed = outcome.attempts.iter().any(|a| a.execution.as_ref().is_some_and(|e| e.is_success));
+        Some(if completed {
+            format!("Provider editing ({slot}): commands executed. The requested result and visual quality are not independently verified. Inspect the canvas; use Undo if needed. {}", outcome.detail)
+        } else if outcome.attempts.iter().any(|a| !a.commands.is_empty()) {
+            format!("Provider editing ({slot}): execution stopped and may have left partial changes. Inspect the canvas and use Undo as needed. {}", outcome.detail)
+        } else { format!("Provider editing ({slot}): no edits applied. {}", outcome.detail) })
+    }
+}
+
+struct SelectedPlanner {
+    provider: fotodit_automation::ai::ProviderId,
+    bridge: fotodit_automation::ai::AiProviderBridge,
+}
+
+impl fotodit_automation::ai::AiPlanner for SelectedPlanner {
+    fn plan(&self, intent: &fotodit_automation::ai::EditingIntent, scene: &fotodit_automation::ai::VisualScene,
+        context: &AiContext) -> Result<EditingPlan, fotodit_automation::ai::AiError> {
+        self.bridge.plan_selected(self.provider, intent, scene, context)
+    }
+}
+
+fn provider_planner(slot: &str) -> Result<(Box<dyn fotodit_automation::ai::AiPlanner>, [u8; 32]), String> {
+    use fotodit_automation::ai::{AiProviderBridge, CommandCatalog, ProviderConfig};
+    let (provider, config) = ProviderConfig::for_editing_slot(slot).map_err(|e| e.to_string())?;
+    let identity = config_identity(slot, provider, &config)?;
+    Ok((Box::new(SelectedPlanner {
+        provider, bridge: AiProviderBridge::new(config, CommandCatalog::new()),
+    }), identity))
+}
+
+/// Binds consent to selected credential bytes, source and fixed destination without retaining a key.
+pub fn provider_identity(slot: &str) -> Result<[u8; 32], String> {
+    use fotodit_automation::ai::ProviderConfig;
+    let (provider, config) = ProviderConfig::for_editing_slot(slot).map_err(|e| e.to_string())?;
+    config_identity(slot, provider, &config)
+}
+
+fn config_identity(slot: &str, provider: fotodit_automation::ai::ProviderId,
+    config: &fotodit_automation::ai::ProviderConfig) -> Result<[u8; 32], String> {
+    use fotodit_automation::ai::ProviderId;
+    let key = match provider {
+        ProviderId::Gemini => config.gemini_api_key.as_deref(),
+        ProviderId::Cohere => config.cohere_api_key.as_deref(),
+        ProviderId::Lajiwa => config.lajiwa_api_key.as_deref(),
+        _ => None,
+    }.ok_or_else(|| "Selected key unavailable".to_string())?;
+    let source = fotodit_keystore_source(slot)?;
+    let mut hash = blake3::Hasher::new();
+    hash.update(slot.as_bytes()); hash.update(source.as_bytes()); hash.update(key.as_bytes());
+    Ok(*hash.finalize().as_bytes())
+}
+
+fn fotodit_keystore_source(slot: &str) -> Result<String, String> {
+    // The backend's resolver already enforces the chosen source. The protected file also
+    // carries source changes; stamp all of it so unrelated credential changes revoke consent too.
+    let base = std::env::var_os("APPDATA").ok_or_else(|| "No protected provider store".to_string())?;
+    let bytes = std::fs::read(std::path::PathBuf::from(base).join("Fotodit").join("ai_providers.v1.json"))
+        .map_err(|_| "Provider store is missing or unreadable".to_string())?;
+    Ok(format!("{slot}:{}", blake3::hash(&bytes).to_hex()))
 }
 
 impl GuiAssistant {
@@ -207,6 +349,181 @@ mod tests {
     use super::*;
     use fotodit_automation::ai::{GoalAttempt, StepVisualEvidence, VisualEvidence};
     use fotodit_ui_egui::Services;
+
+    struct ChatTransport {
+        calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        fail: bool,
+    }
+    impl fotodit_automation::ai::HttpTransport for ChatTransport {
+        fn execute_json(&self, method: &str, url: &str, headers: &[(&str, &str)], body: Option<&serde_json::Value>,
+            _timeout: std::time::Duration) -> Result<(u16, serde_json::Value), fotodit_automation::ai::AiError> {
+            use std::sync::atomic::Ordering;
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            assert_eq!(method, "POST");
+            assert!(url.starts_with("https://generativelanguage.googleapis.com/"));
+            assert_eq!(headers, [("x-goog-api-key", "fixture-not-a-real-key")]);
+            assert!(body.unwrap().to_string().contains("chndrax"), "original chat prompt reaches provider");
+            if self.fail { return Ok((429, serde_json::json!({"error":{"message":"fixture limit"}}))); }
+            let plan = serde_json::json!({"title":"Provider fixture", "rationale":"mocked provider response",
+                "steps":[{"command":"file.new","params":{"width":240,"height":320,"background":"transparent"}}]});
+            Ok((200, serde_json::json!({"candidates":[{"content":{"parts":[{"text":plan.to_string()}]}}]})))
+        }
+        fn fetch_raw_bytes(&self, _url: &str, _headers: &[(&str, &str)], _timeout: std::time::Duration)
+            -> Result<(u16, Vec<u8>), fotodit_automation::ai::AiError> {
+            panic!("chat editing must not fetch images")
+        }
+    }
+
+    fn chat_fixture(fail: bool) -> (FotoditApp, std::sync::Arc<std::sync::atomic::AtomicUsize>, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use fotodit_automation::ai::{AiProviderBridge, ProviderConfig, ProviderId, CommandCatalog};
+        use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+        let calls = Arc::new(AtomicUsize::new(0));
+        let loads = Arc::new(AtomicUsize::new(0));
+        let transport_calls = calls.clone();
+        let config_loads = loads.clone();
+        let mut assistant = GuiAssistant::new();
+        assistant.identity = |_| Ok([7; 32]);
+        assistant.planner_factory = Box::new(move |slot| {
+            assert_eq!(slot, "gemini");
+            config_loads.fetch_add(1, Ordering::SeqCst);
+            let config = ProviderConfig { gemini_api_key: Some("fixture-not-a-real-key".into()), ..Default::default() };
+            let bridge = AiProviderBridge::with_transport(config, CommandCatalog::new(),
+                Box::new(ChatTransport { calls: transport_calls.clone(), fail }));
+            Ok((Box::new(SelectedPlanner { provider: ProviderId::Gemini, bridge }), [7; 32]))
+        });
+        let mut services = Services::default();
+        services.assistant_backend = Some(Box::new(assistant));
+        (FotoditApp::new(fotodit_engine::Session::new(), services), calls, loads)
+    }
+
+    fn poll_plan(app: &mut FotoditApp, ctx: &egui::Context) -> Option<String> {
+        let mut backend = app.services.assistant_backend.take().unwrap();
+        let result = backend.poll(app, ctx);
+        app.services.assistant_backend = Some(backend);
+        result
+    }
+    fn await_plan(app: &mut FotoditApp, ctx: &egui::Context) -> String {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if let Some(answer) = poll_plan(app, ctx) { return answer; }
+            assert!(std::time::Instant::now() < deadline, "mock planning did not finish");
+            std::thread::yield_now();
+        }
+    }
+
+    #[test]
+    fn complete_first_turn_requests_with_pronouns_reach_provider() {
+        use std::sync::atomic::Ordering;
+        for prompt in ["create a poster for my taxi busines to promote it its called chndrax",
+            "create a poster that says chndrax", "make a poster for chndrax and give it blue text"] {
+            let (mut app, calls, _) = chat_fixture(false);
+            let ctx = egui::Context::default();
+            app.ai_providers.editing_consent_mut().request("gemini");
+            app.ai_providers.editing_consent_mut().confirm_identity([7; 32]);
+            let initial = fotodit_ui_egui::panels::assistant::submit(&mut app, &ctx, prompt);
+            assert!(initial.starts_with("Provider planning"), "{prompt}: {initial}");
+            let _ = await_plan(&mut app, &ctx);
+            assert_eq!(calls.load(Ordering::SeqCst), 1, "{prompt}");
+        }
+    }
+
+    #[test]
+    fn provider_no_document_or_ambiguous_followup_refuses_before_network() {
+        use std::sync::atomic::Ordering;
+        for prompt in ["enhance image quality", "do that again", "make it blue", "same as previous"] {
+            let (mut app, calls, loads) = chat_fixture(false);
+            app.ai_providers.editing_consent_mut().request("gemini");
+            app.ai_providers.editing_consent_mut().confirm_identity([7; 32]);
+            let reply = fotodit_ui_egui::panels::assistant::submit(&mut app, &egui::Context::default(), prompt);
+            assert!(reply.contains("Nothing was sent") || reply.contains("nothing was sent"), "{reply}");
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
+            assert_eq!(loads.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[test]
+    fn pending_plan_discarded_on_cancel_document_or_consent_change() {
+        for change in ["cancel", "document", "consent"] {
+            let (mut app, _, _) = chat_fixture(false);
+            let ctx = egui::Context::default();
+            app.ai_providers.editing_consent_mut().request("gemini");
+            app.ai_providers.editing_consent_mut().confirm_identity([7; 32]);
+            let _ = fotodit_ui_egui::panels::assistant::submit(&mut app, &ctx, "create a poster called chndrax");
+            match change {
+                "cancel" => app.services.assistant_backend.as_mut().unwrap().cancel(),
+                "document" => { app.session.execute("file.new", serde_json::json!({"width":32,"height":32})).unwrap(); },
+                _ => { app.ai_providers.editing_consent_mut().disable(); },
+            }
+            let answer = poll_plan(&mut app, &ctx);
+            if change == "cancel" { assert!(answer.is_none()); }
+            else { assert!(answer.unwrap().contains("discarded")); }
+            if change == "document" { assert_eq!(app.session.active().unwrap().doc.size.width,32); }
+            else { assert!(app.session.active().is_none()); }
+        }
+    }
+
+    #[test]
+    fn composer_provider_enable_is_local_then_send_reaches_selected_mock() {
+        use std::sync::atomic::Ordering;
+        let (mut app, calls, loads) = chat_fixture(false);
+        let ctx = egui::Context::default();
+        app.ai_providers.editing_consent_mut().request("gemini");
+        app.ai_providers.editing_consent_mut().confirm_identity([7; 32]);
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "enabling sends nothing");
+        assert_eq!(loads.load(Ordering::SeqCst), 0, "fixture enable does not build a provider planner");
+        let initial = fotodit_ui_egui::panels::assistant::submit(&mut app, &ctx, "create a poster called chndrax");
+        assert!(initial.starts_with("Provider planning (gemini)"), "{initial}");
+        let answer = await_plan(&mut app, &ctx);
+        assert!(answer.starts_with("Provider editing (gemini):"), "{answer}");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(loads.load(Ordering::SeqCst), 1);
+        let doc = fotodit_engine::inspect::document(app.session.active().unwrap());
+        assert_eq!(doc["width"], 240, "provider plan, not offline 1200px poster");
+        assert_eq!(doc["height"], 320);
+        let _ = fotodit_ui_egui::panels::assistant::submit(&mut app, &ctx, "create a poster called chndrax");
+        let _ = await_plan(&mut app, &ctx);
+        assert_eq!(loads.load(Ordering::SeqCst), 2, "every Send reloads selected credentials");
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        app.ai_providers.editing_consent_mut().disable();
+        let _ = fotodit_ui_egui::panels::assistant::submit(&mut app, &ctx, "create a poster called chndrax");
+        assert_eq!(calls.load(Ordering::SeqCst), 2, "disable prevents remote requests");
+    }
+
+    #[test]
+    fn composer_provider_failure_never_runs_offline_or_other_account() {
+        use std::sync::atomic::Ordering;
+        let (mut app, calls, _) = chat_fixture(true);
+        app.ai_providers.editing_consent_mut().request("gemini");
+        app.ai_providers.editing_consent_mut().confirm_identity([7; 32]);
+        let ctx = egui::Context::default();
+        let _ = fotodit_ui_egui::panels::assistant::submit(&mut app, &ctx, "create a poster called chndrax");
+        let answer = await_plan(&mut app, &ctx);
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "one selected-provider attempt, no retry cascade");
+        assert!(app.session.active().is_none(), "no fallback edits after provider refusal");
+        assert!(answer.contains("No offline or other-provider fallback"), "{answer}");
+    }
+
+    #[test]
+    fn composer_reloads_config_each_send_and_revokes_on_missing_key() {
+        use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+        let loads = Arc::new(AtomicUsize::new(0));
+        let load_count = loads.clone();
+        let mut assistant = GuiAssistant::new();
+        assistant.identity = |_| Ok([7; 32]);
+        assistant.planner_factory = Box::new(move |_| {
+            load_count.fetch_add(1, Ordering::SeqCst);
+            Err("Selected key removed".into())
+        });
+        let mut app = FotoditApp::new(fotodit_engine::Session::new(), Services::default());
+        app.services.assistant_backend = Some(Box::new(assistant));
+        app.ai_providers.editing_consent_mut().request("gemini");
+        app.ai_providers.editing_consent_mut().confirm_identity([7; 32]);
+        let answer = fotodit_ui_egui::panels::assistant::submit(&mut app, &egui::Context::default(), "create a poster called chndrax");
+        assert_eq!(loads.load(Ordering::SeqCst), 1);
+        assert_eq!(answer, "Selected key removed");
+        assert_eq!(app.ai_providers.editing_consent().active(), None);
+        assert!(app.session.active().is_none());
+    }
 
     fn attempt(title: &str, classes: &[VisualEvidenceClass]) -> GoalAttempt {
         GoalAttempt {

@@ -242,6 +242,22 @@ pub(crate) fn seed_prompt(ctx: &egui::Context, prompt: &str) {
 /// real installed presentation of the reference design.
 pub(crate) fn assistant_rail(app: &mut FotoditApp, ui: &mut egui::Ui) {
     let mut state = ui.ctx().data_mut(|d| d.get_temp::<AssistantState>(state_id()).unwrap_or_default());
+    let mut backend = app.services.assistant_backend.take();
+    if let Some(backend) = backend.as_mut() {
+        if let Some(answer) = backend.poll(app, ui.ctx())
+            && let Some(last) = state.transcript.last_mut() { last.assistant = answer; }
+        if backend.busy() {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
+            ui.label(tl!("Provider planning. The canvas will only change after a current, validated response."));
+            if ui.button(tl!("Cancel pending edit")).clicked() {
+                backend.cancel();
+                if let Some(last) = state.transcript.last_mut() {
+                    last.assistant = tl!("Edit cancelled. The provider request may still finish, but its result will not be applied.").to_string();
+                }
+            }
+        }
+    }
+    app.services.assistant_backend = backend;
     panel_chrome(ui, &mut state, Some(app));
     ui.ctx().data_mut(|d| d.insert_temp(state_id(), state));
 }
@@ -559,20 +575,27 @@ fn input_row(ui: &mut egui::Ui, state: &mut AssistantState, app: Option<&mut Fot
 /// simulating a reply.
 fn send(app: Option<&mut FotoditApp>, ctx: &egui::Context, state: &mut AssistantState, prompt: String) {
     state.tab = Tab::Chat;
+    if app.as_ref().is_some_and(|app| app.services.assistant_backend.as_ref().is_some_and(|backend| backend.busy())) {
+        return; // Preserve the pending transcript slot. Wait or Cancel before another Send.
+    }
     let answer = match app {
         Some(app) => {
-            // Take the backend out so the app stays borrowable for the admitted command path.
-            let mut backend = app.services.assistant_backend.take();
-            let answer = match backend.as_mut() {
-                Some(backend) => backend.reply(app, ctx, &prompt).unwrap_or_else(|error| error),
-                None => tl!("The AI engine is not connected in this build, so I can't edit images yet.").to_string(),
-            };
-            app.services.assistant_backend = backend;
-            answer
+            submit(app, ctx, &prompt)
         }
         None => tl!("The AI engine is not connected in this build, so I can't edit images yet.").to_string(),
     };
     state.transcript.push(Exchange { user: prompt, assistant: answer });
+}
+
+/// The composer send path, also usable by host integration tests without synthetic pointer events.
+pub fn submit(app: &mut FotoditApp, ctx: &egui::Context, prompt: &str) -> String {
+    let mut backend = app.services.assistant_backend.take();
+    let answer = match backend.as_mut() {
+        Some(backend) => backend.reply(app, ctx, prompt).unwrap_or_else(|error| error),
+        None => tl!("The AI engine is not connected in this build, so I can't edit images yet.").to_string(),
+    };
+    app.services.assistant_backend = backend;
+    answer
 }
 
 /// One chat bubble: the user's right-aligned in the accent colour, the assistant's on navy.
