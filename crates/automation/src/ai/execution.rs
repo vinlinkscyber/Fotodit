@@ -550,34 +550,40 @@ impl ExecutionEngine {
             // Resolve intra-plan references (`{"$step": N}`) to the real ids
             // of layers created by earlier steps of this plan. Contract
             // validation admits only backward references to layer-creating
-            // steps, so an unresolvable reference here is a defensive stop.
-            // The recorded step keeps the plan's original symbolic params.
-            let mut resolved_params = step.params.clone();
-            if let Some(map) = resolved_params.as_object_mut() {
-                for key in ["layer", "target"] {
-                    let referenced = map.get(key)
-                        .and_then(Value::as_object)
-                        .filter(|o| o.len() == 1)
-                        .and_then(|o| o.get("$step"))
-                        .and_then(Value::as_u64);
-                    if let Some(n) = referenced {
-                        let resolved = n.checked_sub(1)
-                            .and_then(|i| created_ids.get(i as usize))
-                            .copied()
-                            .flatten();
-                        match resolved {
-                            Some(id) => { map.insert(key.to_string(), json!(id)); }
-                            None => return Err(AiError::ExecutionError {
-                                step: idx,
-                                command: step.command.clone(),
-                                error: format!("the step references a layer created by step {n}, but that step created no layer; nothing further was dispatched"),
-                            }),
+            // steps, but a reference can still fail to resolve at runtime when
+            // a creation step's output is absent or unexpected. That failure is
+            // routed through the same recorded-failure, reconciliation and
+            // rollback path as a refused command: it is reported with the
+            // partial-change accounting, and earlier applied steps are undone
+            // by the standard machinery below. The recorded step keeps the
+            // plan's original symbolic params.
+            let resolution: Result<Value, crate::AutomationError> = (|| {
+                let mut resolved_params = step.params.clone();
+                if let Some(map) = resolved_params.as_object_mut() {
+                    for key in ["layer", "target"] {
+                        let referenced = map.get(key)
+                            .and_then(Value::as_object)
+                            .filter(|o| o.len() == 1)
+                            .and_then(|o| o.get("$step"))
+                            .and_then(Value::as_u64);
+                        if let Some(n) = referenced {
+                            let resolved = n.checked_sub(1)
+                                .and_then(|i| created_ids.get(i as usize))
+                                .copied()
+                                .flatten();
+                            match resolved {
+                                Some(id) => { map.insert(key.to_string(), json!(id)); }
+                                None => return Err(crate::AutomationError::BadRequest(format!(
+                                    "the step references a layer created by step {n}, but that step created no layer; the step was not dispatched"
+                                ))),
+                            }
                         }
                     }
                 }
-            }
+                Ok(resolved_params)
+            })();
 
-            match session.command_run(&step.command, resolved_params) {
+            match resolution.and_then(|params| session.command_run(&step.command, params)) {
                 Ok(output) => {
                     if let Some(id) = output.get("layer").and_then(Value::as_u64) {
                         created_ids[idx] = Some(id);

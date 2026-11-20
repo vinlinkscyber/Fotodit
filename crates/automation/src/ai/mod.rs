@@ -540,6 +540,8 @@ mod tests {
         headless
             .command_run("file.new", json!({"width": 64, "height": 64, "background": "white"}))
             .unwrap();
+        let baseline_history = headless.inspect_active().unwrap()
+            .and_then(|d| d["history"].as_array().cloned()).unwrap_or_default();
         let plan = EditingPlan {
             title: "t".into(), rationale: "r".into(), category: IntentCategory::GeneralEditing,
             creates_document: false, target_size: None,
@@ -555,7 +557,19 @@ mod tests {
         };
         let error = ExecutionEngine::execute_plan_in_with_evidence(&mut headless, &plan)
             .expect_err("a reference to a step that created no layer must fail closed");
-        assert!(error.to_string().contains("created no layer"), "{error}");
+        let message = error.to_string();
+        assert!(message.contains("created no layer"), "{message}");
+        // The unresolved step was never dispatched, and the failure went
+        // through the standard partial-change accounting...
+        assert!(message.contains("the step was not dispatched"), "{message}");
+        // ...which rolled back the two earlier successful edits and says so.
+        assert!(message.contains("rolled back 2 entr"), "{message}");
+        let document = headless.inspect_active().unwrap().expect("document stays open");
+        let layers = document["layers"].as_array().expect("inspection lists layers");
+        assert!(!layers.iter().any(|l| l["kind"] == "Type"),
+            "the earlier successful edits were undone: {layers:?}");
+        assert_eq!(document["history"].as_array(), Some(&baseline_history),
+            "history is verified back at its pre-plan entries");
     }
 
     #[test]
