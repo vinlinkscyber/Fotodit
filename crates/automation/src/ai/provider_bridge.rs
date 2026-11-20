@@ -1238,7 +1238,12 @@ const SELECTED_COMMANDS: &[&str] = &["file.new", "type.create", "type.edit", "ty
     "layer.newAdjustmentLayer.vibrance", "layer.newAdjustmentLayer.hueSaturation",
     "layer.newAdjustmentLayer.levels", "layer.newAdjustmentLayer.colorBalance",
     "layer.newAdjustmentLayer.blackWhite", "layer.newAdjustmentLayer.photoFilter",
-    "filter.sharpen.unsharpMask", "filter.blur.gaussianBlur"];
+    "filter.sharpen.unsharpMask", "filter.blur.gaussianBlur",
+    "layer.setProps", "layer.moveTo", "layer.duplicate"];
+
+/// Blend modes the provider contract admits for `layer.setProps` (engine
+/// `blend_from_str` accepts more; the contract stays a reviewed subset).
+const SELECTED_BLEND_MODES: &[&str] = &["normal", "multiply", "screen", "overlay", "softLight", "hardLight"];
 
 /// Engine `PHOTO_FILTERS` preset ids (crates/engine/src/adjust_params.rs).
 const PHOTO_FILTER_IDS: &[&str] = &["warming85", "warmingLBA", "warming81", "cooling80",
@@ -1269,6 +1274,9 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
             "layer.newAdjustmentLayer.photoFilter" => &["filter", "density"],
             "filter.sharpen.unsharpMask" => &["amount", "radius", "threshold"],
             "filter.blur.gaussianBlur" => &["radius"],
+            "layer.setProps" => &["layer", "opacity", "fill", "blend", "visible"],
+            "layer.moveTo" => &["layer", "target", "position"],
+            "layer.duplicate" => &["layer"],
             _ => return Err(refuse()),
         };
         if map.is_empty() || map.keys().any(|k| !allowed.contains(&k.as_str())) { return Err(refuse()); }
@@ -1289,6 +1297,20 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
             let id = map.get("layer").and_then(Value::as_u64).ok_or_else(refuse)?;
             if !scene.layers.iter().any(|l| l.id == id && l.kind == "Type" && l.is_visible) { return Err(refuse()); }
         }
+        if matches!(step.command.as_str(), "layer.setProps" | "layer.duplicate") {
+            let id = map.get("layer").and_then(Value::as_u64).ok_or_else(refuse)?;
+            if !scene.layers.iter().any(|l| l.id == id && l.is_visible) { return Err(refuse()); }
+        }
+        if step.command == "layer.moveTo" {
+            let id = map.get("layer").and_then(Value::as_u64).ok_or_else(refuse)?;
+            let target = map.get("target").and_then(Value::as_u64).ok_or_else(refuse)?;
+            if id == target { return Err(refuse()); }
+            for needle in [id, target] {
+                if !scene.layers.iter().any(|l| l.id == needle && l.is_visible) { return Err(refuse()); }
+            }
+        }
+        if step.command == "layer.setProps"
+            && !["opacity", "fill", "blend", "visible"].iter().any(|k| map.contains_key(k)) { return Err(refuse()); }
         if matches!(step.command.as_str(), "type.create" | "type.edit")
             && !map.get("text").and_then(Value::as_str).is_some_and(|v| !v.trim().is_empty() && v.chars().count() <= 2000) { return Err(refuse()); }
         if step.command == "type.create" && (!number("x", 0.0, f64::from(width)) || !number("y", 0.0, f64::from(height))
@@ -1314,6 +1336,10 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
                 "shadows" | "midtones" | "highlights" => value.as_array().is_some_and(|a| a.len() == 3
                     && a.iter().all(|v| v.as_f64().is_some_and(|x| x.is_finite() && (-100.0..=100.0).contains(&x)))),
                 "reds" | "yellows" | "greens" | "cyans" | "blues" | "magentas" => number(key, -200.0, 300.0),
+                "opacity" | "fill" => number(key, 0.0, 1.0),
+                "blend" => value.as_str().is_some_and(|v| SELECTED_BLEND_MODES.contains(&v)),
+                "visible" => value.is_boolean(),
+                "position" => value.as_str().is_some_and(|v| matches!(v, "above" | "below")),
                 "amount" => number(key, 1.0, 500.0),
                 "radius" if step.command == "filter.blur.gaussianBlur" => number(key, 0.1, 1000.0),
                 "radius" => number(key, 0.1, 250.0),
@@ -1328,7 +1354,7 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
             | "layer.newAdjustmentLayer.brightnessContrast" | "layer.newAdjustmentLayer.vibrance"
             | "layer.newAdjustmentLayer.hueSaturation" | "layer.newAdjustmentLayer.levels"
             | "layer.newAdjustmentLayer.colorBalance" | "layer.newAdjustmentLayer.blackWhite"
-            | "layer.newAdjustmentLayer.photoFilter") { active_changed = true; }
+            | "layer.newAdjustmentLayer.photoFilter" | "layer.duplicate") { active_changed = true; }
         for key in ["x", "y", "amount", "threshold"] {
             if map.get(key).is_some_and(|v| v.as_i64().is_none()) { return Err(refuse()); }
         }
@@ -1574,6 +1600,28 @@ mod tests {
         assert!(validate_selected_plan(&contract_plan("filter.sharpen.unsharpMask", json!({"amount":50,"radius":300.0})), &scene).is_err(), "unsharp radius cap unchanged");
         assert!(validate_selected_plan(&contract_plan("filter.blur.gaussianBlur", json!({"radius":2.0})), &VisualScene::default()).is_err(), "filters still need an active visible pixel/raster layer");
         assert!(validate_selected_plan(&contract_plan("filter.gaussianBlur", json!({"radius":2.0})), &scene).is_err(), "the stale pre-rename id stays refused");
+    }
+
+    #[test]
+    fn selected_contract_admits_layer_target_semantics_against_scene_ids() {
+        let scene = contract_scene();
+        assert!(validate_selected_plan(&contract_plan("layer.setProps", json!({"layer":7,"opacity":0.5,"blend":"multiply"})), &scene).is_ok());
+        assert!(validate_selected_plan(&contract_plan("layer.setProps", json!({"layer":9,"visible":false})), &scene).is_ok());
+        assert!(validate_selected_plan(&contract_plan("layer.moveTo", json!({"layer":9,"target":7,"position":"above"})), &scene).is_ok());
+        assert!(validate_selected_plan(&contract_plan("layer.moveTo", json!({"layer":7,"target":9})), &scene).is_ok(), "position defaults to above in the engine");
+        assert!(validate_selected_plan(&contract_plan("layer.duplicate", json!({"layer":7})), &scene).is_ok());
+        assert!(validate_selected_plan(&contract_plan("layer.setProps", json!({"layer":7})), &scene).is_err(), "no property change is an empty edit");
+        assert!(validate_selected_plan(&contract_plan("layer.setProps", json!({"opacity":0.5})), &scene).is_err(), "layer id is required, never the guessed active layer");
+        assert!(validate_selected_plan(&contract_plan("layer.setProps", json!({"layer":777,"opacity":0.5})), &scene).is_err());
+        assert!(validate_selected_plan(&contract_plan("layer.setProps", json!({"layer":7,"opacity":1.5})), &scene).is_err(), "opacity is a 0..1 fraction in the engine");
+        assert!(validate_selected_plan(&contract_plan("layer.setProps", json!({"layer":7,"blend":"difference"})), &scene).is_err(), "blend modes stay the reviewed subset");
+        assert!(validate_selected_plan(&contract_plan("layer.setProps", json!({"layer":7,"name":"x"})), &scene).is_err(), "rename stays outside the contract");
+        assert!(validate_selected_plan(&contract_plan("layer.moveTo", json!({"layer":7,"target":7})), &scene).is_err());
+        assert!(validate_selected_plan(&contract_plan("layer.moveTo", json!({"layer":7,"target":777})), &scene).is_err());
+        assert!(validate_selected_plan(&contract_plan("layer.moveTo", json!({"layer":7,"target":9,"position":"into"})), &scene).is_err(), "group semantics stay outside the contract");
+        let mut hidden_scene = contract_scene();
+        hidden_scene.layers[0].is_visible = false;
+        assert!(validate_selected_plan(&contract_plan("layer.duplicate", json!({"layer":7})), &hidden_scene).is_err(), "hidden layers are not valid targets");
     }
 
     #[test]
