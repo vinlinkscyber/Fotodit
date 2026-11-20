@@ -1,52 +1,108 @@
-name: build-windows
+name: Focused provider contract and portable Windows build
 
-# Unsigned Windows x64 build of the desktop app and CLI for testing. Runs on pushes to this
-# branch and on demand; signing and full packaging stay with the release workflow.
 on:
-  push:
-    branches: [chore/optimization-efficiency]
   workflow_dispatch:
+    inputs:
+      upload_artifact:
+        description: 'Upload 1-day test artifact only after owner approval and storage cost verification'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 env:
   CARGO_TERM_COLOR: never
+  FOTODIT_NO_PRINT: '1'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  PLYRA_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+  PLYRA_FONTS_REQUIRED: '1'
 
 jobs:
-  build:
-    name: fotodit (windows-latest, x64)
+  focused:
+    if: github.repository == 'vinlinkscyber/Fotodit' && github.ref == 'refs/heads/qual/windows-check'
     runs-on: windows-latest
     timeout-minutes: 180
+    defaults:
+      run:
+        shell: pwsh
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Build
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
-          POLLINATIONS_API_KEY: ${{ secrets.POLLINATIONS_API_KEY }}
-          LAJIWA_API_KEY: ${{ secrets.LAJIWA_API_KEY }}
-        run: cargo build --release --locked -p fotodit -p fotodit-cli
-      - name: Artifact sizes
-        shell: bash
-        run: ls -l target/release/fotodit.exe target/release/fotodit-cli.exe
-      - name: Smoke test the CLI
-        shell: bash
-        run: |
-          set -e
-          cd "$RUNNER_TEMP"
-          B64="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
-          printf %s "$B64" | base64 -d > smoke.png
-          "$GITHUB_WORKSPACE/target/release/fotodit-cli.exe" convert smoke.png smoke.plyra
-          "$GITHUB_WORKSPACE/target/release/fotodit-cli.exe" info smoke.plyra
-          "$GITHUB_WORKSPACE/target/release/fotodit-cli.exe" convert smoke.plyra smoke-back.png
-          ls -l smoke.png smoke.plyra smoke-back.png
-      - uses: actions/upload-artifact@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          name: fotodit-windows-x64
-          path: |
-            target/release/fotodit.exe
-            target/release/fotodit-cli.exe
-          retention-days: 14
+          persist-credentials: false
+      - name: Check out the already-pinned shared font input
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: storytold/craft-fonts
+          ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+          path: craft-fonts
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+      - name: Confirm public standard-runner scope and no configured provider credentials
+        run: |
+          if ('${{ github.event.repository.private }}' -ne 'false') { throw 'Public repository required' }
+          foreach ($name in @('GEMINI_API_KEY','COHERE_API_KEY','LAJIWA_API_KEY','OPENROUTER_API_KEY','POLLINATIONS_API_KEY','FOTODIT_AI_PROVIDER')) {
+            if (Test-Path "Env:$name") { throw "Unexpected configured provider variable: $name" }
+          }
+          curl.exe --version
+          if ($LASTEXITCODE -ne 0) { throw 'curl is required by current provider transport' }
+          git rev-parse HEAD
+      - name: Provider settings lifecycle tests
+        run: |
+          cargo test --locked -p fotodit-ui-egui --lib ai_providers_ui::tests
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Provider transport and planning contract mock tests
+        run: |
+          cargo test --locked -p fotodit-automation --lib ai::provider_bridge::tests
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Composer host and existing offline regression tests
+        run: |
+          cargo test --locked -p fotodit --bin fotodit assistant::tests
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build portable binaries only after all focused tests pass
+        run: |
+          cargo build --release --locked -p fotodit -p fotodit-cli
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: CLI PNG roundtrip and bounded portable payload
+        run: |
+          $app = Join-Path $env:GITHUB_WORKSPACE 'target/release/fotodit.exe'
+          $cli = Join-Path $env:GITHUB_WORKSPACE 'target/release/fotodit-cli.exe'
+          $stage = Join-Path $env:RUNNER_TEMP 'fotodit-portable'
+          $smoke = Join-Path $env:RUNNER_TEMP 'fotodit-smoke'
+          New-Item -ItemType Directory -Path $stage,$smoke | Out-Null
+          Set-Location $smoke
+          [IO.File]::WriteAllBytes((Join-Path $smoke 'smoke.png'), [Convert]::FromBase64String('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='))
+          & $cli convert smoke.png smoke.plyra
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $cli info smoke.plyra
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $cli convert smoke.plyra smoke-back.png
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (!(Test-Path smoke-back.png)) { throw 'Roundtrip output missing' }
+          Copy-Item $app,$cli -Destination $stage
+          $readme = @'
+          Fotodit portable Windows x64 test build. Unsigned, no installer.
+          Contains fotodit.exe and fotodit-cli.exe. No provider keys or local credentials.
+          Requires Windows graphics support and system curl.exe for provider requests.
+          Provider editing is session-only, explicitly enabled in AI providers after adding your own key.
+          Requests may consume provider quota or money. The build does not verify your provider plan is free.
+          Supported provider mode is bounded single-turn metadata-based command planning, not general image understanding.
+          Focused mocked tests and a CLI roundtrip are not Windows GUI, real-photo quality or live-provider acceptance.
+          Whole-workspace Clippy/full CI and device acceptance remain outstanding.
+          '@
+          Set-Content -Path (Join-Path $stage 'README.txt') -Value $readme -Encoding utf8
+          $files = Get-ChildItem $stage -File
+          $total = ($files | Measure-Object Length -Sum).Sum
+          if ($total -gt 190MB) { throw 'Portable payload exceeds 190MiB raw cap (200MiB artifact budget)' }
+          $files | ForEach-Object { '{0} {1} bytes' -f $_.Name,$_.Length }
+          $files | Get-FileHash -Algorithm SHA256 | Format-Table -AutoSize | Out-String | Set-Content (Join-Path $stage 'SHA256SUMS.txt')
+          Write-Output "Portable payload bytes: $total"
+      - name: Upload portable test artifact only with separately verified storage authority
+        if: inputs.upload_artifact == true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: fotodit-provider-portable-windows-x64
+          path: ${{ runner.temp }}/fotodit-portable/
+          retention-days: 1
+          if-no-files-found: error
+          compression-level: 6
