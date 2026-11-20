@@ -80,6 +80,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if (!(Test-Path smoke-back.png)) { throw 'Roundtrip output missing' }
           Copy-Item $app,$cli -Destination $stage
+          # Third-party notices and license texts must travel with the binaries when the tree carries them.
+          $notices = Join-Path $env:GITHUB_WORKSPACE 'THIRD_PARTY_NOTICES.md'
+          if (Test-Path $notices) { Copy-Item $notices -Destination $stage }
+          $licenses = Join-Path $env:GITHUB_WORKSPACE 'licenses'
+          if (Test-Path $licenses) { Copy-Item $licenses -Destination $stage -Recurse }
           $readme = @'
           Fotodit portable Windows x64 test build. Unsigned, no installer.
           Contains fotodit.exe and fotodit-cli.exe. No provider keys or local credentials.

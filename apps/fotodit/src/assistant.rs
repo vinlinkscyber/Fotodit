@@ -1070,6 +1070,48 @@ mod tests {
     }
 
     #[test]
+    fn visual_consent_withdrawn_before_apply_reports_actual_request_count() {
+        use std::sync::atomic::Ordering;
+        let (mut app, calls, bodies) = visual_fixture(vec![]);
+        let ctx = egui::Context::default();
+        submit_visual(&mut app, &ctx);
+        app.ai_providers.editing_consent_mut().set_visual(false);
+        let msg = await_plan(&mut app, &ctx);
+        assert!(msg.contains("Image consent is no longer active"), "{msg}");
+        assert!(msg.contains("1 provider request(s) were made"), "{msg}");
+        assert!(!msg.contains("used up"), "{msg}");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let bodies = bodies.lock().unwrap();
+        assert_eq!(bodies.len(), 1);
+        assert!(bodies[0].to_string().contains("inline_data"), "the plan request did carry the consented image");
+    }
+
+    #[test]
+    fn stale_result_check_discard_keeps_applied_edits_wording() {
+        use std::sync::atomic::Ordering;
+        let (mut app, calls, _) = visual_fixture(vec![serde_json::json!({"satisfied": true, "critique": "", "corrective_steps": []})]);
+        let ctx = egui::Context::default();
+        submit_visual(&mut app, &ctx);
+        let first = await_plan(&mut app, &ctx);
+        assert!(first.contains("request 2 of at most 3"), "{first}");
+        // Replace the document while the result check is in flight.
+        app.session.execute("file.new", serde_json::json!({"width":16,"height":16})).unwrap();
+        let msg = await_plan(&mut app, &ctx);
+        assert!(msg.contains("Result check discarded"), "{msg}");
+        assert!(msg.contains("Edits already applied remain"), "{msg}");
+        assert!(!msg.contains("No response was applied"), "{msg}");
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn render_document_png_refuses_an_empty_canvas_before_any_request() {
+        let doc = fotodit_doc::Document::new("empty", fotodit_geom::Size::new(0, 0),
+            fotodit_doc::ColorMode::Rgb, fotodit_doc::SampleType::U8);
+        let error = render_document_png(&doc).expect_err("an empty canvas cannot produce a result image");
+        assert!(error.contains("empty"), "{error}");
+    }
+
+    #[test]
     fn visual_goal_discarded_when_document_changes_before_apply() {
         use std::sync::atomic::Ordering;
         let (mut app, calls, _) = visual_fixture(vec![]);
