@@ -3,8 +3,8 @@ name: Focused provider contract and portable Windows build
 on:
   workflow_dispatch:
     inputs:
-      upload_artifact:
-        description: 'Upload 1-day test artifact only after owner approval and storage cost verification'
+      draft_release:
+        description: 'Attach the build to a DRAFT release (unmetered storage) only after owner approval; requires the pre-created tag; never publishes'
         type: boolean
         default: false
 
@@ -23,6 +23,10 @@ jobs:
     if: github.repository == 'vinlinkscyber/Fotodit' && github.ref == 'refs/heads/qual/windows-check'
     runs-on: windows-latest
     timeout-minutes: 180
+    # contents:write is required only so the final step can create the draft release
+    # and its asset via the run's ephemeral GITHUB_TOKEN; every other step needs read.
+    permissions:
+      contents: write
     defaults:
       run:
         shell: pwsh
@@ -47,6 +51,20 @@ jobs:
           curl.exe --version
           if ($LASTEXITCODE -ne 0) { throw 'curl is required by current provider transport' }
           git rev-parse HEAD
+      # The pre-created neutral tag must name THIS exact commit before anything expensive
+      # or any write happens. Fail safely on lookup error, annotated-tag type mismatch,
+      # or commit mismatch; this is a read-only check.
+      - name: Verify the pre-created tag matches the dispatched commit
+        if: inputs.draft_release == true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = gh api repos/vinlinkscyber/Fotodit/git/refs/tags/qual-candidate-r1
+          if ($LASTEXITCODE -ne 0) { throw "tag lookup failed (gh exit $LASTEXITCODE); tag qual-candidate-r1 must be pre-created before dispatch" }
+          $ref = $out | ConvertFrom-Json
+          if ($ref.object.type -ne 'commit') { throw "tag qual-candidate-r1 must be lightweight (point directly at a commit), got $($ref.object.type)" }
+          if ($ref.object.sha -ne $env:GITHUB_SHA) { throw "tag qual-candidate-r1 points at $($ref.object.sha), not the dispatched commit $env:GITHUB_SHA" }
       - name: Provider settings lifecycle tests
         run: |
           cargo test --locked -p fotodit-ui-egui --lib ai_providers_ui::tests
@@ -113,15 +131,28 @@ jobs:
           } | Set-Content (Join-Path $stage 'SHA256SUMS.txt')
           $files = Get-ChildItem $stage -File -Recurse
           $total = ($files | Measure-Object Length -Sum).Sum
-          if ($total -gt 190MB) { throw 'Portable payload exceeds 190MiB raw cap (200MiB artifact budget)' }
+          if ($total -gt 190MB) { throw 'Portable payload exceeds 190MiB raw cap (well under the 2 GiB release-asset limit)' }
           $files | ForEach-Object { '{0} {1} bytes' -f $_.FullName.Substring($stage.Length + 1),$_.Length }
           Write-Output "Portable payload bytes: $total"
-      - name: Upload portable test artifact only with separately verified storage authority
-        if: inputs.upload_artifact == true
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        with:
-          name: fotodit-provider-portable-windows-x64
-          path: ${{ runner.temp }}/fotodit-portable/
-          retention-days: 1
-          if-no-files-found: error
-          compression-level: 6
+      # Draft release assets are unmetered storage (release quotas: 2 GiB per file, no
+      # total-size or bandwidth limit), unlike Actions artifact storage. Drafts are
+      # visible and downloadable only to people with write access to this repository.
+      # The tag is pre-created at the exact qualification tip with the authorized PAT
+      # route after owner approval: the run's GITHUB_TOKEN may not create refs on
+      # commits that change workflows, so this step only ever verifies and reuses it.
+      # No retry and no cleanup: a failure leaves the tag in place and stops.
+      - name: Attach portable build to a new draft release (never publishes)
+        if: inputs.draft_release == true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stage = Join-Path $env:RUNNER_TEMP 'fotodit-portable'
+          $zip = Join-Path $env:RUNNER_TEMP 'fotodit-portable-windows-x64.zip'
+          Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -CompressionLevel Optimal -ErrorAction Stop
+          $bytes = (Get-Item $zip).Length
+          Write-Output "Release asset bytes: $bytes"
+          if ($bytes -ge 2147483648) { throw 'Release asset must stay under the 2 GiB per-file limit' }
+          $tag = 'qual-candidate-r1'
+          gh release create $tag $zip --draft --verify-tag --repo vinlinkscyber/Fotodit --title "Qualification build (draft) - run $env:GITHUB_RUN_ID" --notes 'Unsigned portable Windows x64 test build of the qualification candidate. Draft only: never publish. Visible and downloadable only to people with write access to this repository. SHA256SUMS.txt inside the zip verifies every file.'
+          if ($LASTEXITCODE -ne 0) { throw "gh release create failed with exit code $LASTEXITCODE" }
