@@ -55,6 +55,14 @@ jobs:
         run: |
           cargo test --locked -p fotodit-automation --lib ai::provider_bridge::tests
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Goal-session creation regressions (automation integration)
+        run: |
+          cargo test --locked -p fotodit-automation --test ai_goal_session
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Engine active-layer visibility runtime check
+        run: |
+          cargo test --locked -p fotodit-engine --test layer_visibility_active
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Composer host and existing offline regression tests
         run: |
           cargo test --locked -p fotodit --bin fotodit assistant::tests
