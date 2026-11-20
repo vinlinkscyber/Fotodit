@@ -1256,6 +1256,9 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
     let mut active_changed = false;
     let mut width = scene.width;
     let mut height = scene.height;
+    // Ids a plan step has already hidden. The scene snapshot is pre-plan, so a
+    // layer hidden by an earlier step must not satisfy a later step's checks.
+    let mut hidden: Vec<u64> = Vec::new();
     for (index, step) in plan.steps.iter().enumerate() {
         if !SELECTED_COMMANDS.contains(&step.command.as_str()) { return Err(refuse()); }
         let map = step.params.as_object().ok_or_else(refuse)?;
@@ -1295,18 +1298,23 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
         if step.command == "type.setStyle" && !map.contains_key("size") && !map.contains_key("color") { return Err(refuse()); }
         if matches!(step.command.as_str(), "type.edit" | "type.setStyle") {
             let id = map.get("layer").and_then(Value::as_u64).ok_or_else(refuse)?;
-            if !scene.layers.iter().any(|l| l.id == id && l.kind == "Type" && l.is_visible) { return Err(refuse()); }
+            if hidden.contains(&id)
+                || !scene.layers.iter().any(|l| l.id == id && l.kind == "Type" && l.is_visible) { return Err(refuse()); }
         }
         if matches!(step.command.as_str(), "layer.setProps" | "layer.duplicate") {
             let id = map.get("layer").and_then(Value::as_u64).ok_or_else(refuse)?;
             if !scene.layers.iter().any(|l| l.id == id && l.is_visible) { return Err(refuse()); }
+            let unhide = step.command == "layer.setProps"
+                && map.get("visible").and_then(Value::as_bool) == Some(true);
+            if hidden.contains(&id) && !unhide { return Err(refuse()); }
         }
         if step.command == "layer.moveTo" {
             let id = map.get("layer").and_then(Value::as_u64).ok_or_else(refuse)?;
             let target = map.get("target").and_then(Value::as_u64).ok_or_else(refuse)?;
             if id == target { return Err(refuse()); }
             for needle in [id, target] {
-                if !scene.layers.iter().any(|l| l.id == needle && l.is_visible) { return Err(refuse()); }
+                if hidden.contains(&needle)
+                    || !scene.layers.iter().any(|l| l.id == needle && l.is_visible) { return Err(refuse()); }
             }
         }
         if step.command == "layer.setProps"
@@ -1348,13 +1356,24 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
             };
             if !valid { return Err(refuse()); }
         }
-        if matches!(step.command.as_str(), "filter.sharpen.unsharpMask" | "filter.blur.gaussianBlur") && (active_changed || !scene.layers.iter()
-            .any(|l| Some(l.id) == scene.active_layer_id && matches!(l.kind.as_str(), "Pixel" | "Raster") && l.is_visible)) { return Err(refuse()); }
+        if matches!(step.command.as_str(), "filter.sharpen.unsharpMask" | "filter.blur.gaussianBlur")
+            && (active_changed
+                || scene.active_layer_id.is_some_and(|a| hidden.contains(&a))
+                || !scene.layers.iter()
+                    .any(|l| Some(l.id) == scene.active_layer_id && matches!(l.kind.as_str(), "Pixel" | "Raster") && l.is_visible)) { return Err(refuse()); }
         if matches!(step.command.as_str(), "type.create" | "layer.newFillLayer.solidColor"
             | "layer.newAdjustmentLayer.brightnessContrast" | "layer.newAdjustmentLayer.vibrance"
             | "layer.newAdjustmentLayer.hueSaturation" | "layer.newAdjustmentLayer.levels"
             | "layer.newAdjustmentLayer.colorBalance" | "layer.newAdjustmentLayer.blackWhite"
             | "layer.newAdjustmentLayer.photoFilter" | "layer.duplicate") { active_changed = true; }
+        if step.command == "layer.setProps" {
+            let id = map.get("layer").and_then(Value::as_u64).unwrap_or(0);
+            match map.get("visible").and_then(Value::as_bool) {
+                Some(false) => hidden.push(id),
+                Some(true) => hidden.retain(|&h| h != id),
+                None => {}
+            }
+        }
         for key in ["x", "y", "amount", "threshold"] {
             if map.get(key).is_some_and(|v| v.as_i64().is_none()) { return Err(refuse()); }
         }
@@ -1622,6 +1641,24 @@ mod tests {
         let mut hidden_scene = contract_scene();
         hidden_scene.layers[0].is_visible = false;
         assert!(validate_selected_plan(&contract_plan("layer.duplicate", json!({"layer":7})), &hidden_scene).is_err(), "hidden layers are not valid targets");
+    }
+
+    #[test]
+    fn selected_contract_rejects_steps_depending_on_a_layer_hidden_earlier_in_the_plan() {
+        let scene = contract_scene();
+        let seq = |steps: Vec<(&str, serde_json::Value)>| EditingPlan { title: "fixture".into(), rationale: String::new(),
+            category: IntentCategory::PhotoEnhancement,
+            steps: steps.into_iter().map(|(command, params)| PlanStep { command: command.into(), params, description: "fixture".into() }).collect(),
+            creates_document: false, target_size: None };
+        let hide7 = ("layer.setProps", json!({"layer":7,"visible":false}));
+        assert!(validate_selected_plan(&seq(vec![hide7.clone(), ("filter.sharpen.unsharpMask", json!({"amount":50,"radius":1,"threshold":0}))]), &scene).is_err(), "the active pixel layer was hidden earlier in the plan");
+        assert!(validate_selected_plan(&seq(vec![hide7.clone(), ("filter.blur.gaussianBlur", json!({"radius":2.0}))]), &scene).is_err());
+        assert!(validate_selected_plan(&seq(vec![hide7.clone(), ("layer.setProps", json!({"layer":7,"opacity":0.5}))]), &scene).is_err());
+        assert!(validate_selected_plan(&seq(vec![hide7.clone(), ("layer.duplicate", json!({"layer":7}))]), &scene).is_err());
+        assert!(validate_selected_plan(&seq(vec![("layer.setProps", json!({"layer":9,"visible":false})), ("type.edit", json!({"layer":9,"text":"Hello"}))]), &scene).is_err());
+        assert!(validate_selected_plan(&seq(vec![hide7.clone(), ("layer.moveTo", json!({"layer":9,"target":7}))]), &scene).is_err());
+        assert!(validate_selected_plan(&seq(vec![hide7.clone(), ("layer.setProps", json!({"layer":7,"visible":true})), ("filter.blur.gaussianBlur", json!({"radius":2.0}))]), &scene).is_ok(), "un-hide is the one allowed reference and re-enables later steps");
+        assert!(validate_selected_plan(&seq(vec![("layer.setProps", json!({"layer":9,"visible":false})), ("filter.blur.gaussianBlur", json!({"radius":2.0}))]), &scene).is_ok(), "hiding a non-active layer does not block the active pixel filter");
     }
 
     #[test]
