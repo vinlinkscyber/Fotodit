@@ -73,6 +73,10 @@ jobs:
         run: |
           cargo test --locked -p fotodit-automation --lib ai::provider_bridge::tests
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Intra-plan reference execution regressions (automation)
+        run: |
+          cargo test --locked -p fotodit-automation --lib ai::tests::intra_plan
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Goal-session creation regressions (automation integration)
         run: |
           cargo test --locked -p fotodit-automation --test ai_goal_session
