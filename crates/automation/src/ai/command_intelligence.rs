@@ -182,10 +182,10 @@ impl CommandCatalog {
                 description: "Duplicate a layer in the document".into(),
             },
             CommandCapability {
-                id: "filter.gaussianBlur".into(),
+                id: "filter.blur.gaussianBlur".into(),
                 label: "Gaussian Blur…".into(),
                 category: "Filter".into(),
-                params_schema: r#"{"radius": px=1.0}"#.into(),
+                params_schema: r#"{"radius": 0.1..1000=1.0}"#.into(),
                 description: "Apply a Gaussian blur filter with specified pixel radius".into(),
             },
             CommandCapability {
@@ -362,12 +362,12 @@ impl CommandCatalog {
                     }
                 }
             }
-            "filter.gaussianBlur" => {
+            "filter.blur.gaussianBlur" => {
                 let radius = params.get("radius").and_then(Value::as_f64);
-                if radius.is_none() || radius.is_some_and(|r| r <= 0.0) {
+                if radius.is_none() || radius.is_some_and(|r| !(0.1..=1000.0).contains(&r)) {
                     return Err(AiError::ValidationError {
                         command: id.into(),
-                        message: "gaussianBlur requires positive 'radius'".into(),
+                        message: "gaussianBlur requires 'radius' in 0.1..=1000".into(),
                     });
                 }
             }

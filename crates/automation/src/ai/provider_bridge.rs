@@ -1235,7 +1235,15 @@ fn selected_contract_prompt(intent: &EditingIntent, scene: &VisualScene, image: 
 
 const SELECTED_COMMANDS: &[&str] = &["file.new", "type.create", "type.edit", "type.setStyle",
     "layer.newFillLayer.solidColor", "layer.newAdjustmentLayer.brightnessContrast",
-    "layer.newAdjustmentLayer.vibrance", "filter.sharpen.unsharpMask"];
+    "layer.newAdjustmentLayer.vibrance", "layer.newAdjustmentLayer.hueSaturation",
+    "layer.newAdjustmentLayer.levels", "layer.newAdjustmentLayer.colorBalance",
+    "layer.newAdjustmentLayer.blackWhite", "layer.newAdjustmentLayer.photoFilter",
+    "filter.sharpen.unsharpMask", "filter.blur.gaussianBlur"];
+
+/// Engine `PHOTO_FILTERS` preset ids (crates/engine/src/adjust_params.rs).
+const PHOTO_FILTER_IDS: &[&str] = &["warming85", "warmingLBA", "warming81", "cooling80",
+    "coolingLBB", "cooling82", "red", "orange", "yellow", "green", "cyan", "blue",
+    "violet", "magenta", "sepia", "deepRed", "deepBlue", "deepEmerald", "deepYellow", "underwater"];
 
 fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(), AiError> {
     let refuse = || AiError::PlanningError("Provider plan is outside the supported command, parameter or target contract; nothing was edited.".into());
@@ -1254,7 +1262,13 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
             "layer.newFillLayer.solidColor" => &["color"],
             "layer.newAdjustmentLayer.brightnessContrast" => &["brightness", "contrast"],
             "layer.newAdjustmentLayer.vibrance" => &["vibrance", "saturation"],
+            "layer.newAdjustmentLayer.hueSaturation" => &["hue", "saturation", "lightness"],
+            "layer.newAdjustmentLayer.levels" => &["inBlack", "gamma", "inWhite"],
+            "layer.newAdjustmentLayer.colorBalance" => &["shadows", "midtones", "highlights"],
+            "layer.newAdjustmentLayer.blackWhite" => &["reds", "yellows", "greens", "cyans", "blues", "magentas"],
+            "layer.newAdjustmentLayer.photoFilter" => &["filter", "density"],
             "filter.sharpen.unsharpMask" => &["amount", "radius", "threshold"],
+            "filter.blur.gaussianBlur" => &["radius"],
             _ => return Err(refuse()),
         };
         if map.is_empty() || map.keys().any(|k| !allowed.contains(&k.as_str())) { return Err(refuse()); }
@@ -1279,6 +1293,10 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
             && !map.get("text").and_then(Value::as_str).is_some_and(|v| !v.trim().is_empty() && v.chars().count() <= 2000) { return Err(refuse()); }
         if step.command == "type.create" && (!number("x", 0.0, f64::from(width)) || !number("y", 0.0, f64::from(height))
             || !number("size", 6.0, 512.0)) { return Err(refuse()); }
+        if step.command == "layer.newAdjustmentLayer.photoFilter" && !map.contains_key("filter") { return Err(refuse()); }
+        if step.command == "layer.newAdjustmentLayer.levels"
+            && let (Some(b), Some(w)) = (map.get("inBlack").and_then(Value::as_f64), map.get("inWhite").and_then(Value::as_f64))
+            && w < b + 2.0 { return Err(refuse()); }
         for (key, value) in map {
             let valid = match key.as_str() {
                 "size" => number(key, 6.0, 512.0),
@@ -1286,16 +1304,31 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
                 "brightness" => number(key, -150.0, 150.0),
                 "contrast" => number(key, -50.0, 100.0),
                 "vibrance" | "saturation" => number(key, -100.0, 100.0),
+                "hue" => number(key, -180.0, 180.0),
+                "lightness" => number(key, -100.0, 100.0),
+                "inBlack" => number(key, 0.0, 253.0),
+                "inWhite" => number(key, 2.0, 255.0),
+                "gamma" => number(key, 0.01, 9.99),
+                "density" => number(key, 0.0, 100.0),
+                "filter" => value.as_str().is_some_and(|v| PHOTO_FILTER_IDS.contains(&v)),
+                "shadows" | "midtones" | "highlights" => value.as_array().is_some_and(|a| a.len() == 3
+                    && a.iter().all(|v| v.as_f64().is_some_and(|x| x.is_finite() && (-100.0..=100.0).contains(&x)))),
+                "reds" | "yellows" | "greens" | "cyans" | "blues" | "magentas" => number(key, -200.0, 300.0),
                 "amount" => number(key, 1.0, 500.0),
+                "radius" if step.command == "filter.blur.gaussianBlur" => number(key, 0.1, 1000.0),
                 "radius" => number(key, 0.1, 250.0),
                 "threshold" => number(key, 0.0, 255.0),
                 _ => true,
             };
             if !valid { return Err(refuse()); }
         }
-        if step.command == "filter.sharpen.unsharpMask" && (active_changed || !scene.layers.iter()
+        if matches!(step.command.as_str(), "filter.sharpen.unsharpMask" | "filter.blur.gaussianBlur") && (active_changed || !scene.layers.iter()
             .any(|l| Some(l.id) == scene.active_layer_id && matches!(l.kind.as_str(), "Pixel" | "Raster") && l.is_visible)) { return Err(refuse()); }
-        if matches!(step.command.as_str(), "type.create" | "layer.newFillLayer.solidColor" | "layer.newAdjustmentLayer.brightnessContrast" | "layer.newAdjustmentLayer.vibrance") { active_changed = true; }
+        if matches!(step.command.as_str(), "type.create" | "layer.newFillLayer.solidColor"
+            | "layer.newAdjustmentLayer.brightnessContrast" | "layer.newAdjustmentLayer.vibrance"
+            | "layer.newAdjustmentLayer.hueSaturation" | "layer.newAdjustmentLayer.levels"
+            | "layer.newAdjustmentLayer.colorBalance" | "layer.newAdjustmentLayer.blackWhite"
+            | "layer.newAdjustmentLayer.photoFilter") { active_changed = true; }
         for key in ["x", "y", "amount", "threshold"] {
             if map.get(key).is_some_and(|v| v.as_i64().is_none()) { return Err(refuse()); }
         }
@@ -1520,6 +1553,27 @@ mod tests {
         assert!(validate_selected_plan(&contract_plan("layer.newAdjustmentLayer.vibrance", json!({"vibrance":1.5,"saturation":-12.5})), &scene).is_ok());
         assert!(validate_selected_plan(&contract_plan("type.setStyle", json!({"layer":9,"size":30})), &scene).is_ok());
         assert!(validate_selected_plan(&contract_plan("filter.sharpen.unsharpMask", json!({"amount":50,"radius":1,"threshold":0})), &scene).is_ok());
+    }
+
+    #[test]
+    fn selected_contract_admits_widened_adjustments_and_blur_with_exact_ranges() {
+        let scene = contract_scene();
+        assert!(validate_selected_plan(&contract_plan("layer.newAdjustmentLayer.hueSaturation", json!({"hue":-45,"saturation":20,"lightness":5})), &scene).is_ok());
+        assert!(validate_selected_plan(&contract_plan("layer.newAdjustmentLayer.levels", json!({"inBlack":10,"gamma":1.2,"inWhite":240})), &scene).is_ok());
+        assert!(validate_selected_plan(&contract_plan("layer.newAdjustmentLayer.colorBalance", json!({"midtones":[10,-20,5]})), &scene).is_ok());
+        assert!(validate_selected_plan(&contract_plan("layer.newAdjustmentLayer.blackWhite", json!({"reds":120,"blues":-40})), &scene).is_ok());
+        assert!(validate_selected_plan(&contract_plan("layer.newAdjustmentLayer.photoFilter", json!({"filter":"warming85","density":40})), &scene).is_ok());
+        assert!(validate_selected_plan(&contract_plan("filter.blur.gaussianBlur", json!({"radius":500.0})), &scene).is_ok(), "blur radius above the unsharp cap is valid for blur");
+        assert!(validate_selected_plan(&contract_plan("layer.newAdjustmentLayer.hueSaturation", json!({"hue":181})), &scene).is_err());
+        assert!(validate_selected_plan(&contract_plan("layer.newAdjustmentLayer.levels", json!({"inBlack":200,"inWhite":201})), &scene).is_err(), "inWhite must be at least inBlack+2");
+        assert!(validate_selected_plan(&contract_plan("layer.newAdjustmentLayer.colorBalance", json!({"midtones":[10,-20]})), &scene).is_err(), "tone arrays hold exactly three channels");
+        assert!(validate_selected_plan(&contract_plan("layer.newAdjustmentLayer.blackWhite", json!({"reds":301})), &scene).is_err());
+        assert!(validate_selected_plan(&contract_plan("layer.newAdjustmentLayer.photoFilter", json!({"filter":"vintage"})), &scene).is_err());
+        assert!(validate_selected_plan(&contract_plan("layer.newAdjustmentLayer.photoFilter", json!({"density":40})), &scene).is_err(), "filter preset is required");
+        assert!(validate_selected_plan(&contract_plan("filter.blur.gaussianBlur", json!({"radius":1000.5})), &scene).is_err());
+        assert!(validate_selected_plan(&contract_plan("filter.sharpen.unsharpMask", json!({"amount":50,"radius":300.0})), &scene).is_err(), "unsharp radius cap unchanged");
+        assert!(validate_selected_plan(&contract_plan("filter.blur.gaussianBlur", json!({"radius":2.0})), &VisualScene::default()).is_err(), "filters still need an active visible pixel/raster layer");
+        assert!(validate_selected_plan(&contract_plan("filter.gaussianBlur", json!({"radius":2.0})), &scene).is_err(), "the stale pre-rename id stays refused");
     }
 
     #[test]

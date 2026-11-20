@@ -462,7 +462,7 @@ impl DeterministicRulePlanner {
         let steps = if p_lower.contains("blur") {
             let radius = intent.numeric_value.unwrap_or(5.0).max(0.1);
             vec![PlanStep {
-                command: "filter.gaussianBlur".into(),
+                command: "filter.blur.gaussianBlur".into(),
                 params: json!({ "radius": radius }),
                 description: format!("Apply Gaussian blur with {radius}px radius"),
             }]

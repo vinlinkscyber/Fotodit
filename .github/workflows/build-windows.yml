@@ -96,11 +96,12 @@ jobs:
           Whole-workspace Clippy/full CI and device acceptance remain outstanding.
           '@
           Set-Content -Path (Join-Path $stage 'README.txt') -Value $readme -Encoding utf8
-          $files = Get-ChildItem $stage -File
+          # Recurse so nested notices/licenses are counted in the cap and hashed in the manifest.
+          $files = Get-ChildItem $stage -File -Recurse
           $total = ($files | Measure-Object Length -Sum).Sum
           if ($total -gt 190MB) { throw 'Portable payload exceeds 190MiB raw cap (200MiB artifact budget)' }
-          $files | ForEach-Object { '{0} {1} bytes' -f $_.Name,$_.Length }
-          $files | Get-FileHash -Algorithm SHA256 | Format-Table -AutoSize | Out-String | Set-Content (Join-Path $stage 'SHA256SUMS.txt')
+          $files | ForEach-Object { '{0} {1} bytes' -f $_.FullName.Substring($stage.Length + 1),$_.Length }
+          $files | ForEach-Object { '{0}  {1}' -f ($_.FullName.Substring($stage.Length + 1)),(Get-FileHash $_.FullName -Algorithm SHA256).Hash } | Set-Content (Join-Path $stage 'SHA256SUMS.txt')
           Write-Output "Portable payload bytes: $total"
       - name: Upload portable test artifact only with separately verified storage authority
         if: inputs.upload_artifact == true
