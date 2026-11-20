@@ -501,6 +501,64 @@ mod tests {
     }
 
     #[test]
+    fn intra_plan_references_resolve_to_created_layer_ids() {
+        let mut headless = Headless::trusted_local();
+        headless
+            .command_run("file.new", json!({"width": 64, "height": 64, "background": "white"}))
+            .unwrap();
+        let plan = EditingPlan {
+            title: "t".into(), rationale: "r".into(), category: IntentCategory::GeneralEditing,
+            creates_document: false, target_size: None,
+            steps: vec![
+                PlanStep { command: "type.create".into(),
+                    params: json!({"x": 4, "y": 16, "text": "Hi", "size": 14}), description: "d".into() },
+                PlanStep { command: "type.setStyle".into(),
+                    params: json!({"layer": {"$step": 1}, "size": 30}), description: "d".into() },
+                PlanStep { command: "edit.transform".into(),
+                    params: json!({"layer": {"$step": 1}, "dx": 3, "dy": 2}), description: "d".into() },
+            ],
+        };
+        let (execution, _evidence) = ExecutionEngine::execute_plan_in_with_evidence(&mut headless, &plan)
+            .unwrap_or_else(|e| panic!("plan with intra-plan references failed: {e}"));
+        assert!(execution.is_success,
+            "every step should apply once references resolve: {:?}",
+            execution.step_executions.iter().map(|s| (&s.command, s.success, &s.error)).collect::<Vec<_>>());
+        assert_eq!(execution.step_executions.len(), 3);
+        // The recorded params keep the plan's symbolic form; the engine saw the resolved id.
+        assert_eq!(execution.step_executions[1].params["layer"], json!({"$step": 1}));
+        let created = execution.step_executions[0].output.as_ref().and_then(|o| o["layer"].as_u64());
+        assert!(created.is_some(), "type.create reports the created layer id");
+        let document = headless.inspect_active().unwrap().expect("document stays open");
+        let layers = document["layers"].as_array().expect("inspection lists layers");
+        assert!(layers.iter().any(|l| l["id"].as_u64() == created && l["kind"] == "Type"),
+            "the created type layer is present after styling and transform");
+    }
+
+    #[test]
+    fn intra_plan_reference_to_non_creating_step_fails_closed() {
+        let mut headless = Headless::trusted_local();
+        headless
+            .command_run("file.new", json!({"width": 64, "height": 64, "background": "white"}))
+            .unwrap();
+        let plan = EditingPlan {
+            title: "t".into(), rationale: "r".into(), category: IntentCategory::GeneralEditing,
+            creates_document: false, target_size: None,
+            steps: vec![
+                PlanStep { command: "type.create".into(),
+                    params: json!({"x": 4, "y": 16, "text": "Hi", "size": 14}), description: "d".into() },
+                PlanStep { command: "type.setStyle".into(),
+                    params: json!({"layer": {"$step": 1}, "size": 30}), description: "d".into() },
+                // Step 2 created no layer: the reference must stop the plan.
+                PlanStep { command: "layer.setProps".into(),
+                    params: json!({"layer": {"$step": 2}, "opacity": 0.5}), description: "d".into() },
+            ],
+        };
+        let error = ExecutionEngine::execute_plan_in_with_evidence(&mut headless, &plan)
+            .expect_err("a reference to a step that created no layer must fail closed");
+        assert!(error.to_string().contains("created no layer"), "{error}");
+    }
+
+    #[test]
     fn reject_photo_enhancement_without_document() {
         let ai = AiEngine::new();
         let mut headless = Headless::trusted_local();
