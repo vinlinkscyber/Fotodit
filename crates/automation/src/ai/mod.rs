@@ -348,6 +348,11 @@ impl AiEngine {
             );
             plan.creates_document = true;
         }
+        // Same creation normalization as the inserted step: a planner that itself leads
+        // with file.new when no document is open owns the created document.
+        if doc_json.is_none() && plan.steps.first().is_some_and(|s| s.command == "file.new") {
+            plan.creates_document = true;
+        }
 
         // 4. Command Intelligence: validate all plan steps against native command schemas
         for step in &plan.steps {
@@ -429,6 +434,9 @@ impl AiEngine {
                     description: format!("Create new document ({w}x{h})"),
                 },
             );
+            plan.creates_document = true;
+        }
+        if doc_json.is_none() && plan.steps.first().is_some_and(|s| s.command == "file.new") {
             plan.creates_document = true;
         }
         for step in &plan.steps {

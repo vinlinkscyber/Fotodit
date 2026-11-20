@@ -312,3 +312,50 @@ fn unsupported_digest_is_explicit_unknown_not_a_success_measure() {
     assert_eq!(outcome.attempts[0].evidence.as_ref().unwrap().steps[0].visual.class,
         fotodit_automation::ai::VisualEvidenceClass::Unknown);
 }
+
+/// Regression for the composer failure seen in the Windows CI run: a planner that
+/// itself leads with `file.new` when no document is open is the same creation case as
+/// an inserted step. Before the normalization fix, the transactional identity guard
+/// rejected the first step, the goal stopped FinalStateUnverified with zero commands,
+/// and the composer reported "no edits applied" with no document - the test then
+/// panicked unwrapping the missing active document.
+#[test]
+fn planner_led_file_new_with_no_document_is_a_creation_plan_not_an_identity_change() {
+    struct CreationHost {
+        session: fotodit_engine::Session,
+        calls: Vec<String>,
+    }
+    impl LiveEditSession for CreationHost {
+        fn inspect_active(&self) -> Result<Option<Value>, AutomationError> {
+            Ok(self.session.active().map(fotodit_engine::inspect::document))
+        }
+        fn command_run(&mut self, command: &str, params: Value) -> Result<Value, AutomationError> {
+            self.calls.push(command.into());
+            self.session.execute(command, params).map_err(|error| AutomationError::App(error.to_string()))
+        }
+    }
+    let mut host = CreationHost { session: fotodit_engine::Session::new(), calls: Vec::new() };
+    let initial = plan(vec![step("file.new", json!({"width": 240, "height": 320, "background": "transparent"}))]);
+    assert!(!initial.creates_document, "the planner flag is false, exactly as the provider bridge parses it");
+    let outcome = engine(initial).process_goal_in(&mut host, &GoalRequest::new(GOAL), &mut AiContext::new(), &NoGoalRepair);
+    assert_eq!(host.calls, vec!["file.new"], "the leading creation step must dispatch, not stop at the identity guard: {}", outcome.detail);
+    assert!(outcome.attempts[0].execution.as_ref().unwrap().is_success, "{}", outcome.detail);
+    assert_ne!(outcome.stop, GoalStop::FinalStateUnverified, "{}", outcome.detail);
+    let document = fotodit_engine::inspect::document(host.session.active().expect("the created document stays open"));
+    assert_eq!(document["width"], json!(240));
+    assert_eq!(document["height"], json!(320));
+}
+
+/// The open-document side of the same boundary: a planner-led file.new while a
+/// document is open keeps creates_document=false, so the identity guard still refuses
+/// it and the user's document is never replaced.
+#[test]
+fn planner_led_file_new_with_an_open_document_stays_refused() {
+    let mut host = Host::new(Mode::Normal);
+    let before = host.document.clone();
+    let initial = plan(vec![step("file.new", json!({"width": 240, "height": 320, "background": "transparent"}))]);
+    let outcome = engine(initial).process_goal_in(&mut host, &GoalRequest::new(GOAL), &mut AiContext::new(), &NoGoalRepair);
+    assert_eq!(outcome.stop, GoalStop::FinalStateUnverified, "{}", outcome.detail);
+    assert!(host.calls.is_empty(), "nothing dispatched: {calls:?}", calls = host.calls);
+    assert_eq!(host.document, before, "the open document is untouched");
+}

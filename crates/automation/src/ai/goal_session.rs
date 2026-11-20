@@ -191,6 +191,14 @@ impl AiEngine {
                     description: "Create the requested document".into() });
                 plan.creates_document = true;
             }
+            // A planner may itself lead with file.new when no document is open; that is the
+            // same creation case as an inserted step. Mark the plan accordingly or the
+            // transactional guard would reject its first step as identity-changing.
+            // With a document open the flag stays false, so a provider-led file.new there
+            // is still refused instead of replacing the user's document.
+            if attempt_index == 0 && current.is_none() && plan.steps.first().is_some_and(|step| step.command == "file.new") {
+                plan.creates_document = true;
+            }
             if attempt_index > 0 && (plan.creates_document || plan.steps.iter().any(|step| step.command == "file.new")) {
                 return outcome.stop(GoalStop::PlanningFailed, "Repair must use the existing document, not create or replace it.");
             }

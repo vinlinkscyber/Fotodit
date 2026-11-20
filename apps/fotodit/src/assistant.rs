@@ -648,6 +648,26 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 2, "disable prevents remote requests");
     }
 
+    /// The open-document side of the creation boundary: when the user already has a
+    /// document open and the provider answers with a leading file.new, the plan must be
+    /// refused with no edits applied and the open document left untouched - never a
+    /// silent replacement.
+    #[test]
+    fn provider_led_file_new_never_replaces_an_open_document() {
+        use std::sync::atomic::Ordering;
+        let (mut app, calls, _) = chat_fixture(false);
+        let ctx = egui::Context::default();
+        app.session.execute("file.new", serde_json::json!({"width":64,"height":64})).unwrap();
+        app.ai_providers.editing_consent_mut().request("gemini");
+        app.ai_providers.editing_consent_mut().confirm_identity([7; 32]);
+        let _ = fotodit_ui_egui::panels::assistant::submit(&mut app, &ctx, "create a poster called chndrax");
+        let answer = await_plan(&mut app, &ctx);
+        assert!(answer.starts_with("Provider editing (gemini):"), "{answer}");
+        assert!(answer.contains("no edits applied"), "a provider-led file.new is refused while a document is open: {answer}");
+        assert_eq!(app.session.active().unwrap().doc.size.width, 64, "the user's open document is untouched");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
     #[test]
     fn composer_provider_failure_never_runs_offline_or_other_account() {
         use std::sync::atomic::Ordering;
