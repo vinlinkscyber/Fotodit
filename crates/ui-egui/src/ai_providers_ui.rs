@@ -60,6 +60,10 @@ pub struct State {
     editing: EditingConsent,
 }
 
+/// Result checks one image-aware goal may make after its planning request, so
+/// one goal costs at most 1 + VISUAL_MAX_CHECKS provider requests.
+pub const VISUAL_MAX_CHECKS: u32 = 2;
+
 /// Session-only consent. Saving a credential never grants permission to send prompts.
 #[derive(Default, Debug)]
 pub struct EditingConsent {
@@ -67,6 +71,10 @@ pub struct EditingConsent {
     pending: Option<&'static str>,
     identity: Option<[u8; 32]>,
     generation: u64,
+    /// Image-aware mode: a downscaled PNG of the document rides with each
+    /// request. Only Gemini's wired transport can carry it, so this is refused
+    /// for every other slot and cleared by any consent change.
+    visual: bool,
 }
 
 impl EditingConsent {
@@ -77,7 +85,10 @@ impl EditingConsent {
     }
     pub fn confirm_identity(&mut self, identity: [u8; 32]) { self.active = self.pending.take(); self.identity = self.active.map(|_| identity); }
     pub fn binding(&self) -> (Option<&'static str>, Option<[u8; 32]>, u64) { (self.active, self.identity, self.generation) }
-    pub fn disable(&mut self) { self.active = None; self.pending = None; self.identity = None; self.generation = self.generation.wrapping_add(1); }
+    pub fn disable(&mut self) { self.active = None; self.pending = None; self.identity = None; self.visual = false; self.generation = self.generation.wrapping_add(1); }
+    /// Image-aware mode sticks only while Gemini editing is active.
+    pub fn set_visual(&mut self, on: bool) { self.visual = on && self.active == Some("gemini"); }
+    pub fn visual_active(&self) -> bool { self.visual && self.active == Some("gemini") }
 }
 
 impl State {
@@ -242,6 +253,15 @@ pub fn show(app: &mut FotoditApp, ctx: &egui::Context) {
                 if matches!(provider.slot, "gemini" | "cohere" | "lajiwa") {
                     if st.editing.active == Some(provider.slot) {
                         ui.label(tl!("Provider editing enabled for this session. Chat Send contacts this provider only."));
+                        if provider.slot == "gemini" {
+                            let mut visual = st.editing.visual_active();
+                            if ui.checkbox(&mut visual, tl!("Let Gemini see the canvas (sends a document image)")).changed() {
+                                st.editing.set_visual(visual);
+                            }
+                            if st.editing.visual_active() {
+                                ui.label(tl!("Image-aware editing: each chat Send makes 1 planning request, then up to 2 result-check requests, so at most 3 requests per goal. Every request includes a downscaled PNG image (1024px maximum edge) of your document with your prompt and layer metadata. The image leaves this device and goes to Google using your key. Each request may consume quota or cost money under your Google account; Fotodit cannot guarantee free use. Gemini reports whether the result looks right; that is its own judgment, not proof. Session-only: disabling editing or closing the app ends it."));
+                            }
+                        }
                         if ui.button(tl!("Disable provider editing")).clicked() { st.editing.disable(); }
                     } else if matches!(source, Some(Source::Saved | Source::External))
                         && ui.button(tl!("Enable for editing...")).clicked() {
@@ -352,6 +372,28 @@ mod tests {
         consent.request("openrouter");
         consent.confirm_identity([7; 32]);
         assert_eq!(consent.active(), None, "unavailable provider remains disabled");
+    }
+
+    #[test]
+    fn visual_consent_requires_active_gemini_and_resets() {
+        let mut consent = EditingConsent::default();
+        consent.set_visual(true);
+        assert!(!consent.visual_active(), "no image consent without active editing");
+        consent.request("cohere");
+        consent.confirm_identity([7; 32]);
+        consent.set_visual(true);
+        assert!(!consent.visual_active(), "image mode is wired for Gemini only");
+        consent.request("gemini");
+        assert!(!consent.visual_active(), "requesting a new consent clears image mode");
+        consent.confirm_identity([7; 32]);
+        consent.set_visual(true);
+        assert!(consent.visual_active());
+        consent.request("gemini");
+        consent.confirm_identity([7; 32]);
+        assert!(!consent.visual_active(), "re-enabling editing does not keep image mode");
+        consent.set_visual(true);
+        consent.disable();
+        assert!(!consent.visual_active(), "disabling editing clears image mode");
     }
 
     #[test]

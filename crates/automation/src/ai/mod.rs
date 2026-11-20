@@ -39,7 +39,7 @@ pub use perception::{DocumentStructure, PerceptionEngine, SubjectBasis, SubjectC
 pub use planner::{AiPlanner, DeterministicRulePlanner, PlanStep};
 pub use provider_bridge::{
     AiProviderBridge, ContextLoadBalancer, ContextProfile, HttpTransport, ProviderConfig,
-    ProviderId, SystemCurlTransport,
+    ProviderId, SystemCurlTransport, VisualVerdict,
 };
 
 use serde::{Deserialize, Serialize};

@@ -17,7 +17,7 @@
 //! synchronous shell state (tools, panels, view, workspace, window).
 
 use fotodit_automation::AutomationError;
-use fotodit_automation::ai::{AiContext, AiEngine, EditingPlan, ExecutionEvidence, GoalOutcome, GoalRequest, GoalStop, IntentCategory, LiveEditSession, SemanticGoalRepair, VisualEvidenceClass};
+use fotodit_automation::ai::{AiContext, AiEngine, EditingIntent, EditingPlan, ExecutionEvidence, GoalOutcome, GoalRequest, GoalStop, IntentCategory, LiveEditSession, SemanticGoalRepair, VisualEvidenceClass};
 use fotodit_ui_egui::{AssistantBackend, FotoditApp};
 
 /// Borrowed desktop editing destination: the app's live session through its admitted
@@ -48,9 +48,9 @@ impl LiveEditSession for GuiSession<'_> {
 pub struct GuiAssistant {
     engine: AiEngine,
     context: AiContext,
-    planner_factory: Box<dyn Fn(&str) -> Result<(Box<dyn fotodit_automation::ai::AiPlanner>, [u8; 32]), String>>,
+    planner_factory: Box<dyn Fn(&str) -> Result<(SelectedPlanner, [u8; 32]), String>>,
     identity: fn(&str) -> Result<[u8; 32], String>,
-    pending: Option<PendingPlan>,
+    pending: Option<PendingGoal>,
 }
 
 impl GuiAssistant {
@@ -61,12 +61,54 @@ impl GuiAssistant {
 
 }
 
-struct PendingPlan {
-    receiver: std::sync::mpsc::Receiver<Result<EditingPlan, String>>,
+#[derive(Clone, Copy)]
+enum PendingPhase {
+    Planning,
+    /// One result-check request is in flight; `check` is its 1-based number.
+    Verifying { check: u32 },
+}
+
+enum WorkerResult {
+    Plan(EditingPlan),
+    Verdict(Box<fotodit_automation::ai::VisualVerdict>),
+}
+
+/// One provider goal in flight: a planning request, then optionally bounded
+/// image result-checks while the consented budget lasts. Every apply re-runs
+/// the full staleness and consent checks against the refreshed snapshot.
+struct PendingGoal {
+    phase: PendingPhase,
+    receiver: std::sync::mpsc::Receiver<Result<WorkerResult, String>>,
     prompt: String,
+    intent: EditingIntent,
+    applied: Vec<String>,
     document: Option<serde_json::Value>,
     document_id: Option<String>,
     binding: (Option<&'static str>, Option<[u8; 32]>, u64),
+    visual: bool,
+}
+
+/// Downscaled straight-alpha PNG render of the document composite for the
+/// consented image path. Rendered locally on the UI thread; the bytes leave
+/// the device only inside a request the image consent covers.
+fn render_document_png(doc: &fotodit_doc::Document) -> Result<Vec<u8>, String> {
+    const MAX_EDGE: u32 = 1024;
+    let bounds = doc.bounds();
+    let (w, h) = (bounds.width(), bounds.height());
+    if w == 0 || h == 0 { return Err("The canvas is empty; no image was rendered.".into()); }
+    let scale = (MAX_EDGE as f64 / f64::from(w.max(h))).min(1.0);
+    let ow = ((w as f64 * scale).round() as u32).max(1);
+    let oh = ((h as f64 * scale).round() as u32).max(1);
+    let buf = fotodit_compose::render_reduced_rect(doc, bounds, ow, oh);
+    let flat: Vec<f32> = buf.px.iter().flat_map(|p| *p).collect();
+    let image = fotodit_codecs::Image::from_normalized(ow, oh, fotodit_codecs::ChannelLayout::Rgba,
+        fotodit_codecs::SampleType::U8, &flat).map_err(|e| e.to_string())?;
+    let bytes = fotodit_codecs::encode(&image, fotodit_codecs::Format::Png,
+        &fotodit_codecs::EncodeOptions::default()).map_err(|e| e.to_string())?;
+    if bytes.len() > fotodit_automation::budgets::MAX_PNG_BYTES {
+        return Err("The rendered image exceeds the provider image budget; no image was sent.".into());
+    }
+    Ok(bytes)
 }
 
 fn document_id(app: &FotoditApp) -> Option<String> {
@@ -112,15 +154,32 @@ impl AssistantBackend for GuiAssistant {
             };
             // Detect replacement during resolution too, before dispatching anything.
             if loaded_identity != current_identity { app.ai_providers.editing_consent_mut().disable(); return Err("Provider credential changed. Enable editing again.".into()); }
+            // Image-aware mode rides only with an open document and active Gemini
+            // image consent; without it the metadata-only promise is unchanged.
+            let visual = app.ai_providers.editing_consent().visual_active() && document.is_some();
+            let image = if visual {
+                match app.session.active().map(|d| render_document_png(&d.doc)) {
+                    Some(Ok(png)) => Some(png),
+                    Some(Err(error)) => return Err(error),
+                    None => None,
+                }
+            } else { None };
             let (sender, receiver) = std::sync::mpsc::channel();
             let repaint = ctx.clone();
+            let worker_intent = intent.clone();
             std::thread::spawn(move || {
-                let result = planner.plan(&intent, &scene, &AiContext::new()).map_err(|e| e.to_string());
+                let result = planner.plan_visual(&worker_intent, &scene, &AiContext::new(), image.as_deref())
+                    .map(WorkerResult::Plan).map_err(|e| e.to_string());
                 let _ = sender.send(result);
                 repaint.request_repaint();
             });
-            self.pending = Some(PendingPlan { receiver, prompt: prompt.into(), document, document_id: document_id(app), binding });
-            Ok(format!("Provider planning ({slot}). No edit has been applied yet."))
+            self.pending = Some(PendingGoal { phase: PendingPhase::Planning, receiver, prompt: prompt.into(),
+                intent, applied: Vec::new(), document, document_id: document_id(app), binding, visual });
+            Ok(if visual {
+                format!("Provider planning ({slot}) with the document image attached. No edit has been applied yet.")
+            } else {
+                format!("Provider planning ({slot}). No edit has been applied yet.")
+            })
         } else {
             let mut session = GuiSession { app, ctx };
             self.run(&mut session, prompt).map(|answer| format!("Offline rules (no provider contacted). {answer}"))
@@ -133,30 +192,118 @@ impl AssistantBackend for GuiAssistant {
         let slot = pending.binding.0?;
         if app.ai_providers.editing_consent().binding() != pending.binding
             || document_id(app) != pending.document_id {
+            let verifying = matches!(pending.phase, PendingPhase::Verifying { .. });
             self.pending = None;
-            return Some("Pending edit discarded because the document, credential or consent changed. No response was applied.".into());
+            return Some(if verifying {
+                "Result check discarded because the document, credential or consent changed. Edits already applied remain in the document; nothing was reverted. Inspect the canvas and use Undo if needed.".into()
+            } else {
+                "Pending edit discarded because the document, credential or consent changed. No response was applied.".into()
+            });
         }
         let result = match pending.receiver.try_recv() {
             Ok(result) => result,
             Err(std::sync::mpsc::TryRecvError::Empty) => return None,
-            Err(_) => Err("Provider planning worker stopped. No edits were applied.".into()),
+            Err(_) => Err("Provider worker stopped. No further request was made.".into()),
         };
-        let pending = self.pending.take()?;
-        let plan = match result { Ok(plan) => plan, Err(error) => return Some(error) };
+        let phase = pending.phase;
+        let mut pending = self.pending.take()?;
         // Unseal/re-inspect once only, after a successful response and just before application.
         if (self.identity)(slot).ok() != pending.binding.1
             || app.session.active().map(fotodit_engine::inspect::document) != pending.document {
             app.ai_providers.editing_consent_mut().disable();
-            return Some("Pending edit discarded because the document or credential changed. No response was applied.".into());
+            return Some(if matches!(phase, PendingPhase::Verifying { .. }) {
+                "Result check discarded because the document or credential changed. Edits already applied remain in the document; nothing was reverted. Inspect the canvas and use Undo if needed.".into()
+            } else {
+                "Pending edit discarded because the document or credential changed. No response was applied.".into()
+            });
         }
+        let plan = match (phase, result) {
+            (PendingPhase::Planning, Err(error)) => return Some(error),
+            (PendingPhase::Verifying { .. }, Err(error)) => return Some(format!("The result check failed: {error} Changes made so far remain; inspect the canvas and use Undo as needed.")),
+            (PendingPhase::Planning, Ok(WorkerResult::Plan(plan))) => plan,
+            (PendingPhase::Verifying { check }, Ok(WorkerResult::Verdict(verdict))) => {
+                let verdict = *verdict;
+                if verdict.satisfied {
+                    return Some(format!("Gemini reviewed the edited image and reported the request satisfied (result check {check}). That is the provider's own judgment of the image, not independent proof. Inspect the canvas; use Undo if needed."));
+                }
+                if verdict.corrective.steps.is_empty() {
+                    let note = if verdict.critique.is_empty() { String::new() } else { format!(": {}", verdict.critique) };
+                    return Some(format!("Gemini reviewed the edited image and reported the goal not met, with no correction to offer{note}. Changes made so far remain; inspect the canvas and use Undo as needed."));
+                }
+                verdict.corrective
+            }
+            _ => return Some("Provider response did not match the pending phase. No edits were applied.".into()),
+        };
+        pending.applied.extend(plan.steps.iter().map(|s| {
+            let text = format!("{} {}", s.command, s.params);
+            text.chars().take(200).collect()
+        }));
         // UI-thread application only, after the immutable snapshot and consent still match.
-        let engine = AiEngine::with_planner(Box::new(FixedPlan(plan)));
-        let mut session = GuiSession { app, ctx };
-        let request = GoalRequest { max_attempts: 1, ..GoalRequest::new(&pending.prompt) };
-        let outcome = engine.process_goal_in(&mut session, &request, &mut AiContext::new(), &SemanticGoalRepair::new());
+        let outcome = {
+            let engine = AiEngine::with_planner(Box::new(FixedPlan(plan)));
+            let mut session = GuiSession { app, ctx };
+            let request = GoalRequest { max_attempts: 1, ..GoalRequest::new(&pending.prompt) };
+            engine.process_goal_in(&mut session, &request, &mut AiContext::new(), &SemanticGoalRepair::new())
+        };
         let completed = outcome.attempts.iter().any(|a| a.execution.as_ref().is_some_and(|e| e.is_success));
+        if completed {
+            // The apply changed the document: re-anchor the staleness snapshot so
+            // the next round compares against the post-edit state, not the original.
+            pending.document = app.session.active().map(fotodit_engine::inspect::document);
+            pending.document_id = document_id(app);
+        }
+        let next_check = match phase { PendingPhase::Planning => 1, PendingPhase::Verifying { check } => check + 1 };
+        // Requests actually sent for this goal so far; result checks only count once sent.
+        let requests_made = match phase { PendingPhase::Planning => 1, PendingPhase::Verifying { check } => 1 + check };
+        let can_check = pending.visual && completed
+            && next_check <= fotodit_ui_egui::ai_providers_ui::VISUAL_MAX_CHECKS
+            && app.ai_providers.editing_consent().visual_active();
+        if can_check {
+            let rendered = app.session.active().map(|d| render_document_png(&d.doc));
+            match rendered {
+                Some(Ok(image)) => {
+                    let scene = pending.document.as_ref().map(|doc| fotodit_automation::ai::PerceptionEngine::new().perceive(doc)).unwrap_or_default();
+                    let (planner, loaded_identity) = match (self.planner_factory)(slot) {
+                        Ok(pair) => pair,
+                        Err(error) => { app.ai_providers.editing_consent_mut().disable(); return Some(error); }
+                    };
+                    if Some(loaded_identity) != pending.binding.1 {
+                        app.ai_providers.editing_consent_mut().disable();
+                        return Some("Provider credential changed between result checks. Enable editing again; changes made so far remain.".into());
+                    }
+                    let (sender, receiver) = std::sync::mpsc::channel();
+                    let repaint = ctx.clone();
+                    let prompt_text = pending.prompt.clone();
+                    let applied = pending.applied.clone();
+                    let intent = pending.intent.clone();
+                    std::thread::spawn(move || {
+                        let result = planner.verify_visual(&prompt_text, &applied, &intent, &scene, &image)
+                            .map(|v| WorkerResult::Verdict(Box::new(v))).map_err(|e| e.to_string());
+                        let _ = sender.send(result);
+                        repaint.request_repaint();
+                    });
+                    pending.phase = PendingPhase::Verifying { check: next_check };
+                    pending.receiver = receiver;
+                    self.pending = Some(pending);
+                    return Some(format!("Provider editing ({slot}): commands executed. Asking Gemini to check the result image (request {} of at most {}). Inspect the canvas; use Undo if needed. {}",
+                        next_check + 1, 1 + fotodit_ui_egui::ai_providers_ui::VISUAL_MAX_CHECKS, outcome.detail));
+                }
+                Some(Err(render_error)) => {
+                    return Some(format!("Provider editing ({slot}): commands executed; {requests_made} provider request(s) were made. The result image could not be rendered, so no result check was sent: {render_error} The requested result and visual quality are not independently verified. Inspect the canvas; use Undo if needed. {}", outcome.detail));
+                }
+                None => {
+                    return Some(format!("Provider editing ({slot}): commands executed; {requests_made} provider request(s) were made. The document is no longer open, so no result check was sent. Inspect the canvas; use Undo if needed. {}", outcome.detail));
+                }
+            }
+        }
         Some(if completed {
-            format!("Provider editing ({slot}): commands executed. The requested result and visual quality are not independently verified. Inspect the canvas; use Undo if needed. {}", outcome.detail)
+            if pending.visual && next_check > fotodit_ui_egui::ai_providers_ui::VISUAL_MAX_CHECKS {
+                format!("Provider editing ({slot}): commands executed. The consented result checks are used up for this goal ({requests_made} requests were made). The requested result and visual quality are not independently verified. Inspect the canvas; use Undo if needed. {}", outcome.detail)
+            } else if pending.visual {
+                format!("Provider editing ({slot}): commands executed; {requests_made} provider request(s) were made. Image consent is no longer active, so no result check was sent. The requested result and visual quality are not independently verified. Inspect the canvas; use Undo if needed. {}", outcome.detail)
+            } else {
+                format!("Provider editing ({slot}): commands executed. The requested result and visual quality are not independently verified. Inspect the canvas; use Undo if needed. {}", outcome.detail)
+            }
         } else if outcome.attempts.iter().any(|a| !a.commands.is_empty()) {
             format!("Provider editing ({slot}): execution stopped and may have left partial changes. Inspect the canvas and use Undo as needed. {}", outcome.detail)
         } else { format!("Provider editing ({slot}): no edits applied. {}", outcome.detail) })
@@ -175,13 +322,25 @@ impl fotodit_automation::ai::AiPlanner for SelectedPlanner {
     }
 }
 
-fn provider_planner(slot: &str) -> Result<(Box<dyn fotodit_automation::ai::AiPlanner>, [u8; 32]), String> {
+impl SelectedPlanner {
+    fn plan_visual(&self, intent: &EditingIntent, scene: &fotodit_automation::ai::VisualScene,
+        context: &AiContext, image: Option<&[u8]>) -> Result<EditingPlan, fotodit_automation::ai::AiError> {
+        self.bridge.plan_visual(self.provider, intent, scene, context, image)
+    }
+    fn verify_visual(&self, prompt: &str, applied: &[String], intent: &EditingIntent,
+        scene: &fotodit_automation::ai::VisualScene, image: &[u8])
+        -> Result<fotodit_automation::ai::VisualVerdict, fotodit_automation::ai::AiError> {
+        self.bridge.verify_visual(self.provider, prompt, applied, intent, scene, image)
+    }
+}
+
+fn provider_planner(slot: &str) -> Result<(SelectedPlanner, [u8; 32]), String> {
     use fotodit_automation::ai::{AiProviderBridge, CommandCatalog, ProviderConfig};
     let (provider, config) = ProviderConfig::for_editing_slot(slot).map_err(|e| e.to_string())?;
     let identity = config_identity(slot, provider, &config)?;
-    Ok((Box::new(SelectedPlanner {
+    Ok((SelectedPlanner {
         provider, bridge: AiProviderBridge::new(config, CommandCatalog::new()),
-    }), identity))
+    }, identity))
 }
 
 /// Binds consent to selected credential bytes, source and fixed destination without retaining a key.
@@ -389,7 +548,7 @@ mod tests {
             let config = ProviderConfig { gemini_api_key: Some("fixture-not-a-real-key".into()), ..Default::default() };
             let bridge = AiProviderBridge::with_transport(config, CommandCatalog::new(),
                 Box::new(ChatTransport { calls: transport_calls.clone(), fail }));
-            Ok((Box::new(SelectedPlanner { provider: ProviderId::Gemini, bridge }), [7; 32]))
+            Ok((SelectedPlanner { provider: ProviderId::Gemini, bridge }, [7; 32]))
         });
         let mut services = Services::default();
         services.assistant_backend = Some(Box::new(assistant));
@@ -788,6 +947,138 @@ mod tests {
     fn pixel_observation_is_none_without_checked_steps() {
         assert!(pixel_observation(&evidence(&[VisualEvidenceClass::NotApplicable])).is_none());
         assert!(pixel_observation(&evidence(&[])).is_none());
+    }
+
+    /// Records every request body; answers review bodies from a verdict queue
+    /// and planning bodies with one vibrance plan. Never touches the network.
+    struct VisualTransport {
+        calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        bodies: std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+        verdicts: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<serde_json::Value>>>,
+    }
+    impl fotodit_automation::ai::HttpTransport for VisualTransport {
+        fn execute_json(&self, method: &str, url: &str, _headers: &[(&str, &str)], body: Option<&serde_json::Value>,
+            _timeout: std::time::Duration) -> Result<(u16, serde_json::Value), fotodit_automation::ai::AiError> {
+            use std::sync::atomic::Ordering;
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            assert_eq!(method, "POST");
+            assert!(url.starts_with("https://generativelanguage.googleapis.com/"));
+            let body = body.expect("visual fixture requests carry a body").clone();
+            let instruction = body.pointer("/contents/0/parts/0/text").and_then(serde_json::Value::as_str).unwrap_or("").to_string();
+            self.bodies.lock().unwrap().push(body);
+            let payload = if instruction.contains("reviewing the result of an edit session") {
+                self.verdicts.lock().unwrap().pop_front()
+                    .unwrap_or_else(|| serde_json::json!({"satisfied": true, "critique": "", "corrective_steps": []}))
+            } else {
+                serde_json::json!({"title":"Visual fixture","rationale":"mocked provider response",
+                    "steps":[{"command":"layer.newAdjustmentLayer.vibrance","params":{"vibrance":10,"saturation":5}}]})
+            };
+            Ok((200, serde_json::json!({"candidates":[{"content":{"parts":[{"text":payload.to_string()}]}}]})))
+        }
+        fn fetch_raw_bytes(&self, _url: &str, _headers: &[(&str, &str)], _timeout: std::time::Duration)
+            -> Result<(u16, Vec<u8>), fotodit_automation::ai::AiError> {
+            panic!("chat editing must not fetch images")
+        }
+    }
+
+    fn visual_fixture(verdicts: Vec<serde_json::Value>)
+        -> (FotoditApp, std::sync::Arc<std::sync::atomic::AtomicUsize>, std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>) {
+        use fotodit_automation::ai::{AiProviderBridge, CommandCatalog, ProviderConfig, ProviderId};
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let bodies = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let verdicts = std::sync::Arc::new(std::sync::Mutex::new(verdicts.into_iter().collect::<std::collections::VecDeque<_>>()));
+        let (factory_calls, factory_bodies, factory_verdicts) = (calls.clone(), bodies.clone(), verdicts.clone());
+        let mut assistant = GuiAssistant::new();
+        assistant.identity = |_| Ok([7; 32]);
+        assistant.planner_factory = Box::new(move |slot| {
+            assert_eq!(slot, "gemini");
+            let config = ProviderConfig { gemini_api_key: Some("fixture-not-a-real-key".into()), ..Default::default() };
+            let bridge = AiProviderBridge::with_transport(config, CommandCatalog::new(), Box::new(VisualTransport {
+                calls: factory_calls.clone(), bodies: factory_bodies.clone(), verdicts: factory_verdicts.clone(),
+            }));
+            Ok((SelectedPlanner { provider: ProviderId::Gemini, bridge }, [7; 32]))
+        });
+        let mut services = Services::default();
+        services.assistant_backend = Some(Box::new(assistant));
+        (FotoditApp::new(fotodit_engine::Session::new(), services), calls, bodies)
+    }
+
+    fn submit_visual(app: &mut FotoditApp, ctx: &egui::Context) {
+        app.session.execute("file.new", serde_json::json!({"width":32,"height":32})).unwrap();
+        app.ai_providers.editing_consent_mut().request("gemini");
+        app.ai_providers.editing_consent_mut().confirm_identity([7; 32]);
+        app.ai_providers.editing_consent_mut().set_visual(true);
+        let initial = fotodit_ui_egui::panels::assistant::submit(app, ctx, "boost the colors");
+        assert!(initial.contains("with the document image attached"), "{initial}");
+    }
+
+    #[test]
+    fn visual_loop_plan_then_satisfied_check_costs_two_requests() {
+        use std::sync::atomic::Ordering;
+        let (mut app, calls, bodies) = visual_fixture(vec![serde_json::json!({"satisfied": true, "critique": "looks good", "corrective_steps": []})]);
+        let ctx = egui::Context::default();
+        submit_visual(&mut app, &ctx);
+        let first = await_plan(&mut app, &ctx);
+        assert!(first.contains("request 2 of at most 3"), "{first}");
+        let second = await_plan(&mut app, &ctx);
+        assert!(second.contains("reported the request satisfied"), "{second}");
+        assert!(second.contains("not independent proof"), "{second}");
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        let bodies = bodies.lock().unwrap();
+        assert_eq!(bodies.len(), 2);
+        let parts = bodies[0].pointer("/contents/0/parts").and_then(serde_json::Value::as_array).unwrap();
+        assert_eq!(parts[1]["inline_data"]["mime_type"], "image/png", "planning request carries the canvas PNG");
+        assert!(!parts[1]["inline_data"]["data"].as_str().unwrap().is_empty());
+        assert!(bodies[1].to_string().contains("reviewing the result of an edit session"));
+        assert!(bodies[1].to_string().contains("newAdjustmentLayer.vibrance"), "applied steps reach the result check");
+    }
+
+    #[test]
+    fn visual_loop_budget_exhaustion_stops_at_three_requests() {
+        use std::sync::atomic::Ordering;
+        let corrective = serde_json::json!({"satisfied": false, "critique": "still flat", "corrective_steps": [
+            {"command":"layer.newAdjustmentLayer.vibrance","params":{"vibrance":12,"saturation":6},"description":"more color"}]});
+        let (mut app, calls, _) = visual_fixture(vec![corrective.clone(), corrective]);
+        let ctx = egui::Context::default();
+        submit_visual(&mut app, &ctx);
+        let _ = await_plan(&mut app, &ctx); // plan applied, result check 1 dispatched
+        let _ = await_plan(&mut app, &ctx); // verdict 1: corrective applied, result check 2 dispatched
+        let final_msg = await_plan(&mut app, &ctx); // verdict 2: corrective applied, budget spent
+        assert!(final_msg.contains("result checks are used up"), "{final_msg}");
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+        assert!(poll_plan(&mut app, &ctx).is_none(), "no fourth provider request");
+    }
+
+    #[test]
+    fn visual_consent_off_sends_one_metadata_only_request() {
+        use std::sync::atomic::Ordering;
+        let (mut app, calls, bodies) = visual_fixture(vec![]);
+        let ctx = egui::Context::default();
+        app.session.execute("file.new", serde_json::json!({"width":32,"height":32})).unwrap();
+        app.ai_providers.editing_consent_mut().request("gemini");
+        app.ai_providers.editing_consent_mut().confirm_identity([7; 32]);
+        let initial = fotodit_ui_egui::panels::assistant::submit(&mut app, &ctx, "boost the colors");
+        assert!(initial.starts_with("Provider planning"), "{initial}");
+        assert!(!initial.contains("image attached"), "{initial}");
+        let msg = await_plan(&mut app, &ctx);
+        assert!(msg.contains("commands executed"), "{msg}");
+        assert!(msg.contains("not independently verified"), "{msg}");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let bodies = bodies.lock().unwrap();
+        assert_eq!(bodies.len(), 1);
+        assert!(!bodies[0].to_string().contains("inline_data"), "no image part without image consent");
+    }
+
+    #[test]
+    fn visual_goal_discarded_when_document_changes_before_apply() {
+        use std::sync::atomic::Ordering;
+        let (mut app, calls, _) = visual_fixture(vec![]);
+        let ctx = egui::Context::default();
+        submit_visual(&mut app, &ctx);
+        app.session.execute("file.new", serde_json::json!({"width":16,"height":16})).unwrap();
+        let msg = await_plan(&mut app, &ctx);
+        assert!(msg.contains("discarded because the document"), "{msg}");
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "the plan request was sent but nothing applied");
     }
 
 }
