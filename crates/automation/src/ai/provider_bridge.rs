@@ -1424,11 +1424,16 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
                             || created_at(&created, n) != Some(CreatedKind::Pixel) { return Err(refuse()); }
                     }
                 }
-            } else if scene.active_layer_id.is_some_and(|a| hidden.contains(&a))
+            } else if active_changed || !created.is_empty()
+                || scene.active_layer_id.is_some_and(|a| hidden.contains(&a))
                 || !scene.layers.iter()
                     .any(|l| Some(l.id) == scene.active_layer_id && matches!(l.kind.as_str(), "Pixel" | "Raster") && l.is_visible) {
                 // Engine default with no layer param: the active layer, which
                 // must be a visible pixel/raster layer, as for the filters.
+                // Creation steps retarget the engine's active layer mid-plan
+                // (cmd/adjust_params.rs:43) and this scene is the pre-plan
+                // scene, so after any creation the paramless form is refused
+                // rather than validated against a stale active layer.
                 return Err(refuse());
             }
         }
@@ -1898,6 +1903,35 @@ mod tests {
         assert!(validate_selected_plan(&contract_plan("layer.removeBackground",json!({"refine":false})), &scene).is_err(), "paramless targets the active layer, hidden type here");
         scene.active_layer_id = Some(7);
         assert!(validate_selected_plan(&contract_plan("layer.removeBackground",json!({"refine":false})), &scene).is_ok(), "paramless targets the active visible pixel layer");
+    }
+
+    #[test]
+    fn selected_contract_refuses_paramless_remove_background_after_creation_retargets_active() {
+        let scene = contract_scene();
+        let two = |second: serde_json::Value| EditingPlan { title: "fixture".into(), rationale: String::new(),
+            category: IntentCategory::PhotoEnhancement,
+            steps: vec![
+                PlanStep { command: "layer.duplicate".into(), params: json!({"layer": 7}), description: "fixture".into() },
+                PlanStep { command: "layer.removeBackground".into(), params: second, description: "fixture".into() },
+            ], creates_document: false, target_size: None };
+        // duplicate creates a pixel copy and the engine makes it active; the
+        // validator's scene still shows the pre-plan active, so the paramless
+        // form is refused even though the scene's active layer is pixel.
+        assert!(validate_selected_plan(&two(json!({"refine": true})), &scene).is_err(),
+            "creation retargets the engine's active layer mid-plan (cmd/adjust_params.rs:43)");
+        // An explicit reference to the created pixel copy stays admitted.
+        assert!(validate_selected_plan(&two(json!({"layer": {"$step": 1}})), &scene).is_ok(),
+            "the symbolic reference carries the real target");
+        // Hiding the created copy first keeps the paramless form refused.
+        let hide_then_paramless = EditingPlan { title: "fixture".into(), rationale: String::new(),
+            category: IntentCategory::PhotoEnhancement,
+            steps: vec![
+                PlanStep { command: "layer.duplicate".into(), params: json!({"layer": 7}), description: "fixture".into() },
+                PlanStep { command: "layer.setProps".into(), params: json!({"layer": {"$step": 1}, "visible": false}), description: "fixture".into() },
+                PlanStep { command: "layer.removeBackground".into(), params: json!({"refine": true}), description: "fixture".into() },
+            ], creates_document: false, target_size: None };
+        assert!(validate_selected_plan(&hide_then_paramless, &scene).is_err(),
+            "create-hide-paramless stays refused");
     }
 
     #[test]
