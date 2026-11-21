@@ -650,8 +650,10 @@ mod tests {
 
     /// The open-document side of the creation boundary: when the user already has a
     /// document open and the provider answers with a leading file.new, the plan must be
-    /// refused with no edits applied and the open document left untouched - never a
-    /// silent replacement.
+    /// refused and the open document left untouched - never a silent replacement. The
+    /// contract validator (provider_bridge validate_selected_plan, unchanged since the
+    /// frozen candidate) refuses file.new on a non-empty scene before any execution, so
+    /// the refusal surfaces as the plan-validation error.
     #[test]
     fn provider_led_file_new_never_replaces_an_open_document() {
         use std::sync::atomic::Ordering;
@@ -662,8 +664,9 @@ mod tests {
         app.ai_providers.editing_consent_mut().confirm_identity([7; 32]);
         let _ = fotodit_ui_egui::panels::assistant::submit(&mut app, &ctx, "create a poster called chndrax");
         let answer = await_plan(&mut app, &ctx);
-        assert!(answer.starts_with("Provider editing (gemini):"), "{answer}");
-        assert!(answer.contains("no edits applied"), "a provider-led file.new is refused while a document is open: {answer}");
+        assert!(answer.contains("Provider plan is outside the supported command, parameter or target contract"),
+            "a provider-led file.new is refused while a document is open: {answer}");
+        assert!(answer.contains("nothing was edited"), "{answer}");
         assert_eq!(app.session.active().unwrap().doc.size.width, 64, "the user's open document is untouched");
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
@@ -1205,6 +1208,14 @@ mod tests {
         assert!(msg.contains("Result check discarded"), "{msg}");
         assert!(msg.contains("Edits already applied remain"), "{msg}");
         assert!(!msg.contains("No response was applied"), "{msg}");
+        // The result-check request was dispatched (worker thread spawned) before the
+        // discard was observed; the send itself may still be in flight. Wait for it
+        // before counting, so the assertion does not race thread scheduling.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while calls.load(Ordering::SeqCst) < 2 {
+            assert!(std::time::Instant::now() < deadline, "the dispatched result check was never sent");
+            std::thread::yield_now();
+        }
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
@@ -1225,6 +1236,14 @@ mod tests {
         app.session.execute("file.new", serde_json::json!({"width":16,"height":16})).unwrap();
         let msg = await_plan(&mut app, &ctx);
         assert!(msg.contains("discarded because the document"), "{msg}");
+        // The plan request was dispatched (worker thread spawned at submit) before the
+        // discard was observed; the send itself may still be in flight. Wait for it
+        // before counting, so the assertion does not race thread scheduling.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while calls.load(Ordering::SeqCst) < 1 {
+            assert!(std::time::Instant::now() < deadline, "the plan request was never sent");
+            std::thread::yield_now();
+        }
         assert_eq!(calls.load(Ordering::SeqCst), 1, "the plan request was sent but nothing applied");
     }
 
