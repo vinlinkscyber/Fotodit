@@ -193,11 +193,21 @@ impl AssistantBackend for GuiAssistant {
         if app.ai_providers.editing_consent().binding() != pending.binding
             || document_id(app) != pending.document_id {
             let verifying = matches!(pending.phase, PendingPhase::Verifying { .. });
+            let visual = pending.visual;
             self.pending = None;
+            // The already-dispatched worker cannot be cancelled: its request may still
+            // finish (carrying the captured document image in visual mode), but its
+            // result is never applied and no further requests start from this goal.
+            let in_flight = match (verifying, visual) {
+                (true, true) => " The result check already sent may still finish; it carries a captured document image, and no further requests will be made for this goal.",
+                (true, false) => " The result check already sent may still finish, and no further requests will be made for this goal.",
+                (false, true) => " The planning request already sent may still finish; it carries the captured document image. Nothing from it will be applied and no further requests will be made for this goal.",
+                (false, false) => " The planning request already sent may still finish; nothing from it will be applied and no further requests will be made for this goal.",
+            };
             return Some(if verifying {
-                "Result check discarded because the document, credential or consent changed. Edits already applied remain in the document; nothing was reverted. Inspect the canvas and use Undo if needed.".into()
+                format!("Result check discarded because the document, credential or consent changed. Edits already applied remain in the document; nothing was reverted.{in_flight} Inspect the canvas and use Undo if needed.")
             } else {
-                "Pending edit discarded because the document, credential or consent changed. No response was applied.".into()
+                format!("Pending edit discarded because the document, credential or consent changed. No response was applied.{in_flight}")
             });
         }
         let result = match pending.receiver.try_recv() {
@@ -615,7 +625,12 @@ mod tests {
             }
             let answer = poll_plan(&mut app, &ctx);
             if change == "cancel" { assert!(answer.is_none()); }
-            else { assert!(answer.unwrap().contains("discarded")); }
+            else {
+                let answer = answer.unwrap();
+                assert!(answer.contains("discarded"), "{answer}");
+                assert!(answer.contains("may still finish"), "the in-flight send is disclosed: {answer}");
+                assert!(!answer.contains("captured document image"), "metadata-only goal carries no image: {answer}");
+            }
             if change == "document" { assert_eq!(app.session.active().unwrap().doc.size.width,32); }
             else { assert!(app.session.active().is_none()); }
         }
@@ -1208,6 +1223,9 @@ mod tests {
         assert!(msg.contains("Result check discarded"), "{msg}");
         assert!(msg.contains("Edits already applied remain"), "{msg}");
         assert!(!msg.contains("No response was applied"), "{msg}");
+        assert!(msg.contains("may still finish"), "the in-flight send is disclosed: {msg}");
+        assert!(msg.contains("captured document image"), "the image the in-flight check carries is disclosed: {msg}");
+        assert!(msg.contains("no further requests will be made"), "{msg}");
         // The result-check request was dispatched (worker thread spawned) before the
         // discard was observed; the send itself may still be in flight. Wait for it
         // before counting, so the assertion does not race thread scheduling.
@@ -1236,6 +1254,9 @@ mod tests {
         app.session.execute("file.new", serde_json::json!({"width":16,"height":16})).unwrap();
         let msg = await_plan(&mut app, &ctx);
         assert!(msg.contains("discarded because the document"), "{msg}");
+        assert!(msg.contains("may still finish"), "the in-flight send is disclosed: {msg}");
+        assert!(msg.contains("captured document image"), "the image the in-flight plan carries is disclosed: {msg}");
+        assert!(msg.contains("no further requests will be made"), "{msg}");
         // The plan request was dispatched (worker thread spawned at submit) before the
         // discard was observed; the send itself may still be in flight. Wait for it
         // before counting, so the assertion does not race thread scheduling.

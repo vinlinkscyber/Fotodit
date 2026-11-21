@@ -259,7 +259,7 @@ pub fn show(app: &mut FotoditApp, ctx: &egui::Context) {
                                 st.editing.set_visual(visual);
                             }
                             if st.editing.visual_active() {
-                                ui.label(tl!("Image-aware editing: each chat Send makes 1 planning request, then up to 2 result-check requests, so at most 3 requests per goal. Every request includes a downscaled PNG image (1024px maximum edge) of your document with your prompt and layer metadata. The image leaves this device and goes to Google using your key. Each request may consume quota or cost money under your Google account; Fotodit cannot guarantee free use. Gemini reports whether the result looks right; that is its own judgment, not proof. Session-only: disabling editing or closing the app ends it."));
+                                ui.label(tl!("Image-aware editing: each chat Send makes 1 planning request, then up to 2 result-check requests, so at most 3 requests per goal. Every request includes a downscaled PNG image (1024px maximum edge) of your document with your prompt and layer metadata. The image leaves this device and goes to Google using your key. Each request may consume quota or cost money under your Google account; Fotodit cannot guarantee free use. Gemini reports whether the result looks right; that is its own judgment, not proof. Session-only: disabling editing or closing the app ends it. A request already sent before then may still finish, including its document image; its result will not be applied and no further requests will follow."));
                             }
                         }
                         if ui.button(tl!("Disable provider editing")).clicked() { st.editing.disable(); }
