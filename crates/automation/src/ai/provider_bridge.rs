@@ -1246,7 +1246,10 @@ const SELECTED_COMMANDS: &[&str] = &["file.new", "type.create", "type.edit", "ty
 
 /// Layer-creating commands whose output a later step of the same plan can
 /// reference with `{"$step": N}` (1-based plan position; see `LayerRef`).
-fn is_layer_creating(command: &str) -> bool {
+/// Shared with execution: only these steps' outputs may seed reference
+/// resolution, because other commands echo their target id in the same
+/// "layer" output key (e.g. type.setStyle, layer.removeBackground).
+pub(crate) fn is_layer_creating(command: &str) -> bool {
     matches!(command, "type.create" | "layer.newFillLayer.solidColor" | "layer.duplicate"
         | "layer.newAdjustmentLayer.brightnessContrast" | "layer.newAdjustmentLayer.vibrance"
         | "layer.newAdjustmentLayer.hueSaturation" | "layer.newAdjustmentLayer.levels"
@@ -1421,6 +1424,12 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
                             || created_at(&created, n) != Some(CreatedKind::Pixel) { return Err(refuse()); }
                     }
                 }
+            } else if scene.active_layer_id.is_some_and(|a| hidden.contains(&a))
+                || !scene.layers.iter()
+                    .any(|l| Some(l.id) == scene.active_layer_id && matches!(l.kind.as_str(), "Pixel" | "Raster") && l.is_visible) {
+                // Engine default with no layer param: the active layer, which
+                // must be a visible pixel/raster layer, as for the filters.
+                return Err(refuse());
             }
         }
         if step.command == "layer.setProps"
@@ -1879,7 +1888,16 @@ mod tests {
         assert!(validate_selected_plan(&contract_plan("type.edit",json!({"layer":9,"text":"Hello"})), &scene).is_err());
         scene.active_layer_id = Some(9);
         assert!(validate_selected_plan(&contract_plan("filter.sharpen.unsharpMask",json!({"amount":50})), &scene).is_err());
-        assert!(validate_selected_plan(&contract_plan("layer.removeBackground",json!({"layer":7})), &scene).is_err());
+        // removeBackground is admitted (local, non-generative), but only on a
+        // visible pixel/raster target: unknown and type-layer ids stay refused.
+        assert!(validate_selected_plan(&contract_plan("layer.removeBackground",json!({"layer":777})), &scene).is_err(), "unknown layer stays refused");
+        assert!(validate_selected_plan(&contract_plan("layer.removeBackground",json!({"layer":9})), &scene).is_err(), "a hidden type layer is not pixel content the subject finder can mask");
+        assert!(validate_selected_plan(&contract_plan("layer.removeBackground",json!({"layer":7})), &scene).is_ok(), "a visible pixel layer is a valid removal target (engine cutout_cmds)");
+        // With no layer param the engine targets the active layer; a hidden
+        // type active layer is refused, a visible pixel active layer is valid.
+        assert!(validate_selected_plan(&contract_plan("layer.removeBackground",json!({"refine":false})), &scene).is_err(), "paramless targets the active layer, hidden type here");
+        scene.active_layer_id = Some(7);
+        assert!(validate_selected_plan(&contract_plan("layer.removeBackground",json!({"refine":false})), &scene).is_ok(), "paramless targets the active visible pixel layer");
     }
 
     #[test]
@@ -2391,11 +2409,21 @@ mod tests {
         for bad in [
             json!({"satisfied":false,"critique":"wrong target","corrective_steps":[{"command":"type.edit","params":{"layer":777,"text":"Hello"},"description":"unknown layer"}]}),
             json!({"satisfied":false,"critique":"pixel target","corrective_steps":[{"command":"type.edit","params":{"layer":7,"text":"Hello"},"description":"not a type layer"}]}),
-            json!({"satisfied":false,"critique":"unsupported","corrective_steps":[{"command":"layer.removeBackground","params":{"layer":7},"description":"outside the contract"}]}),
+            json!({"satisfied":false,"critique":"wrong kind","corrective_steps":[{"command":"layer.removeBackground","params":{"layer":9},"description":"a type layer is not pixel content"}]}),
+            json!({"satisfied":false,"critique":"unknown param","corrective_steps":[{"command":"layer.removeBackground","params":{"layer":7,"strength":5},"description":"param outside the contract"}]}),
         ] {
             let (bridge, _bodies) = visual_bridge(bad.to_string());
             assert!(bridge.verify_visual(ProviderId::Gemini, "make the heading say Hello", &[], &visual_intent(), &contract_scene(), &[1, 2, 3, 4]).is_err());
         }
+
+        // A removeBackground corrective on a visible pixel layer is admitted:
+        // local subject isolation masks the existing layer, nothing generates.
+        let removal = json!({"satisfied":false,"critique":"background still present","corrective_steps":[{"command":"layer.removeBackground","params":{"layer":7,"refine":true},"description":"mask the background"}]}).to_string();
+        let (bridge, _bodies) = visual_bridge(removal);
+        let verdict = bridge.verify_visual(ProviderId::Gemini, "cut out the subject", &[], &visual_intent(), &contract_scene(), &[1, 2, 3, 4]).unwrap();
+        assert!(!verdict.satisfied);
+        assert_eq!(verdict.corrective.steps.len(), 1);
+        assert_eq!(verdict.corrective.steps[0].command, "layer.removeBackground");
     }
 
     #[test]
