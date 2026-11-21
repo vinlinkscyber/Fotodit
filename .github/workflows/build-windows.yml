@@ -60,11 +60,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $out = gh api repos/vinlinkscyber/Fotodit/git/refs/tags/qual-candidate-r2
-          if ($LASTEXITCODE -ne 0) { throw "tag lookup failed (gh exit $LASTEXITCODE); tag qual-candidate-r2 must be pre-created before dispatch" }
+          $out = gh api repos/vinlinkscyber/Fotodit/git/refs/tags/qual-candidate-r3
+          if ($LASTEXITCODE -ne 0) { throw "tag lookup failed (gh exit $LASTEXITCODE); tag qual-candidate-r3 must be pre-created before dispatch" }
           $ref = $out | ConvertFrom-Json
-          if ($ref.object.type -ne 'commit') { throw "tag qual-candidate-r2 must be lightweight (point directly at a commit), got $($ref.object.type)" }
-          if ($ref.object.sha -ne $env:GITHUB_SHA) { throw "tag qual-candidate-r2 points at $($ref.object.sha), not the dispatched commit $env:GITHUB_SHA" }
+          if ($ref.object.type -ne 'commit') { throw "tag qual-candidate-r3 must be lightweight (point directly at a commit), got $($ref.object.type)" }
+          if ($ref.object.sha -ne $env:GITHUB_SHA) { throw "tag qual-candidate-r3 points at $($ref.object.sha), not the dispatched commit $env:GITHUB_SHA" }
       - name: Provider settings lifecycle tests
         run: |
           cargo test --locked -p fotodit-ui-egui --lib ai_providers_ui::tests
@@ -157,6 +157,6 @@ jobs:
           $bytes = (Get-Item $zip).Length
           Write-Output "Release asset bytes: $bytes"
           if ($bytes -ge 2147483648) { throw 'Release asset must stay under the 2 GiB per-file limit' }
-          $tag = 'qual-candidate-r2'
+          $tag = 'qual-candidate-r3'
           gh release create $tag $zip --draft --verify-tag --repo vinlinkscyber/Fotodit --title "Qualification build (draft) - run $env:GITHUB_RUN_ID" --notes 'Unsigned portable Windows x64 test build of the qualification candidate. Draft only: never publish. Visible and downloadable only to people with write access to this repository. SHA256SUMS.txt inside the zip verifies every file.'
           if ($LASTEXITCODE -ne 0) { throw "gh release create failed with exit code $LASTEXITCODE" }
