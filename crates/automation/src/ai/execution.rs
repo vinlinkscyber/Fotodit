@@ -9,6 +9,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use super::provider_bridge::is_layer_creating;
 use super::{AiError, EditingPlan, LiveEditSession};
 use crate::headless::Headless;
 
@@ -585,8 +586,14 @@ impl ExecutionEngine {
 
             match resolution.and_then(|params| session.command_run(&step.command, params)) {
                 Ok(output) => {
-                    if let Some(id) = output.get("layer").and_then(Value::as_u64) {
-                        created_ids[idx] = Some(id);
+                    // Only real creation steps produce referenceable ids; other
+                    // commands echo their target id in the same "layer" output
+                    // key (type.setStyle, layer.removeBackground, ...). The set
+                    // is shared with contract validation so the two cannot drift.
+                    if is_layer_creating(&step.command) {
+                        if let Some(id) = output.get("layer").and_then(Value::as_u64) {
+                            created_ids[idx] = Some(id);
+                        }
                     }
                     let after = Self::document_mark(session);
                     if closed.is_none() {
