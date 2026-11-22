@@ -201,7 +201,9 @@ pub fn toolbar(app: &mut FotoditApp, ui: &mut egui::Ui) {
             let footer = (if t.pro { 8.0 } else { 14.0 })
                 + chips_height(t.pro, t.round_chips, t.round_chips && double)
                 + 8.0
-                + if double { bx } else { bx * 2.0 + 3.0 }
+                // Mode buttons (double: one shared row; single: stacked) plus the pinned
+                // assistant badge row below them, so the badge never scrolls away.
+                + if double { bx * 2.0 + 3.0 } else { bx * 3.0 + 6.0 }
                 + 6.0;
             // As tall as the tools, so the colour chips sit right under them (Photoshop); a column
             // taller than the window scrolls and keeps the chips at the bottom.
@@ -495,6 +497,23 @@ pub fn toolbar(app: &mut FotoditApp, ui: &mut egui::Ui) {
                         }
                     }
                 });
+            });
+            // AI Assistant: a small, always-visible reopen affordance pinned at the bottom of the
+            // toolbar beside the mode buttons (the owner's requested placement among the tools),
+            // so a collapsed or closed chat rail never leaves Window > Assistant as the only way
+            // back, whatever the tool-scroll position. It toggles the same flag as the menu item,
+            // and its badge is the rail header's own glyph.
+            ui.add_space(3.0);
+            let assistant_on = app.ui.panels.assistant;
+            let badge_pad = ((ui.available_width() - bx) / 2.0).max(0.0);
+            ui.horizontal(|ui| {
+                ui.add_space(badge_pad);
+                let ai = icons::button_with_glyph(ui, bx, assistant_on, tl!("AI Assistant"), tool_tips, |ui, rect| {
+                    super::assistant::paint_badge(ui.painter(), rect.center(), toolbar_icon_size(bx, t.pro) * 0.5);
+                });
+                if ai.clicked() {
+                    app.ui.panels.assistant = !assistant_on;
+                }
             });
         });
 }

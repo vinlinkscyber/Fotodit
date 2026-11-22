@@ -1,5 +1,18 @@
 name: Focused provider contract and portable Windows build
 
+# COMBINED VERIFICATION CANDIDATE for scratch branch qual/verify-r4 (reviewer-prepared,
+# unexecuted). This file replaces .github/workflows/build-windows.yml ONLY on the scratch
+# branch so it stays dispatchable (workflow_dispatch requires the same workflow path on the
+# default branch; main is never touched). Changes vs the reviewed packaging-slim-r1 version:
+#   1. Branch guard retargeted to refs/heads/qual/verify-r4; tag qual-candidate-r4.
+#   2. New `release` job: verifies the pre-created tag and creates the DRAFT release first,
+#      so both build jobs can attach evidence as release assets (no Actions artifact storage).
+#   3. New `linux-render` job: rendered toolbar-badge verification (kittest + wgpu/lavapipe
+#      harness), PNGs and logs uploaded as draft-release assets.
+#   4. The packaging step additionally writes its size table to a file, uploaded on failure
+#      or success, so an over-cap run still leaves machine-readable evidence.
+# Tag, draft release and dispatch still require owner approval; nothing here publishes.
+
 on:
   workflow_dispatch:
     inputs:
@@ -19,12 +32,62 @@ env:
   PLYRA_FONTS_REQUIRED: '1'
 
 jobs:
+  release:
+    name: Verify tag and create the draft release
+    if: github.repository == 'vinlinkscyber/Fotodit' && github.ref == 'refs/heads/qual/verify-r4'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # contents:write lets the run's ephemeral GITHUB_TOKEN create the draft release and,
+    # in the other jobs, attach assets. Every other step needs read only.
+    permissions:
+      contents: write
+    steps:
+      - name: Confirm public standard-runner scope and no configured provider credentials
+        shell: pwsh
+        run: |
+          if ('${{ github.event.repository.private }}' -ne 'false') { throw 'Public repository required' }
+          foreach ($name in @('GEMINI_API_KEY','COHERE_API_KEY','LAJIWA_API_KEY','OPENROUTER_API_KEY','POLLINATIONS_API_KEY','FOTODIT_AI_PROVIDER')) {
+            if (Test-Path "Env:$name") { throw "Unexpected configured provider variable: $name" }
+          }
+      # The pre-created neutral tag must name THIS exact commit before anything expensive
+      # or any write happens. Fail safely on lookup error, annotated-tag type mismatch,
+      # or commit mismatch; this is a read-only check.
+      - name: Verify the pre-created tag matches the dispatched commit
+        if: inputs.draft_release == true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = gh api repos/vinlinkscyber/Fotodit/git/refs/tags/qual-candidate-r4
+          if ($LASTEXITCODE -ne 0) { throw "tag lookup failed (gh exit $LASTEXITCODE); tag qual-candidate-r4 must be pre-created before dispatch" }
+          $ref = $out | ConvertFrom-Json
+          if ($ref.object.type -ne 'commit') { throw "tag qual-candidate-r4 must be lightweight (point directly at a commit), got $($ref.object.type)" }
+          if ($ref.object.sha -ne $env:GITHUB_SHA) { throw "tag qual-candidate-r4 points at $($ref.object.sha), not the dispatched commit $env:GITHUB_SHA" }
+      # Draft release assets are unmetered storage (release quotas: 2 GiB per file, no
+      # total-size or bandwidth limit), unlike Actions artifact storage. Drafts are
+      # visible and downloadable only to people with write access to this repository.
+      # The tag is pre-created at the exact qualification tip with the authorized PAT
+      # route after owner approval: the run's GITHUB_TOKEN may not create refs on
+      # commits that change workflows, so this step only ever verifies and reuses it.
+      # Created FIRST and empty so both build jobs can attach their evidence; a build
+      # failure still leaves a draft carrying whatever evidence exists, never a publish.
+      - name: Create the empty draft release (never publishes)
+        if: inputs.draft_release == true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          gh release create qual-candidate-r4 --draft --verify-tag --repo vinlinkscyber/Fotodit --title "Qualification build (draft) - run $env:GITHUB_RUN_ID" --notes 'Unsigned portable Windows x64 test build plus rendered toolbar verification evidence for the qualification candidate. Draft only: never publish. Visible and downloadable only to people with write access to this repository. SHA256SUMS.txt inside the zip verifies every packaged file.'
+          if ($LASTEXITCODE -ne 0) { throw "gh release create failed with exit code $LASTEXITCODE" }
+
   focused:
-    if: github.repository == 'vinlinkscyber/Fotodit' && github.ref == 'refs/heads/qual/windows-check'
+    name: Focused tests and portable Windows build
+    needs: release
+    if: github.repository == 'vinlinkscyber/Fotodit' && github.ref == 'refs/heads/qual/verify-r4'
     runs-on: windows-latest
     timeout-minutes: 180
-    # contents:write is required only so the final step can create the draft release
-    # and its asset via the run's ephemeral GITHUB_TOKEN; every other step needs read.
     permissions:
       contents: write
     defaults:
@@ -51,20 +114,6 @@ jobs:
           curl.exe --version
           if ($LASTEXITCODE -ne 0) { throw 'curl is required by current provider transport' }
           git rev-parse HEAD
-      # The pre-created neutral tag must name THIS exact commit before anything expensive
-      # or any write happens. Fail safely on lookup error, annotated-tag type mismatch,
-      # or commit mismatch; this is a read-only check.
-      - name: Verify the pre-created tag matches the dispatched commit
-        if: inputs.draft_release == true
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $out = gh api repos/vinlinkscyber/Fotodit/git/refs/tags/qual-candidate-r3
-          if ($LASTEXITCODE -ne 0) { throw "tag lookup failed (gh exit $LASTEXITCODE); tag qual-candidate-r3 must be pre-created before dispatch" }
-          $ref = $out | ConvertFrom-Json
-          if ($ref.object.type -ne 'commit') { throw "tag qual-candidate-r3 must be lightweight (point directly at a commit), got $($ref.object.type)" }
-          if ($ref.object.sha -ne $env:GITHUB_SHA) { throw "tag qual-candidate-r3 points at $($ref.object.sha), not the dispatched commit $env:GITHUB_SHA" }
       - name: Provider settings lifecycle tests
         run: |
           cargo test --locked -p fotodit-ui-egui --lib ai_providers_ui::tests
@@ -91,7 +140,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build portable binaries only after all focused tests pass
         run: |
-          cargo build --release --locked -p fotodit -p fotodit-cli
+          cargo build --release --locked -p fotodit
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # The packaged CLI ships CPU-only: its gpu feature is an optional native rendering
+          # backend, and the GPU stack belongs to the app exe. Dropping it keeps one copy of
+          # that stack out of the portable payload; the roundtrip below validates rendering
+          # correctness on the CPU path.
+          cargo build --release --locked -p fotodit-cli --no-default-features
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: CLI PNG roundtrip and bounded portable payload
         run: |
@@ -101,7 +156,9 @@ jobs:
           $smoke = Join-Path $env:RUNNER_TEMP 'fotodit-smoke'
           New-Item -ItemType Directory -Path $stage,$smoke | Out-Null
           Set-Location $smoke
-          [IO.File]::WriteAllBytes((Join-Path $smoke 'smoke.png'), [Convert]::FromBase64String('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='))
+          # 2x2 opaque pixels, four distinct colors: the pixel check below catches decode,
+          # stride, flip and encode regressions, not just a missing output file.
+          [IO.File]::WriteAllBytes((Join-Path $smoke 'smoke.png'), [Convert]::FromBase64String('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR42mP4z8DwHwyBNBAw/AcAR8oI+FuapL4AAAAASUVORK5CYII='))
           & $cli convert smoke.png smoke.plyra
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $cli info smoke.plyra
@@ -109,6 +166,25 @@ jobs:
           & $cli convert smoke.plyra smoke-back.png
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if (!(Test-Path smoke-back.png)) { throw 'Roundtrip output missing' }
+          # Rendering correctness: the round-tripped pixels must match the source colors
+          # (opaque, so premultiplied-alpha ambiguity cannot false-fail a correct engine).
+          # A 1-channel-least-bit tolerance absorbs encode gamma rounding; a flip, stride or
+          # decode regression moves a whole different color into the pixel and fails loudly.
+          Add-Type -AssemblyName System.Drawing
+          $bmp = [System.Drawing.Bitmap]::FromFile((Join-Path $smoke 'smoke-back.png'))
+          try {
+            if ($bmp.Width -ne 2 -or $bmp.Height -ne 2) { throw "Roundtrip output is $($bmp.Width)x$($bmp.Height), expected 2x2" }
+            $expected = @(@(255,0,0), @(0,255,0), @(0,0,255), @(255,255,0))
+            for ($y = 0; $y -lt 2; $y++) {
+              for ($x = 0; $x -lt 2; $x++) {
+                $px = $bmp.GetPixel($x, $y)
+                $want = $expected[$y * 2 + $x]
+                if ([Math]::Abs($px.R - $want[0]) -gt 1 -or [Math]::Abs($px.G - $want[1]) -gt 1 -or [Math]::Abs($px.B - $want[2]) -gt 1 -or $px.A -ne 255) {
+                  throw "Roundtrip pixel ($x,$y) is $($px.R),$($px.G),$($px.B),$($px.A), expected $($want -join ','),255"
+                }
+              }
+            }
+          } finally { $bmp.Dispose() }
           Copy-Item $app,$cli -Destination $stage
           # Third-party notices and license texts must travel with the binaries when the tree carries them.
           $notices = Join-Path $env:GITHUB_WORKSPACE 'THIRD_PARTY_NOTICES.md'
@@ -135,20 +211,14 @@ jobs:
           } | Set-Content (Join-Path $stage 'SHA256SUMS.txt')
           $files = Get-ChildItem $stage -File -Recurse
           $total = ($files | Measure-Object Length -Sum).Sum
+          # Report the composition BEFORE the cap check so an over-cap run still says what grew,
+          # and keep the same table in a file so it can travel to the draft release as evidence.
+          $report = Join-Path $env:RUNNER_TEMP 'fotodit-size-report.txt'
+          $files | ForEach-Object { '{0} {1} bytes' -f $_.FullName.Substring($stage.Length + 1),$_.Length } | Tee-Object -FilePath $report
+          "Portable payload bytes: $total" | Tee-Object -FilePath $report -Append
           if ($total -gt 190MB) { throw 'Portable payload exceeds 190MiB raw cap (well under the 2 GiB release-asset limit)' }
-          $files | ForEach-Object { '{0} {1} bytes' -f $_.FullName.Substring($stage.Length + 1),$_.Length }
-          Write-Output "Portable payload bytes: $total"
-      # Draft release assets are unmetered storage (release quotas: 2 GiB per file, no
-      # total-size or bandwidth limit), unlike Actions artifact storage. Drafts are
-      # visible and downloadable only to people with write access to this repository.
-      # The tag is pre-created at the exact qualification tip with the authorized PAT
-      # route after owner approval: the run's GITHUB_TOKEN may not create refs on
-      # commits that change workflows, so this step only ever verifies and reuses it.
-      # No retry and no cleanup: a failure leaves the tag in place and stops.
-      - name: Attach portable build to a new draft release (never publishes)
+      - name: Zip the portable stage and enforce the asset size limit
         if: inputs.draft_release == true
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $ErrorActionPreference = 'Stop'
           $stage = Join-Path $env:RUNNER_TEMP 'fotodit-portable'
@@ -157,6 +227,100 @@ jobs:
           $bytes = (Get-Item $zip).Length
           Write-Output "Release asset bytes: $bytes"
           if ($bytes -ge 2147483648) { throw 'Release asset must stay under the 2 GiB per-file limit' }
-          $tag = 'qual-candidate-r3'
-          gh release create $tag $zip --draft --verify-tag --repo vinlinkscyber/Fotodit --title "Qualification build (draft) - run $env:GITHUB_RUN_ID" --notes 'Unsigned portable Windows x64 test build of the qualification candidate. Draft only: never publish. Visible and downloadable only to people with write access to this repository. SHA256SUMS.txt inside the zip verifies every file.'
-          if ($LASTEXITCODE -ne 0) { throw "gh release create failed with exit code $LASTEXITCODE" }
+      # Failure-state evidence: the size table attaches even when the cap above threw.
+      - name: Attach the size report to the draft release (success or failure)
+        if: inputs.draft_release == true && always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $report = Join-Path $env:RUNNER_TEMP 'fotodit-size-report.txt'
+          if (Test-Path $report) {
+            gh release upload qual-candidate-r4 $report --clobber --repo vinlinkscyber/Fotodit
+            if ($LASTEXITCODE -ne 0) { throw "gh release upload failed with exit code $LASTEXITCODE" }
+          } else {
+            Write-Output 'No size report produced (a step before packaging failed); run log is the evidence.'
+          }
+      - name: Attach the portable zip to the draft release (never publishes)
+        if: inputs.draft_release == true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $zip = Join-Path $env:RUNNER_TEMP 'fotodit-portable-windows-x64.zip'
+          gh release upload qual-candidate-r4 $zip --clobber --repo vinlinkscyber/Fotodit
+          if ($LASTEXITCODE -ne 0) { throw "gh release upload failed with exit code $LASTEXITCODE" }
+
+  linux-render:
+    name: Rendered toolbar verification (ubuntu-latest)
+    needs: release
+    if: github.repository == 'vinlinkscyber/Fotodit' && github.ref == 'refs/heads/qual/verify-r4'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Check out the already-pinned shared font input
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: storytold/craft-fonts
+          ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+          path: craft-fonts
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+      - name: Confirm public standard-runner scope and no configured provider credentials
+        run: |
+          set -e
+          if [ '${{ github.event.repository.private }}' != 'false' ]; then echo 'Public repository required'; exit 1; fi
+          for name in GEMINI_API_KEY COHERE_API_KEY LAJIWA_API_KEY OPENROUTER_API_KEY POLLINATIONS_API_KEY FOTODIT_AI_PROVIDER; do
+            if [ -n "$(printenv "$name" || true)" ]; then echo "Unexpected configured provider variable: $name"; exit 1; fi
+          done
+      # Same native dependency set the repo's screenshot-linux.yml proves for GUI builds,
+      # plus the software Vulkan stack (lavapipe) the kittest wgpu renderer needs headless.
+      - name: Install native build and software-Vulkan dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb imagemagick x11-apps xdotool \
+            libxkbcommon-x11-0 libxcb-xkb1 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render-util0 \
+            libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxkbcommon-dev libwayland-dev libx11-xcb-dev libxcursor-dev \
+            libxi-dev libxrandr-dev libasound2-dev libudev-dev libgl1-mesa-dev \
+            mesa-vulkan-drivers vulkan-tools
+      - name: Confirm software Vulkan (lavapipe) is available
+        run: vulkaninfo --summary | head -40
+      - name: Confirm the verification harness is present on this branch
+        run: test -f crates/ui-egui/examples/assistant_reopen_verify.rs
+      - name: Toolbar compact visual regression tests
+        run: |
+          set -o pipefail
+          cargo test --locked -p fotodit-ui-egui --lib panels::compact_visual_regressions 2>&1 | tee regressions.txt
+      # kittest renders offscreen through wgpu; no X server is needed. lavapipe provides
+      # the Vulkan device. The harness asserts the badge is fully inside the viewport at
+      # 700px and 360px in open and closed rail states, asserts the panels.assistant round
+      # trip, then writes four rendered PNGs under /tmp/verify-snaps as *.new.png
+      # (kittest's no-reference-snapshot naming) and fails if any render or write fails.
+      - name: Rendered assistant-badge verification harness
+        env:
+          WGPU_BACKEND: vulkan
+        run: |
+          set -o pipefail
+          cargo run --locked -p fotodit-ui-egui --example assistant_reopen_verify 2>&1 | tee reopen-verify.txt
+      - name: List rendered evidence
+        if: always()
+        run: ls -la /tmp/verify-snaps/ || true
+      - name: Attach rendered evidence and logs to the draft release (success or failure)
+        if: inputs.draft_release == true && always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          files=()
+          [ -f regressions.txt ] && files+=(regressions.txt)
+          [ -f reopen-verify.txt ] && files+=(reopen-verify.txt)
+          for f in /tmp/verify-snaps/*.new.png; do
+            [ -e "$f" ] && files+=("$f")
+          done
+          if [ ${#files[@]} -eq 0 ]; then echo 'No evidence files produced; run log is the evidence.'; exit 0; fi
+          if ! gh release upload qual-candidate-r4 "${files[@]}" --clobber --repo vinlinkscyber/Fotodit; then echo 'gh release upload failed'; exit 1; fi

@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::command_intelligence::CommandCatalog;
-use super::natural_language::EditingIntent;
+use super::natural_language::{EditingIntent, IntentCategory};
 use super::perception::VisualScene;
 use super::planner::{AiPlanner, DeterministicRulePlanner, PlanStep};
 use super::{AiContext, AiError, EditingPlan};
@@ -1225,14 +1225,20 @@ fn selected_contract_prompt(intent: &EditingIntent, scene: &VisualScene, image: 
     } else {
         "Metadata only. No image pixels or semantic visual understanding are provided."
     };
-    json!({
+    let mut request_json = json!({
         "instruction":instruction,
         "user_request":intent.raw_prompt,
         "commands":capabilities,
         "limits":{"max_steps":16,"new_document_max_dimension":8192,"new_document_max_pixels":16777216},
         "scene":selected_scene_json(scene),
         "evidence":evidence
-    }).to_string()
+    });
+    // Finished-design guidance for creation requests. Only commands admitted by
+    // this contract are named, so following it can never produce a refused plan.
+    if intent.category == IntentCategory::GraphicDesign {
+        request_json["design"] = json!("Design guidance for a finished result, using only the listed commands: right after file.new, add a full-canvas background with layer.newFillLayer.solidColor, because file.new backgrounds are limited to white, black or transparent. Build type hierarchy: a headline type.create at about 6-10% of the canvas height, never above the 512px size limit, plus smaller type.create layers for supporting text the request implies; keep the user's wording verbatim in each. Compose deliberately: keep a clear margin of about 8% of the canvas, align elements on a shared center axis (x = width/2) unless the request says otherwise, and choose 2-3 harmonious colors with strong contrast between background and text. Prefer several deliberate steps (up to max_steps) over a single minimal one, and tune the final tone with adjustment layers.");
+    }
+    request_json.to_string()
 }
 
 const SELECTED_COMMANDS: &[&str] = &["file.new", "type.create", "type.edit", "type.setStyle",
@@ -1811,6 +1817,29 @@ mod tests {
         assert_eq!(prompt["scene"]["layers"][1]["text"], "Original");
         assert!(prompt["commands"].as_array().unwrap().iter().any(|c| c["command"] == "type.edit" && c["params"].as_str().unwrap().contains("layer")));
         assert!(!prompt.to_string().contains("API_KEY"));
+        assert!(prompt.get("design").is_none(), "non-design prompts carry no design guidance: {prompt}");
+    }
+
+    #[test]
+    fn selected_prompt_gives_creation_requests_finished_design_guidance() {
+        let scene = VisualScene::default();
+        let intent = super::super::NaturalLanguageEngine::new().parse_intent("create a poster called chndrax", &scene, &AiContext::new()).unwrap();
+        assert_eq!(intent.category, IntentCategory::GraphicDesign);
+        for image in [false, true] {
+            let prompt: Value = serde_json::from_str(&selected_contract_prompt(&intent, &scene, image)).unwrap();
+            let design = prompt["design"].as_str().unwrap_or_default();
+            assert!(design.contains("layer.newFillLayer.solidColor"), "guidance names only admitted commands: {design}");
+            assert!(design.contains("type hierarchy"), "{design}");
+            // Every command the guidance names must be admitted by the contract,
+            // so following the guidance can never produce a refused plan.
+            for token in design
+                .split(|c: char| !(c.is_ascii_alphanumeric() || c == '.' || c == '_'))
+                .map(|s| s.trim_matches('.'))
+                .filter(|s| s.contains('.'))
+            {
+                assert!(SELECTED_COMMANDS.contains(&token), "guidance names non-admitted command {token}");
+            }
+        }
     }
 
     #[test]

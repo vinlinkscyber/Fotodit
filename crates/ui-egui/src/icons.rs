@@ -214,21 +214,35 @@ pub fn button_with_icon_size(ui: &mut egui::Ui, name: &str, box_size: f32, icon_
 
 /// [`button_with_icon_size`] whose tooltip shows only when `show_tip`; the tooltip text still
 /// names the button (for screen readers and tests) when it is hidden.
-pub fn button_with_icon_size_tip(ui: &mut egui::Ui, name: &str, box_size: f32, icon_size: f32, selected: bool, tooltip: &str, show_tip: bool) -> Response {
-    let t = Tokens::get(ui.ctx());
-    let style = IconButtonStyle {
+fn icon_button_style(t: &Tokens) -> IconButtonStyle {
+    IconButtonStyle {
         normal: ButtonVisuals { fill: Color32::TRANSPARENT, stroke: egui::Stroke::NONE, icon: t.icon },
         hovered: ButtonVisuals { fill: t.hover, stroke: egui::Stroke::NONE, icon: t.text },
         pressed: None,
         selected: ButtonVisuals { fill: t.accent_soft, stroke: egui::Stroke::new(1.0, t.accent_border), icon: t.accent_text },
         corner_radius: t.radius_sm.into(),
         focus_stroke: egui::Stroke::new(1.0, t.accent),
-    };
+    }
+}
+
+pub fn button_with_icon_size_tip(ui: &mut egui::Ui, name: &str, box_size: f32, icon_size: f32, selected: bool, tooltip: &str, show_tip: bool) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let style = icon_button_style(&t);
     let label = if tooltip.is_empty() { name } else { tl!(tooltip) };
     let resp = IconButton::new(label, Vec2::splat(box_size), &style).selected(selected).show(ui, |ui, rect, tint| {
         paint(ui, rect, name, icon_size, tint);
     });
     if tooltip.is_empty() || !show_tip { resp } else { resp.on_hover_text(label) }
+}
+
+/// Standard icon button whose glyph is painted in primitives instead of an SVG name,
+/// with the same chrome and states as the named-icon buttons. The glyph ignores `tint`.
+pub fn button_with_glyph(ui: &mut egui::Ui, box_size: f32, selected: bool, tooltip: &str, show_tip: bool, glyph: impl FnOnce(&egui::Ui, Rect)) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let style = icon_button_style(&t);
+    let label = tl!(tooltip);
+    let resp = IconButton::new(label, Vec2::splat(box_size), &style).selected(selected).show(ui, |ui, rect, _tint| glyph(ui, rect));
+    if !show_tip { resp } else { resp.on_hover_text(label) }
 }
 
 /// Rail toggle: "on" gets a quiet filled background and full-strength icon (no accent).

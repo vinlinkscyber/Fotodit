@@ -33,6 +33,28 @@ fn toolbar_harness_sized(kind: theme::ThemeKind, scale: f32, height: f32) -> egu
 }
 
 #[test]
+fn toolbar_assistant_badge_reopens_a_closed_chat_rail() {
+    // Normal canvas heights, not an oversized harness: the pinned badge must sit fully
+    // inside the viewport without scrolling, including with the chat closed (the reported
+    // failure state), and toggle the same flag as Window > Assistant.
+    for height in [700.0, 360.0] {
+        let mut harness = toolbar_harness_sized(theme::ThemeKind::ALL[0], 1.0, height);
+        assert!(harness.state().ui.panels.assistant, "test expects the rail open by default");
+        let screen = egui::Rect::from_min_size(Pos2::ZERO, vec2(400.0, height));
+        let badge = harness.get_by_label("AI Assistant");
+        assert!(screen.contains_rect(badge.rect()), "badge must be fully visible at {height}px without scrolling: {:?}", badge.rect());
+        badge.click();
+        harness.run_steps(3);
+        assert!(!harness.state().ui.panels.assistant, "badge click must close the rail");
+        let badge = harness.get_by_label("AI Assistant");
+        assert!(screen.contains_rect(badge.rect()), "closed state must keep the badge visible at {height}px: {:?}", badge.rect());
+        badge.click();
+        harness.run_steps(3);
+        assert!(harness.state().ui.panels.assistant, "badge click must reopen the rail");
+    }
+}
+
+#[test]
 fn compact_toolbar_scrolls_to_and_activates_the_last_tool() {
     for kind in theme::ThemeKind::ALL {
         for scale in [1.0, 1.5, 2.0] {
