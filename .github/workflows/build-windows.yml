@@ -1,15 +1,21 @@
 name: Focused provider contract and portable Windows build
 
-# COMBINED VERIFICATION CANDIDATE for scratch branch qual/verify-r4 (reviewer-prepared,
+# COMBINED VERIFICATION CANDIDATE r5 for scratch branch qual/verify-r5 (reviewer-prepared,
 # unexecuted). This file replaces .github/workflows/build-windows.yml ONLY on the scratch
 # branch so it stays dispatchable (workflow_dispatch requires the same workflow path on the
-# default branch; main is never touched). Changes vs the reviewed packaging-slim-r1 version:
-#   1. Branch guard retargeted to refs/heads/qual/verify-r4; tag qual-candidate-r4.
-#   2. New `release` job: verifies the pre-created tag and creates the DRAFT release first,
+# default branch; main is never touched). Changes vs the r4 candidate (run 45039197342,
+# failed only at the 190MiB raw payload cap at 200.2 MiB):
+#   1. Branch guard retargeted to refs/heads/qual/verify-r5; fresh tag qual-candidate-r5
+#      (r4 is burned; never retag).
+#   2. Editor-only portable package: the staged zip carries fotodit.exe + notices + README
+#      + SHA256SUMS only. No GUI code path spawns or loads fotodit-cli (verified: zero
+#      references to it outside apps/fotodit-cli), so the CLI is built CPU-only and used
+#      for the pixel roundtrip proof but not shipped. Expected staged payload ~113.9 MiB.
+#   3. `release` job: verifies the pre-created tag and creates the DRAFT release first,
 #      so both build jobs can attach evidence as release assets (no Actions artifact storage).
-#   3. New `linux-render` job: rendered toolbar-badge verification (kittest + wgpu/lavapipe
+#   4. `linux-render` job: rendered toolbar-badge verification (kittest + wgpu/lavapipe
 #      harness), PNGs and logs uploaded as draft-release assets.
-#   4. The packaging step additionally writes its size table to a file, uploaded on failure
+#   5. The packaging step additionally writes its size table to a file, uploaded on failure
 #      or success, so an over-cap run still leaves machine-readable evidence.
 # Tag, draft release and dispatch still require owner approval; nothing here publishes.
 
@@ -34,7 +40,7 @@ env:
 jobs:
   release:
     name: Verify tag and create the draft release
-    if: github.repository == 'vinlinkscyber/Fotodit' && github.ref == 'refs/heads/qual/verify-r4'
+    if: github.repository == 'vinlinkscyber/Fotodit' && github.ref == 'refs/heads/qual/verify-r5'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # contents:write lets the run's ephemeral GITHUB_TOKEN create the draft release and,
@@ -59,11 +65,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $out = gh api repos/vinlinkscyber/Fotodit/git/refs/tags/qual-candidate-r4
-          if ($LASTEXITCODE -ne 0) { throw "tag lookup failed (gh exit $LASTEXITCODE); tag qual-candidate-r4 must be pre-created before dispatch" }
+          $out = gh api repos/vinlinkscyber/Fotodit/git/refs/tags/qual-candidate-r5
+          if ($LASTEXITCODE -ne 0) { throw "tag lookup failed (gh exit $LASTEXITCODE); tag qual-candidate-r5 must be pre-created before dispatch" }
           $ref = $out | ConvertFrom-Json
-          if ($ref.object.type -ne 'commit') { throw "tag qual-candidate-r4 must be lightweight (point directly at a commit), got $($ref.object.type)" }
-          if ($ref.object.sha -ne $env:GITHUB_SHA) { throw "tag qual-candidate-r4 points at $($ref.object.sha), not the dispatched commit $env:GITHUB_SHA" }
+          if ($ref.object.type -ne 'commit') { throw "tag qual-candidate-r5 must be lightweight (point directly at a commit), got $($ref.object.type)" }
+          if ($ref.object.sha -ne $env:GITHUB_SHA) { throw "tag qual-candidate-r5 points at $($ref.object.sha), not the dispatched commit $env:GITHUB_SHA" }
       # Draft release assets are unmetered storage (release quotas: 2 GiB per file, no
       # total-size or bandwidth limit), unlike Actions artifact storage. Drafts are
       # visible and downloadable only to people with write access to this repository.
@@ -79,13 +85,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $ErrorActionPreference = 'Stop'
-          gh release create qual-candidate-r4 --draft --verify-tag --repo vinlinkscyber/Fotodit --title "Qualification build (draft) - run $env:GITHUB_RUN_ID" --notes 'Unsigned portable Windows x64 test build plus rendered toolbar verification evidence for the qualification candidate. Draft only: never publish. Visible and downloadable only to people with write access to this repository. SHA256SUMS.txt inside the zip verifies every packaged file.'
+          gh release create qual-candidate-r5 --draft --verify-tag --repo vinlinkscyber/Fotodit --title "Qualification build (draft) - run $env:GITHUB_RUN_ID" --notes 'Unsigned portable Windows x64 test build plus rendered toolbar verification evidence for the qualification candidate. Draft only: never publish. Visible and downloadable only to people with write access to this repository. SHA256SUMS.txt inside the zip verifies every packaged file.'
           if ($LASTEXITCODE -ne 0) { throw "gh release create failed with exit code $LASTEXITCODE" }
 
   focused:
     name: Focused tests and portable Windows build
     needs: release
-    if: github.repository == 'vinlinkscyber/Fotodit' && github.ref == 'refs/heads/qual/verify-r4'
+    if: github.repository == 'vinlinkscyber/Fotodit' && github.ref == 'refs/heads/qual/verify-r5'
     runs-on: windows-latest
     timeout-minutes: 180
     permissions:
@@ -142,10 +148,11 @@ jobs:
         run: |
           cargo build --release --locked -p fotodit
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          # The packaged CLI ships CPU-only: its gpu feature is an optional native rendering
-          # backend, and the GPU stack belongs to the app exe. Dropping it keeps one copy of
-          # that stack out of the portable payload; the roundtrip below validates rendering
-          # correctness on the CPU path.
+          # The CLI stays CPU-only: its gpu feature is an optional native rendering
+          # backend, and the GPU stack belongs to the app exe. The CLI is the qualified
+          # build/test tool (the roundtrip below validates rendering correctness on the
+          # CPU path); it is built here but not shipped - the editor package carries
+          # fotodit.exe only.
           cargo build --release --locked -p fotodit-cli --no-default-features
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: CLI PNG roundtrip and bounded portable payload
@@ -185,7 +192,9 @@ jobs:
               }
             }
           } finally { $bmp.Dispose() }
-          Copy-Item $app,$cli -Destination $stage
+          # Editor-only package: no GUI code path spawns or loads the CLI, so it does
+          # not ship in the user-facing zip. It remains the build/test tool above.
+          Copy-Item $app -Destination $stage
           # Third-party notices and license texts must travel with the binaries when the tree carries them.
           $notices = Join-Path $env:GITHUB_WORKSPACE 'THIRD_PARTY_NOTICES.md'
           if (Test-Path $notices) { Copy-Item $notices -Destination $stage }
@@ -193,7 +202,7 @@ jobs:
           if (Test-Path $licenses) { Copy-Item $licenses -Destination $stage -Recurse }
           $readme = @'
           Fotodit portable Windows x64 test build. Unsigned, no installer.
-          Contains fotodit.exe and fotodit-cli.exe. No provider keys or local credentials.
+          Contains fotodit.exe only (the editor). No provider keys or local credentials.
           Requires Windows graphics support and system curl.exe for provider requests.
           Provider editing is session-only, explicitly enabled in AI providers after adding your own key.
           Requests may consume provider quota or money. The build does not verify your provider plan is free.
@@ -235,7 +244,7 @@ jobs:
         run: |
           $report = Join-Path $env:RUNNER_TEMP 'fotodit-size-report.txt'
           if (Test-Path $report) {
-            gh release upload qual-candidate-r4 $report --clobber --repo vinlinkscyber/Fotodit
+            gh release upload qual-candidate-r5 $report --clobber --repo vinlinkscyber/Fotodit
             if ($LASTEXITCODE -ne 0) { throw "gh release upload failed with exit code $LASTEXITCODE" }
           } else {
             Write-Output 'No size report produced (a step before packaging failed); run log is the evidence.'
@@ -247,13 +256,13 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $zip = Join-Path $env:RUNNER_TEMP 'fotodit-portable-windows-x64.zip'
-          gh release upload qual-candidate-r4 $zip --clobber --repo vinlinkscyber/Fotodit
+          gh release upload qual-candidate-r5 $zip --clobber --repo vinlinkscyber/Fotodit
           if ($LASTEXITCODE -ne 0) { throw "gh release upload failed with exit code $LASTEXITCODE" }
 
   linux-render:
     name: Rendered toolbar verification (ubuntu-latest)
     needs: release
-    if: github.repository == 'vinlinkscyber/Fotodit' && github.ref == 'refs/heads/qual/verify-r4'
+    if: github.repository == 'vinlinkscyber/Fotodit' && github.ref == 'refs/heads/qual/verify-r5'
     runs-on: ubuntu-latest
     timeout-minutes: 180
     permissions:
@@ -323,4 +332,4 @@ jobs:
             [ -e "$f" ] && files+=("$f")
           done
           if [ ${#files[@]} -eq 0 ]; then echo 'No evidence files produced; run log is the evidence.'; exit 0; fi
-          if ! gh release upload qual-candidate-r4 "${files[@]}" --clobber --repo vinlinkscyber/Fotodit; then echo 'gh release upload failed'; exit 1; fi
+          if ! gh release upload qual-candidate-r5 "${files[@]}" --clobber --repo vinlinkscyber/Fotodit; then echo 'gh release upload failed'; exit 1; fi
