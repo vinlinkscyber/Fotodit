@@ -161,10 +161,7 @@ impl SemanticGoalRepair {
         created: &BTreeSet<u64>,
     ) -> GoalRepairDecision {
         if intent.category != IntentCategory::GraphicDesign {
-            return GoalRepairDecision::Stop(format!(
-                "semantic repair only supports graphic-design goals, not {:?}",
-                intent.category
-            ));
+            return GoalRepairDecision::Stop("this kind of goal can't be auto-corrected yet".into());
         }
 
         let terms = NaturalLanguageEngine::new().subject_terms(&intent.raw_prompt);

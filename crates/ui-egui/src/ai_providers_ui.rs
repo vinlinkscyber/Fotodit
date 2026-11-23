@@ -345,6 +345,52 @@ mod tests {
     use super::*;
     use fotodit_keystore::testing::MockSealer;
 
+    // Keep these in the provider lifecycle suite used by the Windows qualification
+    // workflow. Testing open() alone missed the disabled menu in the shipped build.
+    #[test]
+    fn provider_menu_is_enabled_and_opens_with_or_without_document() {
+        for document in [false, true] {
+            let mut app = FotoditApp::new(fotodit_engine::Session::new(), Default::default());
+            if document {
+                app.run("file.new", serde_json::json!({"width": 64, "height": 48})).unwrap();
+            }
+            let items = crate::menus::menu_items(&app);
+            let item = items.iter().find(|item| item.id == "edit.aiProviders").expect("provider menu exists");
+            assert_eq!(item.path, ["Edit"]);
+            assert!(item.enabled, "provider configuration must not need an engine command or document");
+            assert!(crate::menus::is_live(&item.id));
+            assert!(!app.ai_providers.open);
+            crate::menus::invoke(&mut app, &egui::Context::default(), &item.id, serde_json::json!({})).unwrap();
+            assert!(app.ai_providers.open, "the admitted menu action opens provider settings");
+            assert_eq!(app.ai_providers.editing_consent().active(), None, "opening settings grants no AI consent");
+        }
+    }
+
+    #[test]
+    fn provider_menu_pointer_click_opens_settings() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        for document in [false, true] {
+            let mut app = FotoditApp::new(fotodit_engine::Session::new(), Default::default());
+            if document {
+                app.run("file.new", serde_json::json!({"width": 64, "height": 48})).unwrap();
+            }
+            // A tall surface keeps the last Edit entry visible without introducing
+            // scrolling into this menu-admission regression.
+            let mut harness = Harness::builder().with_size(egui::vec2(1200.0, 2400.0)).build_ui_state(
+                |ui, app| { crate::menus::menu_bar(app, ui); },
+                app,
+            );
+            FotoditApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ALL[0]);
+            harness.run_steps(3);
+            harness.get_by_label("Edit").click();
+            harness.run_steps(3);
+            harness.get_by_label_contains("AI Providers").click();
+            harness.run_steps(3);
+            assert!(harness.state().ai_providers.open, "click opens provider settings, document={document}");
+            assert_eq!(harness.state().ai_providers.editing_consent().active(), None);
+        }
+    }
+
     fn store(tag: &str) -> (KeyStore<MockSealer>, std::path::PathBuf) {
         let dir = std::env::temp_dir().join(format!("fotodit-ai-providers-ui-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);

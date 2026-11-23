@@ -128,14 +128,14 @@ impl DeterministicRulePlanner {
                     "radius": 1.0,
                     "threshold": 2
                 }),
-                description: "Unsharp mask clarity sharpening on focal features".into(),
+                description: "Sharpen key details".into(),
             },
             PlanStep {
                 command: "layer.newAdjustmentLayer.curves".into(),
                 params: json!({
                     "points": [[0, 0], [64, 55], [192, 205], [255, 255]]
                 }),
-                description: "Subtle S-curve tonal contrast enhancement for highlights and shadows".into(),
+                description: "Add gentle contrast to highlights and shadows".into(),
             },
             PlanStep {
                 command: "layer.newAdjustmentLayer.vibrance".into(),
@@ -143,13 +143,13 @@ impl DeterministicRulePlanner {
                     "vibrance": 18,
                     "saturation": 4
                 }),
-                description: "Enhance color vibrance safely protecting skin tones".into(),
+                description: "Boost color vibrance gently".into(),
             },
         ];
 
         Ok(EditingPlan {
             title: "Professional Photographic Enhancement & Clarity".into(),
-            rationale: "Sharpens the intended active pixel layer first, then adds Curves and Vibrance adjustment layers. Execution requires a composite target without a pixel selection.".into(),
+            rationale: "Sharpens the photo first, then adjusts contrast and color vibrance.".into(),
             category: IntentCategory::PhotoEnhancement,
             steps,
             creates_document: false,

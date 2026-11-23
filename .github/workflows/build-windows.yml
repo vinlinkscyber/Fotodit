@@ -1,22 +1,32 @@
 name: Focused provider contract and portable Windows build
 
-# COMBINED VERIFICATION CANDIDATE r5 for scratch branch qual/verify-r5 (reviewer-prepared,
+# COMBINED VERIFICATION CANDIDATE r6 for scratch branch qual/verify-r6 (reviewer-prepared,
 # unexecuted). This file replaces .github/workflows/build-windows.yml ONLY on the scratch
 # branch so it stays dispatchable (workflow_dispatch requires the same workflow path on the
-# default branch; main is never touched). Changes vs the r4 candidate (run 45039197342,
-# failed only at the 190MiB raw payload cap at 200.2 MiB):
-#   1. Branch guard retargeted to refs/heads/qual/verify-r5; fresh tag qual-candidate-r5
-#      (r4 is burned; never retag).
-#   2. Editor-only portable package: the staged zip carries fotodit.exe + notices + README
-#      + SHA256SUMS only. No GUI code path spawns or loads fotodit-cli (verified: zero
-#      references to it outside apps/fotodit-cli), so the CLI is built CPU-only and used
-#      for the pixel roundtrip proof but not shipped. Expected staged payload ~113.9 MiB.
-#   3. `release` job: verifies the pre-created tag and creates the DRAFT release first,
-#      so both build jobs can attach evidence as release assets (no Actions artifact storage).
-#   4. `linux-render` job: rendered toolbar-badge verification (kittest + wgpu/lavapipe
-#      harness), PNGs and logs uploaded as draft-release assets.
-#   5. The packaging step additionally writes its size table to a file, uploaded on failure
-#      or success, so an over-cap run still leaves machine-readable evidence.
+# default branch; main is never touched). Changes vs the r5 candidate (run 45061554996,
+# green, editor-only zip 61.2MB delivered; user found Edit > AI Providers greyed):
+#   1. Branch guard retargeted to refs/heads/qual/verify-r6; fresh tag qual-candidate-r6
+#      (r5 is burned; never retag).
+#   2. Menu availability fix: crates/ui-egui/src/menus/state.rs lists edit.aiProviders
+#      among the always-available shell commands. Root cause of the greyed menu: it fell
+#      through to the engine command registry, which does not know this UI-only command.
+#   3. New regressions inside ai_providers_ui::tests (menu enabled + invocation with and
+#      without a document, and a real pointer click through the menu harness). They run
+#      inside the existing "Provider settings lifecycle tests" step - no workflow change
+#      needed for them.
+#   4. New rendered harness crates/ui-egui/examples/ai_providers_menu_verify.rs: clicks
+#      Edit > AI Providers through the real menu, asserts the window and its key field
+#      are in the rendered accessibility tree, and writes PNG evidence of the enabled
+#      menu row and the open settings window. The r5 lesson: assert the rendered result,
+#      not a state flag.
+#   5. Chat presentation (user feedback on the r5 build): the assistant chat spoke in
+#      evaluator/pixel-digest machinery and repeated verification disclaimers. Replies
+#      are now natural progress or simple failure ("Asking Gemini to plan the edit...",
+#      "Done: <title> (3 steps). Tell me if you want anything changed."). Claims state
+#      what was DONE, never that the result looks right or was quality-verified;
+#      offline stays labelled offline and provider runs name the provider. Evaluator
+#      verdicts, pixel observations and provider request counts move to the
+#      diagnostic log; the local enhance plan template now speaks in user terms.
 # Tag, draft release and dispatch still require owner approval; nothing here publishes.
 
 on:
@@ -40,7 +50,7 @@ env:
 jobs:
   release:
     name: Verify tag and create the draft release
-    if: github.repository == 'vinlinkscyber/Fotodit' && github.ref == 'refs/heads/qual/verify-r5'
+    if: github.repository == 'vinlinkscyber/Fotodit' && github.ref == 'refs/heads/qual/verify-r6'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # contents:write lets the run's ephemeral GITHUB_TOKEN create the draft release and,
@@ -65,11 +75,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $out = gh api repos/vinlinkscyber/Fotodit/git/refs/tags/qual-candidate-r5
-          if ($LASTEXITCODE -ne 0) { throw "tag lookup failed (gh exit $LASTEXITCODE); tag qual-candidate-r5 must be pre-created before dispatch" }
+          $out = gh api repos/vinlinkscyber/Fotodit/git/refs/tags/qual-candidate-r6
+          if ($LASTEXITCODE -ne 0) { throw "tag lookup failed (gh exit $LASTEXITCODE); tag qual-candidate-r6 must be pre-created before dispatch" }
           $ref = $out | ConvertFrom-Json
-          if ($ref.object.type -ne 'commit') { throw "tag qual-candidate-r5 must be lightweight (point directly at a commit), got $($ref.object.type)" }
-          if ($ref.object.sha -ne $env:GITHUB_SHA) { throw "tag qual-candidate-r5 points at $($ref.object.sha), not the dispatched commit $env:GITHUB_SHA" }
+          if ($ref.object.type -ne 'commit') { throw "tag qual-candidate-r6 must be lightweight (point directly at a commit), got $($ref.object.type)" }
+          if ($ref.object.sha -ne $env:GITHUB_SHA) { throw "tag qual-candidate-r6 points at $($ref.object.sha), not the dispatched commit $env:GITHUB_SHA" }
       # Draft release assets are unmetered storage (release quotas: 2 GiB per file, no
       # total-size or bandwidth limit), unlike Actions artifact storage. Drafts are
       # visible and downloadable only to people with write access to this repository.
@@ -85,13 +95,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $ErrorActionPreference = 'Stop'
-          gh release create qual-candidate-r5 --draft --verify-tag --repo vinlinkscyber/Fotodit --title "Qualification build (draft) - run $env:GITHUB_RUN_ID" --notes 'Unsigned portable Windows x64 test build plus rendered toolbar verification evidence for the qualification candidate. Draft only: never publish. Visible and downloadable only to people with write access to this repository. SHA256SUMS.txt inside the zip verifies every packaged file.'
+          gh release create qual-candidate-r6 --draft --verify-tag --repo vinlinkscyber/Fotodit --title "Qualification build (draft) - run $env:GITHUB_RUN_ID" --notes 'Unsigned portable Windows x64 test build plus rendered toolbar verification evidence for the qualification candidate. Draft only: never publish. Visible and downloadable only to people with write access to this repository. SHA256SUMS.txt inside the zip verifies every packaged file.'
           if ($LASTEXITCODE -ne 0) { throw "gh release create failed with exit code $LASTEXITCODE" }
 
   focused:
     name: Focused tests and portable Windows build
     needs: release
-    if: github.repository == 'vinlinkscyber/Fotodit' && github.ref == 'refs/heads/qual/verify-r5'
+    if: github.repository == 'vinlinkscyber/Fotodit' && github.ref == 'refs/heads/qual/verify-r6'
     runs-on: windows-latest
     timeout-minutes: 180
     permissions:
@@ -244,7 +254,7 @@ jobs:
         run: |
           $report = Join-Path $env:RUNNER_TEMP 'fotodit-size-report.txt'
           if (Test-Path $report) {
-            gh release upload qual-candidate-r5 $report --clobber --repo vinlinkscyber/Fotodit
+            gh release upload qual-candidate-r6 $report --clobber --repo vinlinkscyber/Fotodit
             if ($LASTEXITCODE -ne 0) { throw "gh release upload failed with exit code $LASTEXITCODE" }
           } else {
             Write-Output 'No size report produced (a step before packaging failed); run log is the evidence.'
@@ -256,13 +266,13 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $zip = Join-Path $env:RUNNER_TEMP 'fotodit-portable-windows-x64.zip'
-          gh release upload qual-candidate-r5 $zip --clobber --repo vinlinkscyber/Fotodit
+          gh release upload qual-candidate-r6 $zip --clobber --repo vinlinkscyber/Fotodit
           if ($LASTEXITCODE -ne 0) { throw "gh release upload failed with exit code $LASTEXITCODE" }
 
   linux-render:
     name: Rendered toolbar verification (ubuntu-latest)
     needs: release
-    if: github.repository == 'vinlinkscyber/Fotodit' && github.ref == 'refs/heads/qual/verify-r5'
+    if: github.repository == 'vinlinkscyber/Fotodit' && github.ref == 'refs/heads/qual/verify-r6'
     runs-on: ubuntu-latest
     timeout-minutes: 180
     permissions:
@@ -300,8 +310,10 @@ jobs:
             mesa-vulkan-drivers vulkan-tools
       - name: Confirm software Vulkan (lavapipe) is available
         run: vulkaninfo --summary | head -40
-      - name: Confirm the verification harness is present on this branch
-        run: test -f crates/ui-egui/examples/assistant_reopen_verify.rs
+      - name: Confirm the verification harnesses are present on this branch
+        run: |
+          test -f crates/ui-egui/examples/assistant_reopen_verify.rs
+          test -f crates/ui-egui/examples/ai_providers_menu_verify.rs
       - name: Toolbar compact visual regression tests
         run: |
           set -o pipefail
@@ -317,6 +329,14 @@ jobs:
         run: |
           set -o pipefail
           cargo run --locked -p fotodit-ui-egui --example assistant_reopen_verify 2>&1 | tee reopen-verify.txt
+      # The r5 regression proof: a real pointer click on Edit > AI Providers must open
+      # the key window; PNG evidence of the enabled menu row and the open window.
+      - name: Rendered provider-menu verification harness
+        env:
+          WGPU_BACKEND: vulkan
+        run: |
+          set -o pipefail
+          cargo run --locked -p fotodit-ui-egui --example ai_providers_menu_verify 2>&1 | tee providers-verify.txt
       - name: List rendered evidence
         if: always()
         run: ls -la /tmp/verify-snaps/ || true
@@ -328,8 +348,9 @@ jobs:
           files=()
           [ -f regressions.txt ] && files+=(regressions.txt)
           [ -f reopen-verify.txt ] && files+=(reopen-verify.txt)
+          [ -f providers-verify.txt ] && files+=(providers-verify.txt)
           for f in /tmp/verify-snaps/*.new.png; do
             [ -e "$f" ] && files+=("$f")
           done
           if [ ${#files[@]} -eq 0 ]; then echo 'No evidence files produced; run log is the evidence.'; exit 0; fi
-          if ! gh release upload qual-candidate-r5 "${files[@]}" --clobber --repo vinlinkscyber/Fotodit; then echo 'gh release upload failed'; exit 1; fi
+          if ! gh release upload qual-candidate-r6 "${files[@]}" --clobber --repo vinlinkscyber/Fotodit; then echo 'gh release upload failed'; exit 1; fi

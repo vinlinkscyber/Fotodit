@@ -141,7 +141,7 @@ impl AiEngine {
         if request.original_prompt.trim().is_empty() || !(1..=8).contains(&request.max_attempts)
             || !(1..=128).contains(&request.max_commands)
         {
-            return outcome.stop(GoalStop::InvalidRequest, "Use a nonempty goal, 1..=8 attempts and 1..=128 planned commands.");
+            return outcome.stop(GoalStop::InvalidRequest, "Give me a clear, non-empty edit request.");
         }
         let document = match session.inspect_active() {
             Ok(document) => document,
@@ -200,17 +200,17 @@ impl AiEngine {
                 plan.creates_document = true;
             }
             if attempt_index > 0 && (plan.creates_document || plan.steps.iter().any(|step| step.command == "file.new")) {
-                return outcome.stop(GoalStop::PlanningFailed, "Repair must use the existing document, not create or replace it.");
+                return outcome.stop(GoalStop::PlanningFailed, "the correction would have replaced the document, which is not safe, so I stopped");
             }
             if plan.steps.is_empty() {
-                return outcome.stop(GoalStop::NeedsInput, "The planner supplied no edit steps; the goal is not verified.");
+                return outcome.stop(GoalStop::NeedsInput, "no concrete edit steps came out of that");
             }
             if plan.steps.len() > request.max_commands.saturating_sub(outcome.planned_commands) {
-                return outcome.stop(GoalStop::BudgetExhausted, "The next plan exceeds the remaining planned-command budget; it was not dispatched.");
+                return outcome.stop(GoalStop::BudgetExhausted, "the plan grew too large to run safely, so I stopped before running it");
             }
             let fingerprint = plan_fingerprint(&plan);
             if !fingerprints.insert(fingerprint) {
-                return outcome.stop(GoalStop::RepeatedPlan, "The same command/parameter sequence was proposed again; no repeated edits were dispatched.");
+                return outcome.stop(GoalStop::RepeatedPlan, "my next plan was the same as the last one, so I stopped instead of repeating it");
             }
             for step in &plan.steps {
                 if let Err(error) = self.catalog.validate_command(&step.command, &step.params) {
@@ -234,7 +234,7 @@ impl AiEngine {
                     attempt.commands = host.calls[start..].to_vec();
                     if !execution.is_success {
                         outcome.attempts.push(attempt);
-                        return outcome.stop(GoalStop::FinalStateUnverified, "Execution did not complete; no repair was attempted.");
+                        return outcome.stop(GoalStop::FinalStateUnverified, "the edit did not finish running");
                     }
                     let final_document = match host.inspect_active() {
                         Ok(Some(document)) => document,
@@ -253,12 +253,12 @@ impl AiEngine {
                     // Record only completed executions, with the real original goal.
                     context.record_interaction(request.original_prompt.clone(), plan);
                     if satisfied {
-                        return outcome.stop(GoalStop::Completed, "Completed execution; the evaluator reported the original goal satisfied. This is evaluator evidence, not independent visual-quality proof.");
+                        return outcome.stop(GoalStop::Completed, "All edit steps completed.");
                     }
                 }
             }
         }
-        outcome.stop(GoalStop::BudgetExhausted, "Attempt limit reached after completed but unmet edits; no further repair was dispatched.")
+        outcome.stop(GoalStop::BudgetExhausted, "I made several attempts without getting there, so I stopped")
     }
 }
 

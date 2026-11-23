@@ -131,7 +131,7 @@ impl AssistantBackend for GuiAssistant {
             // Only bare conversational references are refused. Pronouns inside a full
             // request (including the user's taxi-poster wording) are ordinary language.
             if matches!(lower.trim().trim_end_matches(['.', '!', '?']), "do that again" | "same as previous" | "again" | "same" | "do it" | "do that") {
-                return Err("Provider editing is single-turn and does not share earlier chat. Restate the complete edit and name the target explicitly; nothing was sent.".into());
+                return Err("I handle one provider edit at a time and don't carry earlier chat into it. Restate the full edit and name the target - nothing was sent.".into());
             }
             let document = app.session.active().map(fotodit_engine::inspect::document);
             let scene = document.as_ref().map(|doc| fotodit_automation::ai::PerceptionEngine::new().perceive(doc)).unwrap_or_default();
@@ -176,13 +176,13 @@ impl AssistantBackend for GuiAssistant {
             self.pending = Some(PendingGoal { phase: PendingPhase::Planning, receiver, prompt: prompt.into(),
                 intent, applied: Vec::new(), document, document_id: document_id(app), binding, visual });
             Ok(if visual {
-                format!("Provider planning ({slot}) with the document image attached. No edit has been applied yet.")
+                format!("Asking {} to plan the edit, with the document image attached. No edits applied yet.", provider_name(slot))
             } else {
-                format!("Provider planning ({slot}). No edit has been applied yet.")
+                format!("Asking {} to plan the edit. No edits applied yet.", provider_name(slot))
             })
         } else {
             let mut session = GuiSession { app, ctx };
-            self.run(&mut session, prompt).map(|answer| format!("Offline rules (no provider contacted). {answer}"))
+            self.run(&mut session, prompt).map(|answer| format!("Working offline (no AI provider connected). {answer}"))
         }
     }
     fn busy(&self) -> bool { self.pending.is_some() }
@@ -199,15 +199,15 @@ impl AssistantBackend for GuiAssistant {
             // finish (carrying the captured document image in visual mode), but its
             // result is never applied and no further requests start from this goal.
             let in_flight = match (verifying, visual) {
-                (true, true) => " The result check already sent may still finish; it carries a captured document image, and no further requests will be made for this goal.",
-                (true, false) => " The result check already sent may still finish, and no further requests will be made for this goal.",
-                (false, true) => " The planning request already sent may still finish; it carries the captured document image. Nothing from it will be applied and no further requests will be made for this goal.",
+                (true, true) => " The review request already sent carries a captured image of the document and may still finish; no further requests will be made for this goal.",
+                (true, false) => " The review request already sent may still finish; no further requests will be made for this goal.",
+                (false, true) => " The planning request already sent carries a captured image of the document and may still finish; nothing from it will be applied and no further requests will be made for this goal.",
                 (false, false) => " The planning request already sent may still finish; nothing from it will be applied and no further requests will be made for this goal.",
             };
             return Some(if verifying {
-                format!("Result check discarded because the document, credential or consent changed. Edits already applied remain in the document; nothing was reverted.{in_flight} Inspect the canvas and use Undo if needed.")
+                format!("Edit cancelled because the document, key or AI permission changed. The changes already made stay in the document - use Undo if needed.{in_flight}")
             } else {
-                format!("Pending edit discarded because the document, credential or consent changed. No response was applied.{in_flight}")
+                format!("Edit cancelled because the document, key or AI permission changed. Nothing from it will be applied.{in_flight}")
             });
         }
         let result = match pending.receiver.try_recv() {
@@ -222,27 +222,27 @@ impl AssistantBackend for GuiAssistant {
             || app.session.active().map(fotodit_engine::inspect::document) != pending.document {
             app.ai_providers.editing_consent_mut().disable();
             return Some(if matches!(phase, PendingPhase::Verifying { .. }) {
-                "Result check discarded because the document or credential changed. Edits already applied remain in the document; nothing was reverted. Inspect the canvas and use Undo if needed.".into()
+                "Edit cancelled because the document or key changed. The changes already made stay in the document - use Undo if needed.".into()
             } else {
-                "Pending edit discarded because the document or credential changed. No response was applied.".into()
+                "Edit cancelled because the document or key changed. Nothing from it will be applied.".into()
             });
         }
         let plan = match (phase, result) {
             (PendingPhase::Planning, Err(error)) => return Some(error),
-            (PendingPhase::Verifying { .. }, Err(error)) => return Some(format!("The result check failed: {error} Changes made so far remain; inspect the canvas and use Undo as needed.")),
+            (PendingPhase::Verifying { .. }, Err(error)) => return Some(format!("The result review failed: {error} Changes made so far stay in the document - use Undo if needed.")),
             (PendingPhase::Planning, Ok(WorkerResult::Plan(plan))) => plan,
             (PendingPhase::Verifying { check }, Ok(WorkerResult::Verdict(verdict))) => {
                 let verdict = *verdict;
                 if verdict.satisfied {
-                    return Some(format!("Gemini reviewed the edited image and reported the request satisfied (result check {check}). That is the provider's own judgment of the image, not independent proof. Inspect the canvas; use Undo if needed."));
+                    return Some(format!("Gemini reviewed the result and says it matches your request."));
                 }
                 if verdict.corrective.steps.is_empty() {
                     let note = if verdict.critique.is_empty() { String::new() } else { format!(": {}", verdict.critique) };
-                    return Some(format!("Gemini reviewed the edited image and reported the goal not met, with no correction to offer{note}. Changes made so far remain; inspect the canvas and use Undo as needed."));
+                    return Some(format!("Gemini reviewed the result and doesn't think it matches{note}. The changes made so far stay in the document - use Undo if needed."));
                 }
                 verdict.corrective
             }
-            _ => return Some("Provider response did not match the pending phase. No edits were applied.".into()),
+            _ => return Some("The provider's reply didn't fit what I asked. No edits were applied.".into()),
         };
         pending.applied.extend(plan.steps.iter().map(|s| {
             let text = format!("{} {}", s.command, s.params);
@@ -279,7 +279,7 @@ impl AssistantBackend for GuiAssistant {
                     };
                     if Some(loaded_identity) != pending.binding.1 {
                         app.ai_providers.editing_consent_mut().disable();
-                        return Some("Provider credential changed between result checks. Enable editing again; changes made so far remain.".into());
+                        return Some("The provider key changed between result reviews. Enable editing again; the changes made so far remain.".into());
                     }
                     let (sender, receiver) = std::sync::mpsc::channel();
                     let repaint = ctx.clone();
@@ -295,28 +295,31 @@ impl AssistantBackend for GuiAssistant {
                     pending.phase = PendingPhase::Verifying { check: next_check };
                     pending.receiver = receiver;
                     self.pending = Some(pending);
-                    return Some(format!("Provider editing ({slot}): commands executed. Asking Gemini to check the result image (request {} of at most {}). Inspect the canvas; use Undo if needed. {}",
-                        next_check + 1, 1 + fotodit_ui_egui::ai_providers_ui::VISUAL_MAX_CHECKS, outcome.detail));
+                    log::info!("result review {} of at most {} dispatched", next_check + 1, 1 + fotodit_ui_egui::ai_providers_ui::VISUAL_MAX_CHECKS);
+                    return Some(format!("Done via {}: edits applied. Asking Gemini to review the result.", provider_name(slot)));
                 }
                 Some(Err(render_error)) => {
-                    return Some(format!("Provider editing ({slot}): commands executed; {requests_made} provider request(s) were made. The result image could not be rendered, so no result check was sent: {render_error} The requested result and visual quality are not independently verified. Inspect the canvas; use Undo if needed. {}", outcome.detail));
+                    log::info!("{requests_made} provider request(s) were made for this goal");
+                    return Some(format!("Done via {}: edits applied, but I couldn't render the result image for a review: {render_error}", provider_name(slot)));
                 }
                 None => {
-                    return Some(format!("Provider editing ({slot}): commands executed; {requests_made} provider request(s) were made. The document is no longer open, so no result check was sent. Inspect the canvas; use Undo if needed. {}", outcome.detail));
+                    return Some(format!("Done via {}: edits applied. The document is no longer open, so no result review was sent.", provider_name(slot)));
                 }
             }
         }
         Some(if completed {
             if pending.visual && next_check > fotodit_ui_egui::ai_providers_ui::VISUAL_MAX_CHECKS {
-                format!("Provider editing ({slot}): commands executed. The consented result checks are used up for this goal ({requests_made} requests were made). The requested result and visual quality are not independently verified. Inspect the canvas; use Undo if needed. {}", outcome.detail)
+                log::info!("result-review budget used: {requests_made} provider request(s) were made for this goal");
+                format!("Done via {}: edits applied. I've used the result reviews available for this goal, so I'll stop here.", provider_name(slot))
             } else if pending.visual {
-                format!("Provider editing ({slot}): commands executed; {requests_made} provider request(s) were made. Image consent is no longer active, so no result check was sent. The requested result and visual quality are not independently verified. Inspect the canvas; use Undo if needed. {}", outcome.detail)
+                log::info!("{requests_made} provider request(s) were made for this goal; image consent is no longer active");
+                format!("Done via {}: edits applied. Image permission was turned off, so no result review was sent.", provider_name(slot))
             } else {
-                format!("Provider editing ({slot}): commands executed. The requested result and visual quality are not independently verified. Inspect the canvas; use Undo if needed. {}", outcome.detail)
+                format!("Done via {}: the edit steps are complete.", provider_name(slot))
             }
         } else if outcome.attempts.iter().any(|a| !a.commands.is_empty()) {
-            format!("Provider editing ({slot}): execution stopped and may have left partial changes. Inspect the canvas and use Undo as needed. {}", outcome.detail)
-        } else { format!("Provider editing ({slot}): no edits applied. {}", outcome.detail) })
+            format!("Stopped partway via {} - some changes may be left in the document. Check the canvas and use Undo if needed. {}", provider_name(slot), outcome.detail)
+        } else { format!("No edits were applied via {}. {}", provider_name(slot), outcome.detail) })
     }
 }
 
@@ -416,16 +419,28 @@ fn is_significant(plan: &EditingPlan) -> bool {
     plan.creates_document || plan.steps.len() > 1 || plan.category == IntentCategory::GraphicDesign
 }
 
+/// The provider's display name in chat messages.
+fn provider_name(slot: &str) -> &str {
+    match slot {
+        "gemini" => "Gemini",
+        "cohere" => "Cohere",
+        "lajiwa" => "Lajiwa",
+        other => other,
+    }
+}
+
 /// The executed design in plain language: what was planned and the ordered steps.
 fn propose(plan: &EditingPlan) -> String {
     let steps = plan.steps.iter().enumerate().map(|(i, s)| format!("{}. {}", i + 1, s.description)).collect::<Vec<_>>().join(" ");
-    format!("Plan: {}. {} Steps: {}", plan.title, plan.rationale, steps)
+    format!("Here's my plan: {}. {} Steps: {}", plan.title, plan.rationale, steps)
 }
 
-/// The chat reply for a finished goal run. The stop reason decides what may honestly
-/// be said: only a Completed run reports satisfaction (evaluator evidence, never
-/// independent visual-quality proof) and may include the pixel observation; a run
-/// whose final state is unverified says so and withholds it. A significant executed
+/// The chat reply for a finished goal run, in plain language: the user asked for
+/// progress or a simple failure, not machinery. A Completed run says what was done
+/// and asks the user to check the canvas; it never claims the result looks right,
+/// because the evaluator verdict and the pixel observation are mechanical evidence,
+/// not visual-quality proof. Those details go to the diagnostic log, not the chat.
+/// A run whose final state is unverified says so in the chat. A significant executed
 /// design (new document, multi-step work, creative design) is named next to the outcome.
 fn summarize_goal(outcome: &GoalOutcome) -> String {
     let attempts = outcome.attempts.len();
@@ -435,22 +450,27 @@ fn summarize_goal(outcome: &GoalOutcome) -> String {
             let title = last.map(|a| a.plan.title.as_str()).unwrap_or("the edit");
             let steps = last.map(|a| a.plan.steps.len()).unwrap_or(0);
             let mut t = if attempts > 1 { format!("Done: {title} ({steps} steps, {attempts} attempts).") } else { format!("Done: {title} ({steps} steps).") };
-            t.push_str(" The evaluator reported the goal satisfied; that is evaluator evidence, not independent visual-quality proof.");
+            t.push_str(" Tell me if you want anything changed.");
+            // The mechanical evidence stays available for diagnosis without crowding
+            // the chat: the evaluator verdict is evaluator evidence, never independent
+            // visual-quality proof, and a pixel difference is data, not quality.
+            log::info!("goal completed: the evaluator reported the goal satisfied (evaluator evidence, not independent visual-quality proof)");
             if let Some(observation) = last.and_then(|a| a.evidence.as_ref()).and_then(pixel_observation) {
-                t.push(' ');
-                t.push_str(&observation);
+                log::info!("goal evidence: {observation}");
             }
             t
         }
         GoalStop::NeedsInput if outcome.detail == "no document open" => "Open a document first, or ask me to create one.".to_string(),
-        GoalStop::NeedsInput => format!("I need more input: {}", outcome.detail),
-        GoalStop::Unmet => format!("The goal is not met: {}", outcome.detail),
-        GoalStop::BudgetExhausted => format!("Stopped: {}", outcome.detail),
-        GoalStop::RepeatedPlan => format!("Stopped before repeating the same edit: {}", outcome.detail),
-        GoalStop::PlanningFailed => format!("I could not plan that: {}", outcome.detail),
+        GoalStop::NeedsInput => format!("I need a bit more to go on: {}", outcome.detail),
+        GoalStop::Unmet => format!("I couldn't get there: {}", outcome.detail),
+        GoalStop::BudgetExhausted => format!("I stopped here: {}", outcome.detail),
+        GoalStop::RepeatedPlan => format!("Stopped - that would just repeat the same edit: {}", outcome.detail),
+        GoalStop::PlanningFailed => format!("I couldn't plan that: {}", outcome.detail),
         GoalStop::InvalidRequest => outcome.detail.clone(),
         GoalStop::FinalStateUnverified => {
-            format!("The final document state is unverified - check the canvas before relying on it. {}", outcome.detail)
+            // The detail is engine wording ("host returned a pending receipt"); log it, don't chat it.
+            log::info!("final state unverified: {}", outcome.detail);
+            "The edit ran, but I couldn't confirm the final document state - please check the canvas before relying on it.".to_string()
         }
     };
     if let Some(plan) = outcome.attempts.first().map(|a| &a.plan).filter(|p| is_significant(p)) {
@@ -459,9 +479,10 @@ fn summarize_goal(outcome: &GoalOutcome) -> String {
     text
 }
 
-/// One bounded, honest line of observed-composite evidence: what a before/after
-/// pixel digest OBSERVED, explicitly not a verdict on the intended result (the
-/// evaluation above owns intent). Nothing is reported when no step was checked.
+/// One bounded, honest line of observed-composite evidence for the diagnostic log
+/// (not the chat): what a before/after pixel digest OBSERVED, explicitly not a
+/// verdict on the intended result (the evaluation owns intent). None when no step
+/// was checked.
 ///
 /// Aggregate cost behind this line: one engine pass is bounded at 8 digest
 /// renders + 2 color-statistics renders (about 640,000,000 decimal bytes of
@@ -590,7 +611,7 @@ mod tests {
             app.ai_providers.editing_consent_mut().request("gemini");
             app.ai_providers.editing_consent_mut().confirm_identity([7; 32]);
             let initial = fotodit_ui_egui::panels::assistant::submit(&mut app, &ctx, prompt);
-            assert!(initial.starts_with("Provider planning"), "{prompt}: {initial}");
+            assert!(initial.starts_with("Asking Gemini"), "{prompt}: {initial}");
             let _ = await_plan(&mut app, &ctx);
             assert_eq!(calls.load(Ordering::SeqCst), 1, "{prompt}");
         }
@@ -627,7 +648,7 @@ mod tests {
             if change == "cancel" { assert!(answer.is_none()); }
             else {
                 let answer = answer.unwrap();
-                assert!(answer.contains("discarded"), "{answer}");
+                assert!(answer.contains("cancelled"), "{answer}");
                 assert!(answer.contains("may still finish"), "the in-flight send is disclosed: {answer}");
                 assert!(!answer.contains("captured document image"), "metadata-only goal carries no image: {answer}");
             }
@@ -646,9 +667,9 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 0, "enabling sends nothing");
         assert_eq!(loads.load(Ordering::SeqCst), 0, "fixture enable does not build a provider planner");
         let initial = fotodit_ui_egui::panels::assistant::submit(&mut app, &ctx, "create a poster called chndrax");
-        assert!(initial.starts_with("Provider planning (gemini)"), "{initial}");
+        assert!(initial.starts_with("Asking Gemini"), "{initial}");
         let answer = await_plan(&mut app, &ctx);
-        assert!(answer.starts_with("Provider editing (gemini):"), "{answer}");
+        assert!(answer.starts_with("Done via Gemini"), "{answer}");
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(loads.load(Ordering::SeqCst), 1);
         let doc = fotodit_engine::inspect::document(app.session.active().unwrap());
@@ -762,18 +783,20 @@ mod tests {
     }
 
     #[test]
-    fn summarize_goal_completed_is_evaluator_evidence_not_visual_proof() {
+    fn summarize_goal_completed_is_plain_and_keeps_machinery_out_of_chat() {
         let text = summarize_goal(&outcome(GoalStop::Completed, "completed", vec![attempt("enhance", &[VisualEvidenceClass::Changed])]));
         assert!(text.contains("Done: enhance"), "{text}");
-        assert!(text.contains("evaluator evidence, not independent visual-quality proof"), "{text}");
-        assert!(text.contains("Pixel check"), "{text}");
+        assert!(text.contains("Tell me if you want anything changed"), "{text}", "plain close, no disclaimer");
+        assert!(!text.contains("can't see how it looks"), "{text}", "no blanket verification disclaimer on success");
+        assert!(!text.contains("evaluator"), "{text}", "evaluator wording moves to the log");
+        assert!(!text.contains("Pixel check"), "{text}", "pixel digest wording moves to the log");
     }
 
     #[test]
     fn summarize_goal_unverified_withholds_pixel_observation() {
         let text = summarize_goal(&outcome(GoalStop::FinalStateUnverified, "host returned a pending receipt", vec![attempt("enhance", &[VisualEvidenceClass::Changed])]));
-        assert!(text.contains("final document state is unverified"), "{text}");
-        assert!(text.contains("pending receipt"), "{text}");
+        assert!(text.contains("couldn't confirm the final document state"), "{text}");
+        assert!(!text.contains("pending receipt"), "{text}", "engine detail stays in the log");
         assert!(!text.contains("Pixel check"), "{text}");
         assert!(!text.contains("Done:"), "{text}");
     }
@@ -787,10 +810,10 @@ mod tests {
     #[test]
     fn summarize_goal_repeated_plan_and_unmet_keep_the_detail() {
         let text = summarize_goal(&outcome(GoalStop::RepeatedPlan, "same sequence proposed again", vec![attempt("enhance", &[])]));
-        assert!(text.contains("Stopped before repeating the same edit"), "{text}");
+        assert!(text.contains("would just repeat the same edit"), "{text}");
         assert!(text.contains("same sequence proposed again"), "{text}");
         let text = summarize_goal(&outcome(GoalStop::Unmet, "need another strategy", vec![attempt("enhance", &[])]));
-        assert!(text.contains("The goal is not met: need another strategy"), "{text}");
+        assert!(text.contains("I couldn't get there: need another strategy"), "{text}");
     }
 
     /// Outcome-level assertions through the ACTUAL run wiring (the `run_goal` seam the
@@ -1107,9 +1130,9 @@ mod tests {
         let initial = fotodit_ui_egui::panels::assistant::submit(&mut app, &ctx, "add the title Hi and make it bigger");
         assert!(initial.contains("with the document image attached"), "{initial}");
         let first = await_plan(&mut app, &ctx);
-        assert!(first.contains("Asking Gemini to check the result image"), "{first}");
+        assert!(first.contains("Asking Gemini to review the result"), "{first}");
         let second = await_plan(&mut app, &ctx);
-        assert!(second.contains("reported the request satisfied"), "{second}");
+        assert!(second.contains("says it matches your request"), "{second}");
         // The plan's create-then-style-then-move chain ran against the real id.
         let doc = fotodit_engine::inspect::document(app.session.active().unwrap());
         let layers = doc["layers"].as_array().expect("inspection lists layers");
@@ -1142,10 +1165,9 @@ mod tests {
         let ctx = egui::Context::default();
         submit_visual(&mut app, &ctx);
         let first = await_plan(&mut app, &ctx);
-        assert!(first.contains("request 2 of at most 3"), "{first}");
+        assert!(first.contains("Asking Gemini to review the result"), "{first}");
         let second = await_plan(&mut app, &ctx);
-        assert!(second.contains("reported the request satisfied"), "{second}");
-        assert!(second.contains("not independent proof"), "{second}");
+        assert!(second.contains("says it matches your request"), "{second}");
         assert_eq!(calls.load(Ordering::SeqCst), 2);
         let bodies = bodies.lock().unwrap();
         assert_eq!(bodies.len(), 2);
@@ -1167,7 +1189,7 @@ mod tests {
         let _ = await_plan(&mut app, &ctx); // plan applied, result check 1 dispatched
         let _ = await_plan(&mut app, &ctx); // verdict 1: corrective applied, result check 2 dispatched
         let final_msg = await_plan(&mut app, &ctx); // verdict 2: corrective applied, budget spent
-        assert!(final_msg.contains("result checks are used up"), "{final_msg}");
+        assert!(final_msg.contains("used the result reviews"), "{final_msg}");
         assert_eq!(calls.load(Ordering::SeqCst), 3);
         assert!(poll_plan(&mut app, &ctx).is_none(), "no fourth provider request");
     }
@@ -1181,11 +1203,11 @@ mod tests {
         app.ai_providers.editing_consent_mut().request("gemini");
         app.ai_providers.editing_consent_mut().confirm_identity([7; 32]);
         let initial = fotodit_ui_egui::panels::assistant::submit(&mut app, &ctx, "boost the colors");
-        assert!(initial.starts_with("Provider planning"), "{initial}");
+        assert!(initial.starts_with("Asking Gemini"), "{initial}");
         assert!(!initial.contains("image attached"), "{initial}");
         let msg = await_plan(&mut app, &ctx);
-        assert!(msg.contains("commands executed"), "{msg}");
-        assert!(msg.contains("not independently verified"), "{msg}");
+        assert!(msg.contains("the edit steps are complete"), "{msg}");
+        assert!(!msg.contains("verify the visual result"), "{msg}", "no blanket verification disclaimer in chat");
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         let bodies = bodies.lock().unwrap();
         assert_eq!(bodies.len(), 1);
@@ -1200,8 +1222,8 @@ mod tests {
         submit_visual(&mut app, &ctx);
         app.ai_providers.editing_consent_mut().set_visual(false);
         let msg = await_plan(&mut app, &ctx);
-        assert!(msg.contains("Image consent is no longer active"), "{msg}");
-        assert!(msg.contains("1 provider request(s) were made"), "{msg}");
+        assert!(msg.contains("Image permission was turned off"), "{msg}");
+        assert!(!msg.contains("provider request(s)"), "{msg}", "request counts move to the log");
         assert!(!msg.contains("used up"), "{msg}");
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         let bodies = bodies.lock().unwrap();
@@ -1216,15 +1238,15 @@ mod tests {
         let ctx = egui::Context::default();
         submit_visual(&mut app, &ctx);
         let first = await_plan(&mut app, &ctx);
-        assert!(first.contains("request 2 of at most 3"), "{first}");
+        assert!(first.contains("Asking Gemini to review the result"), "{first}");
         // Replace the document while the result check is in flight.
         app.session.execute("file.new", serde_json::json!({"width":16,"height":16})).unwrap();
         let msg = await_plan(&mut app, &ctx);
-        assert!(msg.contains("Result check discarded"), "{msg}");
-        assert!(msg.contains("Edits already applied remain"), "{msg}");
-        assert!(!msg.contains("No response was applied"), "{msg}");
+        assert!(msg.contains("Edit cancelled"), "{msg}");
+        assert!(msg.contains("changes already made stay"), "{msg}");
+        assert!(!msg.contains("Nothing from it will be applied"), "{msg}", "the applied-edits branch, not the nothing-applied one");
         assert!(msg.contains("may still finish"), "the in-flight send is disclosed: {msg}");
-        assert!(msg.contains("captured document image"), "the image the in-flight check carries is disclosed: {msg}");
+        assert!(msg.contains("captured image of the document"), "the image the in-flight check carries is disclosed: {msg}");
         assert!(msg.contains("no further requests will be made"), "{msg}");
         // The result-check request was dispatched (worker thread spawned) before the
         // discard was observed; the send itself may still be in flight. Wait for it
@@ -1253,9 +1275,9 @@ mod tests {
         submit_visual(&mut app, &ctx);
         app.session.execute("file.new", serde_json::json!({"width":16,"height":16})).unwrap();
         let msg = await_plan(&mut app, &ctx);
-        assert!(msg.contains("discarded because the document"), "{msg}");
+        assert!(msg.contains("cancelled because the document"), "{msg}");
         assert!(msg.contains("may still finish"), "the in-flight send is disclosed: {msg}");
-        assert!(msg.contains("captured document image"), "the image the in-flight plan carries is disclosed: {msg}");
+        assert!(msg.contains("captured image of the document"), "the image the in-flight plan carries is disclosed: {msg}");
         assert!(msg.contains("no further requests will be made"), "{msg}");
         // The plan request was dispatched (worker thread spawned at submit) before the
         // discard was observed; the send itself may still be in flight. Wait for it
