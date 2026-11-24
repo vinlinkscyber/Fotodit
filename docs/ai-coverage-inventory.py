@@ -181,6 +181,19 @@ out.append("| `image.detectFaces` | minScore 0..1, sampleAllLayers; detections c
 out.append("| `image.analysis.pixelDigest` | maxPixels 1..4000000; bounded statistical digest |")
 out.append("| `contract.describe` | 1..12 admitted command ids per round; answered locally from the command catalog, no engine path |")
 out.append("")
+out.append("## Open wiring work")
+out.append("")
+out.append("Recorded gaps the audit requires to be fixed, not accepted cuts:")
+out.append("")
+out.append("- `gradient.fill.get` (currently `excluded-readonly`): indexed stop edits via"
+           " `gradient.fill.stop` need the current gradient stops/state to be correct."
+           " Wire it as a structured observation (stops/state in the scene, or an"
+           " observation command) instead of leaving it inaccessible.")
+out.append("- Document resolution representation: `image.imageSize` refuses `units: \"pt\"`"
+           " and `keepPrintSize` because the scene carries no resolution. Represent"
+           " resolution in the scene, then admit these supported units instead of"
+           " permanently excluding them.")
+out.append("")
 out.append("## Excluded commands, by family and reason")
 out.append("")
 fam_groups = collections.defaultdict(list)

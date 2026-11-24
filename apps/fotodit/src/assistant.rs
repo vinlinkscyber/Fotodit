@@ -97,8 +97,9 @@ struct PendingGoal {
     /// The scene the planning worker planned against; a replanning round
     /// reuses it, bound to the same unchanged document snapshot.
     scene: fotodit_automation::ai::VisualScene,
-    /// True once the provider used its one observation round for this goal.
-    observed: bool,
+    /// Observation rounds this goal has used (bounded by
+    /// MAX_OBSERVATION_ROUNDS, the explicit request budget).
+    observed: usize,
 }
 
 /// Downscaled straight-alpha PNG render of the document composite for the
@@ -242,7 +243,7 @@ impl AssistantBackend for GuiAssistant {
             });
             self.pending = Some(PendingGoal { phase: PendingPhase::Planning, receiver, prompt: prompt.into(),
                 intent, applied: Vec::new(), document, document_id: document_id(app), binding, visual,
-                scene, observed: false });
+                scene, observed: 0 });
             Ok(if visual {
                 format!("Asking {} to plan the edit, with the document image attached. No edits applied yet.", provider_name(slot))
             } else {
@@ -308,8 +309,8 @@ impl AssistantBackend for GuiAssistant {
                 // on the UI thread through the admitted menu path, bound to
                 // the unchanged pre-plan snapshot (verified just above), then
                 // dispatch exactly one replanning request with the results.
-                if pending.observed {
-                    return Some(format!("{} asked for a second measurement round; only one is allowed per request. No edits were applied.", provider_name(slot)));
+                if pending.observed >= fotodit_automation::ai::MAX_OBSERVATION_ROUNDS {
+                    return Some(format!("{} asked for another measurement round after the budget of {} per request ran out. No edits were applied.", provider_name(slot), fotodit_automation::ai::MAX_OBSERVATION_ROUNDS));
                 }
                 let mut results = Vec::new();
                 {
@@ -370,7 +371,7 @@ impl AssistantBackend for GuiAssistant {
                     let _ = sender.send(result);
                     repaint.request_repaint();
                 });
-                pending.observed = true;
+                pending.observed += 1;
                 pending.receiver = receiver;
                 self.pending = Some(pending);
                 return Some(format!("{} asked for local measurements to plan with; measuring and sending the results. No edits applied yet.", provider_name(slot)));
