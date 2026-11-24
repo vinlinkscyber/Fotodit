@@ -1411,7 +1411,8 @@ fn selected_contract_prompt(intent: &EditingIntent, scene: &VisualScene, image: 
 /// read-only info commands (observations flow through the scene JSON, not
 /// plan steps - an explicit design choice to keep plans effect-only).
 const SELECTED_COMMANDS: &[&str] = &["file.new", "type.create", "type.edit", "type.setStyle",
-    "layer.newFillLayer.solidColor", "layer.newAdjustmentLayer.brightnessContrast",
+    "layer.newFillLayer.solidColor", "layer.newFillLayer.gradient",
+    "layer.newAdjustmentLayer.brightnessContrast",
     "layer.newAdjustmentLayer.vibrance", "layer.newAdjustmentLayer.hueSaturation",
     "layer.newAdjustmentLayer.levels", "layer.newAdjustmentLayer.colorBalance",
     "layer.newAdjustmentLayer.blackWhite", "layer.newAdjustmentLayer.photoFilter",
@@ -1450,7 +1451,7 @@ pub(crate) fn is_layer_creating(command: &str) -> bool {
         | "layer.newAdjustmentLayer.exposure" | "layer.newAdjustmentLayer.invert"
         | "layer.newAdjustmentLayer.posterize" | "layer.newAdjustmentLayer.threshold"
         | "layer.newAdjustmentLayer.gradientMap" | "layer.newAdjustmentLayer.channelMixer"
-        | "layer.newAdjustmentLayer.selectiveColor" | "layer.new.group")
+        | "layer.newAdjustmentLayer.selectiveColor" | "layer.new.group" | "layer.newFillLayer.gradient")
 }
 
 /// A plan step's reference to a layer: an existing scene layer id, or the
@@ -1535,6 +1536,10 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
                 "type.edit" => vec!["layer", "text"],
                 "type.setStyle" => vec!["layer", "size", "color"],
                 "layer.newFillLayer.solidColor" => vec!["color"],
+                // path is deliberately not a key: paths are not admitted yet,
+                // so a fill layer masked by a saved/work path is refused by
+                // the key filter.
+                "layer.newFillLayer.gradient" => vec!["from", "to", "angle", "style", "reverse", "stops", "transparency", "midpoints", "scale", "offset", "dither", "align"],
                 "layer.newAdjustmentLayer.brightnessContrast" => vec!["brightness", "contrast"],
                 "layer.newAdjustmentLayer.vibrance" => vec!["vibrance", "saturation"],
                 "layer.newAdjustmentLayer.hueSaturation" => vec!["hue", "saturation", "lightness"],
@@ -1967,6 +1972,10 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
             "select.deselect" => sel = false,
             // The engine drops the selection once it becomes a mask (Photoshop).
             "layer.layerMask.revealSelection" | "layer.layerMask.hideSelection" => sel = false,
+            // A new fill layer masks itself with the live selection and drops
+            // it (mask_new_layer sets doc.selection = None; the default layer
+            // panel option is masks on).
+            "layer.newFillLayer.solidColor" | "layer.newFillLayer.gradient" => sel = false,
             _ => {}
         }
         // layer.translate: an explicit whole-pixel offset, both axes required.
@@ -1978,6 +1987,50 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
                 Some("none" | "red" | "orange" | "yellow" | "green" | "seafoam" | "blue" | "indigo" | "magenta" | "fuchsia" | "violet" | "gray"))) { return Err(refuse()); }
             if map.get("mode").is_some_and(|v| !v.as_str().is_some_and(|s| !s.is_empty() && s.len() <= 32)) { return Err(refuse()); }
             if map.get("opacity").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (0.0..=100.0).contains(&x))) { return Err(refuse()); }
+        }
+        if step.command == "layer.newFillLayer.gradient" {
+            // Colors: #rrggbb/#rrggbbaa or [r,g,b,(a)] channels 0..1, as the
+            // engine's color_param takes them; stops also name foreground/
+            // background (params.rs color_param / gradient parse_color).
+            let gradient_color = |v: &Value| {
+                if let Some(s) = v.as_str() {
+                    if s == "foreground" || s == "background" { return true; }
+                    let h = s.strip_prefix('#').unwrap_or(s);
+                    return (h.len() == 6 || h.len() == 8) && h.as_bytes().iter().all(u8::is_ascii_hexdigit);
+                }
+                v.as_array().is_some_and(|a| (3..=4).contains(&a.len())
+                    && a.iter().all(|c| c.as_f64().is_some_and(|x| x.is_finite() && (0.0..=1.0).contains(&x))))
+            };
+            for key in ["from", "to"] {
+                if map.get(key).is_some_and(|v| !gradient_color(v)) { return Err(refuse()); }
+            }
+            if map.get("angle").is_some_and(|v| !v.as_f64().is_some_and(f64::is_finite)) { return Err(refuse()); }
+            if map.get("style").is_some_and(|v| !matches!(v.as_str(), Some("linear" | "radial" | "angle" | "reflected" | "diamond"))) { return Err(refuse()); }
+            for key in ["reverse", "dither", "align"] {
+                if map.get(key).is_some_and(|v| !v.is_boolean()) { return Err(refuse()); }
+            }
+            // Scale is a positive percentage clamped to the engine's
+            // SCALE_RANGE of 1%..1000%.
+            if map.get("scale").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (1.0..=1000.0).contains(&x))) { return Err(refuse()); }
+            if map.get("offset").is_some_and(|v| !v.as_array().is_some_and(|a| a.len() == 2
+                && a.iter().all(|c| c.as_f64().is_some_and(|x| x.is_finite() && x.abs() <= 1.0e5)))) { return Err(refuse()); }
+            // Stops are [location, color] pairs, 2..=1024 of them; locations
+            // are finite (the engine clamps them into 0..1).
+            let stops_len = map.get("stops").map(|v| v.as_array().map(|a| a.len()));
+            if let Some(v) = map.get("stops") {
+                if !v.as_array().is_some_and(|a| (2..=1024).contains(&a.len()) && a.iter().all(|s| s.as_array().is_some_and(|pair| pair.len() == 2
+                    && pair[0].as_f64().is_some_and(f64::is_finite) && gradient_color(&pair[1])))) { return Err(refuse()); }
+            }
+            if let Some(v) = map.get("transparency") {
+                if !v.as_array().is_some_and(|a| a.len() <= 1024 && a.iter().all(|s| s.as_array().is_some_and(|pair| pair.len() == 2
+                    && pair.iter().all(|c| c.as_f64().is_some_and(f64::is_finite))))) { return Err(refuse()); }
+            }
+            // Midpoints are finite numbers (clamped 0.05..0.95 by the engine),
+            // at most one per segment of the resulting gradient: the given
+            // stops, or the from/to pair.
+            let segments = stops_len.unwrap_or(None).unwrap_or(2).saturating_sub(1);
+            if map.get("midpoints").is_some_and(|v| !v.as_array().is_some_and(|a| a.len() <= segments
+                && a.iter().all(|m| m.as_f64().is_some_and(f64::is_finite)))) { return Err(refuse()); }
         }
         if step.command == "select.magicWand" {
             // The wand samples a canvas pixel, so the point must be inside it.
@@ -2303,6 +2356,36 @@ mod tests {
             plan.steps.push(PlanStep { command: command.into(), params, description: "fixture".into() });
         }
         assert!(validate_selected_plan(&plan, &contract_scene()).is_ok());
+    }
+
+    #[test]
+    fn selected_plan_admits_gradient_fills_within_contract() {
+        assert!(validate_selected_plan(&contract_plan("layer.newFillLayer.gradient",
+            json!({"from": "#ff8800", "to": "#220044", "angle": 45, "style": "radial", "scale": 150, "dither": true})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("layer.newFillLayer.gradient",
+            json!({"stops": [[0.0, "#000000"], [0.5, "foreground"], [1.0, [1.0, 1.0, 1.0]]], "midpoints": [0.5, 0.7], "transparency": [[0.0, 100.0], [1.0, 0.0]]})), &contract_scene()).is_ok());
+        // A created gradient fill feeds a later step by reference.
+        let mut plan = contract_plan("layer.newFillLayer.gradient", json!({"from": "#000000", "to": "#ffffff"}));
+        plan.steps.push(PlanStep { command: "layer.setProps".into(), params: json!({"layer": {"$step": 1}, "opacity": 0.5}), description: "fixture".into() });
+        assert!(validate_selected_plan(&plan, &contract_scene()).is_ok());
+        // A live selection becomes the fill layer's mask and is consumed.
+        let mut plan = contract_plan("select.subject", json!({}));
+        plan.steps.push(PlanStep { command: "layer.newFillLayer.gradient".into(), params: json!({"from": "#000000", "to": "#ffffff"}), description: "fixture".into() });
+        assert!(validate_selected_plan(&plan, &contract_scene()).is_ok());
+        plan.steps.push(PlanStep { command: "select.modify.smooth".into(), params: json!({"radius": 2}), description: "fixture".into() });
+        assert!(validate_selected_plan(&plan, &contract_scene()).is_err(), "the fill layer consumed the selection");
+    }
+
+    #[test]
+    fn selected_plan_refuses_gradient_fills_outside_contract() {
+        assert!(validate_selected_plan(&contract_plan("layer.newFillLayer.gradient", json!({"from": "orange"})), &contract_scene()).is_err());
+        assert!(validate_selected_plan(&contract_plan("layer.newFillLayer.gradient", json!({"style": "spiral"})), &contract_scene()).is_err());
+        assert!(validate_selected_plan(&contract_plan("layer.newFillLayer.gradient", json!({"scale": 0})), &contract_scene()).is_err());
+        assert!(validate_selected_plan(&contract_plan("layer.newFillLayer.gradient", json!({"stops": [[0.0, "#000000"]]})), &contract_scene()).is_err());
+        // Two stops make one segment: a second midpoint is refused.
+        assert!(validate_selected_plan(&contract_plan("layer.newFillLayer.gradient", json!({"from": "#000000", "to": "#ffffff", "midpoints": [0.5, 0.6]})), &contract_scene()).is_err());
+        // Paths are not admitted, so a path-masked fill layer is refused.
+        assert!(validate_selected_plan(&contract_plan("layer.newFillLayer.gradient", json!({"from": "#000000", "to": "#ffffff", "path": "work"})), &contract_scene()).is_err());
     }
 
     #[test]
