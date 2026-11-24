@@ -1138,9 +1138,9 @@ mod region_watch_tests {
 
     #[test]
     fn region_watch_skips_oversized_and_unknown_targets() {
-        let scene = scene(100, 100, &[(2, [10, 10, 20, 20])]);
+        let small = scene(100, 100, &[(2, [10, 10, 20, 20])]);
         // A plan whose layer is not in the scene has no known target region.
-        assert!(RegionWatch::new(&scene, &plan(&[("layer.fill.set", 99)])).target.is_none());
+        assert!(RegionWatch::new(&small, &plan(&[("layer.fill.set", 99)])).target.is_none());
         // A region over the evidence pixel budget is skipped, never sampled into a false proof.
         let huge = scene(9000, 9000, &[(2, [0, 0, 5000, 5000])]);
         let watch = RegionWatch::new(&huge, &plan(&[("layer.fill.set", 2)]));
