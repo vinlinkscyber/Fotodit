@@ -19,7 +19,7 @@
 //! synchronous shell state (tools, panels, view, workspace, window).
 
 use fotodit_automation::AutomationError;
-use fotodit_automation::ai::{AiContext, AiEngine, EditingIntent, EditingPlan, GoalRequest, GoalStop, IntentCategory, LiveEditSession, SemanticGoalRepair};
+use fotodit_automation::ai::{AiContext, AiEngine, EditingIntent, EditingPlan, GoalRequest, GoalStop, LiveEditSession, SemanticGoalRepair};
 use fotodit_ui_egui::{AssistantBackend, FotoditApp};
 
 /// Borrowed desktop editing destination: the app's live session through its admitted
@@ -51,12 +51,16 @@ pub struct GuiAssistant {
     planner_factory: Box<dyn Fn(&str) -> Result<(SelectedPlanner, [u8; 32]), String>>,
     identity: fn(&str) -> Result<[u8; 32], String>,
     pending: Option<PendingGoal>,
+    /// Cross-turn context for this assistant session: completed prompts and
+    /// plans, replayed into intent parsing and planning, and what bare
+    /// "do that again" requests resolve against. Session-only, never persisted.
+    context: AiContext,
 }
 
 impl GuiAssistant {
     /// Offline at startup. Only the in-app, session-only consent can enable a provider.
     pub fn new() -> Self {
-        Self { planner_factory: Box::new(provider_planner), identity: provider_identity, pending: None }
+        Self { planner_factory: Box::new(provider_planner), identity: provider_identity, pending: None, context: AiContext::new() }
     }
 
 }
@@ -126,13 +130,21 @@ impl AssistantBackend for GuiAssistant {
         if self.pending.is_some() { return Err("A provider request is already pending. Wait or cancel it first.".into()); }
         let binding = app.ai_providers.editing_consent().binding();
         if let Some(slot) = binding.0 {
-            // This bounded route is single-turn. Do not guess what an earlier request meant.
+            // Each Send is one bounded request; session context resolves bare
+            // replays locally instead of guessing what an earlier request meant.
             let lower = prompt.to_lowercase();
-            // Only bare conversational references are refused. Pronouns inside a full
-            // request (including the user's taxi-poster wording) are ordinary language.
-            if matches!(lower.trim().trim_end_matches(['.', '!', '?']), "do that again" | "same as previous" | "again" | "same" | "do it" | "do that") {
-                return Err("I handle one provider edit at a time and don't carry earlier chat into it. Restate the full edit and name the target - nothing was sent.".into());
-            }
+            // Bare conversational replays resolve against this session's own
+            // context: the last completed prompt becomes the actual request.
+            // Pronouns inside a full request (including the user's taxi-poster
+            // wording) are ordinary language. With no completed turn yet there
+            // is nothing to replay.
+            let resolved;
+            let prompt = if matches!(lower.trim().trim_end_matches(['.', '!', '?']), "do that again" | "same as previous" | "again" | "same" | "do it" | "do that") {
+                match self.context.prompt_history.last() {
+                    Some(previous) => { resolved = previous.clone(); resolved.as_str() }
+                    None => return Err("There's nothing earlier in this session to repeat. State the full edit and name the target - nothing was sent.".into()),
+                }
+            } else { prompt };
             let document = app.session.active().map(fotodit_engine::inspect::document);
             let mut scene = document.as_ref().map(|doc| fotodit_automation::ai::PerceptionEngine::new().perceive(doc)).unwrap_or_default();
             if document.is_some() {
@@ -150,10 +162,11 @@ impl AssistantBackend for GuiAssistant {
                     }
                 }
             }
-            let intent = fotodit_automation::ai::NaturalLanguageEngine::new().parse_intent(prompt, &scene, &AiContext::new()).map_err(|e| e.to_string())?;
-            if document.is_none() && intent.category != IntentCategory::GraphicDesign {
-                return Err("Open a document before editing, or make an explicit poster/banner creation request. Nothing was sent.".into());
-            }
+            let intent = fotodit_automation::ai::NaturalLanguageEngine::new().parse_intent(prompt, &scene, &self.context).map_err(|e| e.to_string())?;
+            // With no document open there is no per-category gate: the provider
+            // contract itself admits only plans whose first step is file.new on
+            // an empty scene, so a non-creation plan is refused at validation
+            // with nothing applied, whatever category the intent parsed to.
             let current_identity = match (self.identity)(slot) {
                 Ok(identity) => identity,
                 Err(error) => { app.ai_providers.editing_consent_mut().disable(); return Err(error); }
@@ -182,8 +195,11 @@ impl AssistantBackend for GuiAssistant {
             let (sender, receiver) = std::sync::mpsc::channel();
             let repaint = ctx.clone();
             let worker_intent = intent.clone();
+            // The worker gets a snapshot of the session context as of dispatch;
+            // turns completing while it runs record into the panel's own copy.
+            let worker_context = self.context.clone();
             std::thread::spawn(move || {
-                let result = planner.plan_visual(&worker_intent, &scene, &AiContext::new(), image.as_deref())
+                let result = planner.plan_visual(&worker_intent, &scene, &worker_context, image.as_deref())
                     .map(WorkerResult::Plan).map_err(|e| e.to_string());
                 let _ = sender.send(result);
                 repaint.request_repaint();
@@ -268,7 +284,10 @@ impl AssistantBackend for GuiAssistant {
             let engine = AiEngine::with_planner(Box::new(FixedPlan(plan)));
             let mut session = GuiSession { app, ctx };
             let request = GoalRequest { max_attempts: 2, ..GoalRequest::new(&pending.prompt) };
-            engine.process_goal_in(&mut session, &request, &mut AiContext::new(), &SemanticGoalRepair::new())
+            // The session context persists across turns: the goal session
+            // records each completed prompt+plan into it, which is what later
+            // bare replays and pronoun references resolve against.
+            engine.process_goal_in(&mut session, &request, &mut self.context, &SemanticGoalRepair::new())
         };
         // Record every attempt that actually executed, including a repair attempt,
         // so the result review lists what was truly applied.
@@ -510,17 +529,54 @@ mod tests {
     }
 
     #[test]
-    fn provider_no_document_or_ambiguous_followup_refuses_before_network() {
+    fn bare_replay_without_history_refuses_before_network() {
         use std::sync::atomic::Ordering;
-        for prompt in ["enhance image quality", "do that again", "make it blue", "same as previous"] {
+        for prompt in ["do that again", "same as previous"] {
             let (mut app, calls, loads) = chat_fixture(false);
             app.ai_providers.editing_consent_mut().request("gemini");
             app.ai_providers.editing_consent_mut().confirm_identity([7; 32]);
             let reply = fotodit_ui_egui::panels::assistant::submit(&mut app, &egui::Context::default(), prompt);
-            assert!(reply.contains("Nothing was sent") || reply.contains("nothing was sent"), "{reply}");
+            assert!(reply.contains("nothing was sent"), "{reply}");
             assert_eq!(calls.load(Ordering::SeqCst), 0);
             assert_eq!(loads.load(Ordering::SeqCst), 0);
         }
+    }
+
+    #[test]
+    fn no_document_non_creation_request_reaches_provider_and_creates() {
+        use std::sync::atomic::Ordering;
+        // The per-category gate is gone: with no document open the provider
+        // contract itself admits only file.new-first plans, so any request may
+        // be sent and a creation-shaped plan applies.
+        let (mut app, calls, _) = chat_fixture(false);
+        let ctx = egui::Context::default();
+        app.ai_providers.editing_consent_mut().request("gemini");
+        app.ai_providers.editing_consent_mut().confirm_identity([7; 32]);
+        let initial = fotodit_ui_egui::panels::assistant::submit(&mut app, &ctx, "make it blue, chndrax");
+        assert!(initial.starts_with("Asking Gemini"), "{initial}");
+        let _ = await_plan(&mut app, &ctx);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let doc = fotodit_engine::inspect::document(app.session.active().unwrap());
+        assert_eq!(doc["width"], 240);
+    }
+
+    #[test]
+    fn bare_replay_resolves_against_completed_turn() {
+        use std::sync::atomic::Ordering;
+        let (mut app, calls, _) = chat_fixture(false);
+        let ctx = egui::Context::default();
+        app.ai_providers.editing_consent_mut().request("gemini");
+        app.ai_providers.editing_consent_mut().confirm_identity([7; 32]);
+        let initial = fotodit_ui_egui::panels::assistant::submit(&mut app, &ctx, "create a poster called chndrax");
+        assert!(initial.starts_with("Asking Gemini"), "{initial}");
+        let _ = await_plan(&mut app, &ctx);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        // A bare replay resolves to the last completed prompt and reaches the
+        // provider again with that wording (the fixture asserts it verbatim).
+        let replay = fotodit_ui_egui::panels::assistant::submit(&mut app, &ctx, "do that again");
+        assert!(replay.starts_with("Asking Gemini"), "{replay}");
+        let _ = await_plan(&mut app, &ctx);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
     #[test]

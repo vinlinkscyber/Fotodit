@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 use serde_json::{Value, json};
 
 use super::{AiContext, AiEngine, AiError, EditingIntent, EditingPlan, EvaluationReport,
-    ExecutionEngine, ExecutionEvidence, ExecutionResult, IntentCategory, LiveEditSession,
+    ExecutionEngine, ExecutionEvidence, ExecutionResult, LiveEditSession,
     PlanStep, VisualScene};
 use crate::AutomationError;
 
@@ -157,9 +157,12 @@ impl AiEngine {
             Err(error) => return outcome.stop(GoalStop::PlanningFailed, error.to_string()),
         };
         outcome.original_intent = Some(intent.clone());
-        if document.is_none() && intent.category != IntentCategory::GraphicDesign {
-            return outcome.stop(GoalStop::NeedsInput, AiError::NoDocumentOpen.to_string());
-        }
+        // No per-category gate with no document open: the creation path below
+        // (a planner-led or auto-inserted file.new first step, with the
+        // transactional guard keyed on allow_creation) is what makes a plan
+        // legal on an empty session, whatever category the intent parsed to.
+        // The GUI provider contract enforces the same file.new-first shape
+        // before a plan ever reaches this point.
         let mut host = GoalHost { inner: session, anchor: RefCell::new(anchor),
             poison: RefCell::new(None), calls: Vec::new(), allow_creation: document.is_none() };
         let mut fingerprints = BTreeSet::new();

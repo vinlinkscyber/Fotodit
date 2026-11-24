@@ -107,10 +107,14 @@ impl AiContext {
         Self::default()
     }
 
-    /// Record a completed prompt and plan.
+    /// Record a completed prompt and plan. History is bounded to the most
+    /// recent `MAX_HISTORY` turns so long sessions stay within prompt budget.
     pub fn record_interaction(&mut self, prompt: String, plan: EditingPlan) {
+        const MAX_HISTORY: usize = 16;
         self.prompt_history.push(prompt);
         self.executed_plans.push(plan);
+        if self.prompt_history.len() > MAX_HISTORY { self.prompt_history.remove(0); }
+        if self.executed_plans.len() > MAX_HISTORY { self.executed_plans.remove(0); }
     }
 }
 

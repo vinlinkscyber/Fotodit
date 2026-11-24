@@ -1257,18 +1257,29 @@ fn selected_contract_prompt(intent: &EditingIntent, scene: &VisualScene, image: 
 /// - Type, fill and every reviewed adjustment layer kind. `colorLookup` stays
 ///   out: it consumes external LUT file/data content, which this contract
 ///   does not carry.
-/// - Layer structure: setProps, moveTo, duplicate, delete. mergeDown/
-///   mergeGroup/flattenImage/groupLayers and clipping-mask toggles stay out
-///   pending review of their multi-layer effects (open work, not a final cut).
+/// - Layer structure: setProps, moveTo, duplicate, delete, the four arrange
+///   steps and the clipping-mask toggles (both require an explicit layer).
+/// - Selection: all/deselect/inverse and rect/ellipse geometry selections,
+///   which also feed selection-masked adjustments and filters.
+/// - Layer masks: reveal/hide all, reveal/hide selection, fromTransparency,
+///   delete and apply. Mask state is tracked through the plan so delete/apply
+///   only target layers that actually carry a mask.
 /// - Destructive `image.adjustments.*` variants stay out: the contract works
 ///   through non-destructive adjustment layers.
 /// - Filters are not listed here: every filter in the engine's core validated
 ///   table (fotodit_engine::filters::FILTER_FIELDS) is admitted directly from
 ///   the engine's own rules, so engine additions arrive without a second
-///   table to drift. Extended/gallery filters, `filter.lastFilter` (UI-state
-///   replay), selection/mask/shape/path commands and asset/preset commands
-///   remain open coverage work; selection and mask operations in particular
-///   are reversible and should be reviewed next.
+///   table to drift.
+/// Open coverage work, not accepted final cuts: mergeDown/mergeGroup/
+/// flattenImage/groupLayers and layer.new.group/translate (multi-layer and
+/// grouping semantics), gradient fill layers (stops schema plus the engine's
+/// selection-to-mask default), geometry selections beyond rect/ellipse
+/// (lasso/wand/colorRange - tolerance semantics and engine detectors),
+/// shape.create/edit and path/vector-mask commands (path geometry),
+/// type.setStyle widening to the native font keys and caret/insertText ops,
+/// asset/preset imports and exports (filesystem/external-content boundary),
+/// read-only info commands (observations flow through the scene JSON, not
+/// plan steps - an explicit design choice to keep plans effect-only).
 const SELECTED_COMMANDS: &[&str] = &["file.new", "type.create", "type.edit", "type.setStyle",
     "layer.newFillLayer.solidColor", "layer.newAdjustmentLayer.brightnessContrast",
     "layer.newAdjustmentLayer.vibrance", "layer.newAdjustmentLayer.hueSaturation",
@@ -1279,6 +1290,13 @@ const SELECTED_COMMANDS: &[&str] = &["file.new", "type.create", "type.edit", "ty
     "layer.newAdjustmentLayer.threshold", "layer.newAdjustmentLayer.gradientMap",
     "layer.newAdjustmentLayer.channelMixer", "layer.newAdjustmentLayer.selectiveColor",
     "layer.setProps", "layer.moveTo", "layer.duplicate", "layer.delete",
+    "layer.arrange.bringForward", "layer.arrange.bringToFront",
+    "layer.arrange.sendBackward", "layer.arrange.sendToBack",
+    "layer.createClippingMask", "layer.releaseClippingMask",
+    "layer.layerMask.revealAll", "layer.layerMask.hideAll",
+    "layer.layerMask.revealSelection", "layer.layerMask.hideSelection",
+    "layer.layerMask.fromTransparency", "layer.layerMask.delete", "layer.layerMask.apply",
+    "select.all", "select.deselect", "select.inverse", "select.rect",
     "edit.transform", "layer.removeBackground"];
 
 /// Layer-creating commands whose output a later step of the same plan can
@@ -1351,6 +1369,15 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
     // only backward, only to a layer-creating step, and never to a hidden one.
     let mut created: Vec<(usize, CreatedKind)> = Vec::new();
     let mut hidden_created: Vec<usize> = Vec::new();
+    // Layers carrying a mask at plan start, plus mask-state changes made by
+    // this plan's steps (mirrors `hidden`): delete/apply only target a layer
+    // that actually carries a mask.
+    let mut masked: Vec<u64> = scene.layers.iter().filter(|l| l.has_mask).map(|l| l.id).collect();
+    let mut masked_created: Vec<usize> = Vec::new();
+    // Live pixel selection, starting from the pre-plan scene; selection steps
+    // update it so selection-dependent steps validate against the state they
+    // would actually meet.
+    let mut sel = scene.has_selection;
     // Resolves a reference for scene checks: visibility and kind of the
     // referred layer, whether existing or plan-created. Backward-only
     // references make cyclic plans impossible by construction.
@@ -1389,15 +1416,25 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
                 "layer.setProps" => vec!["layer", "opacity", "fill", "blend", "visible"],
                 "layer.moveTo" => vec!["layer", "target", "position"],
                 "layer.duplicate" | "layer.delete" => vec!["layer"],
+                "layer.arrange.bringForward" | "layer.arrange.bringToFront"
+                | "layer.arrange.sendBackward" | "layer.arrange.sendToBack"
+                | "layer.createClippingMask" | "layer.releaseClippingMask"
+                | "layer.layerMask.revealAll" | "layer.layerMask.hideAll"
+                | "layer.layerMask.revealSelection" | "layer.layerMask.hideSelection"
+                | "layer.layerMask.fromTransparency" | "layer.layerMask.delete" | "layer.layerMask.apply" => vec!["layer"],
+                "select.all" | "select.deselect" | "select.inverse" => vec![],
+                "select.rect" => vec!["x", "y", "width", "height", "mode", "ellipse", "line", "antiAlias", "feather"],
                 "edit.transform" => vec!["layer", "dx", "dy", "scaleX", "scaleY", "rotate", "reference", "interpolation"],
                 "layer.removeBackground" => vec!["layer", "sampleAllLayers", "refine"],
                 _ => return Err(refuse()),
             },
         };
         if map.keys().any(|k| !allowed.contains(&k.as_str())) { return Err(refuse()); }
-        // Paramless filters and invert take no keys; every other command
-        // needs at least one parameter.
-        let paramless = filter.is_some_and(|rules| rules.is_empty()) || step.command == "layer.newAdjustmentLayer.invert";
+        // Paramless filters, invert and the three selection-state commands
+        // take no keys; every other command needs at least one parameter.
+        let paramless = filter.is_some_and(|rules| rules.is_empty())
+            || step.command == "layer.newAdjustmentLayer.invert"
+            || matches!(step.command.as_str(), "select.all" | "select.deselect" | "select.inverse");
         if map.is_empty() && !paramless { return Err(refuse()); }
         if let Some(rules) = filter {
             for (key, value) in map {
@@ -1652,6 +1689,77 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
                     hidden_created.push(n);
                 }
             }
+        }
+        // Single-target structural commands (arrange, clipping, masks): the
+        // layer must exist and be visible, same rule as setProps/duplicate,
+        // with mask state tracked through the plan.
+        if matches!(step.command.as_str(), "layer.arrange.bringForward" | "layer.arrange.bringToFront"
+            | "layer.arrange.sendBackward" | "layer.arrange.sendToBack"
+            | "layer.createClippingMask" | "layer.releaseClippingMask"
+            | "layer.layerMask.revealAll" | "layer.layerMask.hideAll"
+            | "layer.layerMask.revealSelection" | "layer.layerMask.hideSelection"
+            | "layer.layerMask.fromTransparency" | "layer.layerMask.delete" | "layer.layerMask.apply")
+        {
+            match layer_ref(map.get("layer")).ok_or_else(refuse)? {
+                LayerRef::Existing(id) => {
+                    if hidden.contains(&id)
+                        || !scene.layers.iter().any(|l| l.id == id && l.is_visible) { return Err(refuse()); }
+                    if step.command == "layer.layerMask.fromTransparency"
+                        && !scene.layers.iter().any(|l| l.id == id && matches!(l.kind.as_str(), "Pixel" | "Raster")) { return Err(refuse()); }
+                    match step.command.as_str() {
+                        "layer.layerMask.revealAll" | "layer.layerMask.hideAll"
+                        | "layer.layerMask.revealSelection" | "layer.layerMask.hideSelection"
+                        | "layer.layerMask.fromTransparency" => {
+                            if !masked.contains(&id) { masked.push(id); }
+                        }
+                        "layer.layerMask.delete" | "layer.layerMask.apply" => {
+                            if !masked.contains(&id) { return Err(refuse()); }
+                            masked.retain(|&m| m != id);
+                        }
+                        _ => {}
+                    }
+                }
+                LayerRef::Created(n) => {
+                    if n >= pos || hidden_created.contains(&n)
+                        || created_at(&created, n).is_none() { return Err(refuse()); }
+                    match step.command.as_str() {
+                        "layer.layerMask.revealAll" | "layer.layerMask.hideAll"
+                        | "layer.layerMask.revealSelection" | "layer.layerMask.hideSelection" => {
+                            if !masked_created.contains(&n) { masked_created.push(n); }
+                        }
+                        "layer.layerMask.fromTransparency" => {
+                            // Only pixel content has transparency to derive a mask from.
+                            if created_at(&created, n) != Some(CreatedKind::Pixel) { return Err(refuse()); }
+                            if !masked_created.contains(&n) { masked_created.push(n); }
+                        }
+                        "layer.layerMask.delete" | "layer.layerMask.apply" => {
+                            if !masked_created.contains(&n) { return Err(refuse()); }
+                            masked_created.retain(|&m| m != n);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        // Selection-dependent steps: inverse and selection masks need a live
+        // selection at the point they run.
+        if step.command == "select.inverse" && !sel { return Err(refuse()); }
+        if matches!(step.command.as_str(), "layer.layerMask.revealSelection" | "layer.layerMask.hideSelection") && !sel { return Err(refuse()); }
+        match step.command.as_str() {
+            "select.all" | "select.rect" => sel = true,
+            "select.deselect" => sel = false,
+            // The engine drops the selection once it becomes a mask (Photoshop).
+            "layer.layerMask.revealSelection" | "layer.layerMask.hideSelection" => sel = false,
+            _ => {}
+        }
+        if step.command == "select.rect" {
+            if map.get("x").and_then(Value::as_i64).is_none() || map.get("y").and_then(Value::as_i64).is_none()
+                || !map.get("width").and_then(Value::as_u64).is_some_and(|v| v >= 1)
+                || !map.get("height").and_then(Value::as_u64).is_some_and(|v| v >= 1) { return Err(refuse()); }
+            if map.get("mode").is_some_and(|v| !matches!(v.as_str(), Some("replace" | "add" | "subtract" | "intersect"))) { return Err(refuse()); }
+            if map.get("line").is_some_and(|v| !matches!(v.as_str(), Some("row" | "column"))) { return Err(refuse()); }
+            if map.get("ellipse").is_some_and(|v| !v.is_boolean()) || map.get("antiAlias").is_some_and(|v| !v.is_boolean()) { return Err(refuse()); }
+            if map.get("feather").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (0.0..=1000.0).contains(&x))) { return Err(refuse()); }
         }
         for key in ["x", "y", "amount", "threshold"] {
             if map.get(key).is_some_and(|v| v.as_i64().is_none()) { return Err(refuse()); }
@@ -2705,5 +2813,56 @@ mod tests {
             let (bridge, _bodies) = visual_bridge(response.to_string());
             assert!(bridge.verify_visual(ProviderId::Gemini, "goal", &[], &visual_intent(), &contract_scene(), &[1, 2, 3, 4]).is_err());
         }
+    }
+
+    #[test]
+    fn selected_plan_admits_selection_arrange_clipping_and_masks() {
+        // Full happy path: select a region, mask the photo from it, arrange
+        // the created type layer, clip the photo, then bake the mask.
+        let mut plan = contract_plan("select.rect", json!({"x":10,"y":20,"width":100,"height":50,"mode":"replace","feather":2}));
+        plan.steps.extend(contract_plan("layer.layerMask.revealSelection", json!({"layer": 7})).steps);
+        plan.steps.extend(contract_plan("select.deselect", json!({})).steps);
+        plan.steps.extend(contract_plan("type.create", json!({"x":4,"y":16,"text":"Hi","size":24})).steps);
+        plan.steps.extend(contract_plan("layer.arrange.bringToFront", json!({"layer": {"$step": 4}})).steps);
+        plan.steps.extend(contract_plan("layer.createClippingMask", json!({"layer": 7})).steps);
+        plan.steps.extend(contract_plan("layer.layerMask.apply", json!({"layer": 7})).steps);
+        assert!(validate_selected_plan(&plan, &contract_scene()).is_ok());
+        // Paramless selection commands, and inverse with a live selection.
+        assert!(validate_selected_plan(&contract_plan("select.all", json!({})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("select.deselect", json!({})), &contract_scene()).is_ok());
+        let mut sel_scene = contract_scene();
+        sel_scene.has_selection = true;
+        assert!(validate_selected_plan(&contract_plan("select.inverse", json!({})), &sel_scene).is_ok());
+        // Mask delete on a scene layer that already carries a mask.
+        let mut masked_scene = contract_scene();
+        masked_scene.layers[0].has_mask = true;
+        assert!(validate_selected_plan(&contract_plan("layer.layerMask.delete", json!({"layer": 7})), &masked_scene).is_ok());
+    }
+
+    #[test]
+    fn selected_plan_refuses_invalid_selection_mask_and_arrange_steps() {
+        let scene = contract_scene();
+        // select.inverse without any live selection.
+        assert!(validate_selected_plan(&contract_plan("select.inverse", json!({})), &scene).is_err());
+        // Selection-mask ops without a live selection.
+        assert!(validate_selected_plan(&contract_plan("layer.layerMask.revealSelection", json!({"layer": 7})), &scene).is_err());
+        // rect without geometry, degenerate size, bad mode, bad feather.
+        assert!(validate_selected_plan(&contract_plan("select.rect", json!({"x":0,"y":0})), &scene).is_err());
+        assert!(validate_selected_plan(&contract_plan("select.rect", json!({"x":0,"y":0,"width":0,"height":10})), &scene).is_err());
+        assert!(validate_selected_plan(&contract_plan("select.rect", json!({"x":0,"y":0,"width":10,"height":10,"mode":"xor"})), &scene).is_err());
+        assert!(validate_selected_plan(&contract_plan("select.rect", json!({"x":0,"y":0,"width":10,"height":10,"feather":1500})), &scene).is_err());
+        // apply/delete without a mask anywhere in plan or scene.
+        assert!(validate_selected_plan(&contract_plan("layer.layerMask.apply", json!({"layer": 7})), &scene).is_err());
+        // arrange against a layer deleted earlier in the same plan.
+        let mut plan = contract_plan("layer.delete", json!({"layer": 7}));
+        plan.steps.extend(contract_plan("layer.arrange.bringForward", json!({"layer": 7})).steps);
+        assert!(validate_selected_plan(&plan, &scene).is_err());
+        // fromTransparency on a type layer (no pixel transparency).
+        assert!(validate_selected_plan(&contract_plan("layer.layerMask.fromTransparency", json!({"layer": 9})), &scene).is_err());
+        // A second selection-mask op after the engine consumed the selection.
+        let mut plan = contract_plan("select.all", json!({}));
+        plan.steps.extend(contract_plan("layer.layerMask.revealSelection", json!({"layer": 7})).steps);
+        plan.steps.extend(contract_plan("layer.layerMask.hideSelection", json!({"layer": 7})).steps);
+        assert!(validate_selected_plan(&plan, &scene).is_err());
     }
 }
