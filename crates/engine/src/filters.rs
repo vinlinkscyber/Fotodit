@@ -15,6 +15,9 @@ use crate::{EngineError, Result, Session};
 
 mod validation;
 pub(crate) use validation::validate_params;
+// The core filter parameter contract, public so AI/tooling surfaces mirror the
+// engine's own validation table instead of maintaining a second copy.
+pub use validation::{FILTER_FIELDS, Rule as FilterParamRule, fields as filter_fields};
 
 fn f(p: &Value, k: &str, d: f32) -> f32 {
     p.get(k).and_then(Value::as_f64).map_or(d, |v| v as f32)

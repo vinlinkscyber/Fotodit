@@ -337,6 +337,7 @@ mod tests {
             is_visible: true,
             has_mask: true,
             confidence: 1.0,
+            ..Default::default()
         });
 
         let execution = ExecutionResult {
@@ -379,6 +380,7 @@ mod tests {
             is_visible: true,
             has_mask: false,
             confidence: 1.0,
+            ..Default::default()
         }
     }
 

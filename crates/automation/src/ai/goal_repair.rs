@@ -287,6 +287,7 @@ mod tests {
             is_visible: true,
             has_mask: false,
             confidence: 1.0,
+            ..Default::default()
         }
     }
 
@@ -301,6 +302,7 @@ mod tests {
             is_visible: true,
             has_mask: false,
             confidence: 1.0,
+            ..Default::default()
         }
     }
 
@@ -318,6 +320,7 @@ mod tests {
             whitespace_margins: [0, 0, 0, 0],
             has_selection: false,
             selection_bounds: None,
+            ..Default::default()
         }
     }
 

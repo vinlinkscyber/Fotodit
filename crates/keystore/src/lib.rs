@@ -125,6 +125,10 @@ struct FileData {
     /// Slots where the user chose to use the environment variable / `.env` file instead of a saved key.
     #[serde(default)]
     external: BTreeSet<String>,
+    /// The provider the user enabled for AI editing. Persisted so a saved key keeps working across
+    /// restarts without re-enabling; cleared when that provider's key is removed or its choice reset.
+    #[serde(default)]
+    editing: Option<String>,
 }
 
 /// Where a provider's credential comes from, as the user chose it.
@@ -184,14 +188,14 @@ impl<S: Sealer> KeyStore<S> {
                 Ok(data)
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                Ok(FileData { version: FILE_VERSION, sealer: self.sealer.name().to_string(), entries: BTreeMap::new(), disabled: BTreeSet::new(), external: BTreeSet::new() })
+                Ok(FileData { version: FILE_VERSION, sealer: self.sealer.name().to_string(), entries: BTreeMap::new(), disabled: BTreeSet::new(), external: BTreeSet::new(), editing: None })
             }
             Err(e) => Err(KeyStoreError::Io(e.to_string())),
         }
     }
 
     fn write(&self, data: &FileData) -> Result<(), KeyStoreError> {
-        if data.entries.is_empty() && data.disabled.is_empty() && data.external.is_empty() {
+        if data.entries.is_empty() && data.disabled.is_empty() && data.external.is_empty() && data.editing.is_none() {
             return match std::fs::remove_file(&self.path) {
                 Ok(()) => Ok(()),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -247,6 +251,9 @@ impl<S: Sealer> KeyStore<S> {
         data.entries.remove(slot);
         data.disabled.insert(slot.to_string());
         data.external.remove(slot);
+        if data.editing.as_deref() == Some(slot) {
+            data.editing = None;
+        }
         self.write(&data)
     }
 
@@ -255,7 +262,8 @@ impl<S: Sealer> KeyStore<S> {
     pub fn reset(&self, slot: &str) -> Result<(), KeyStoreError> {
         let mut data = self.read()?;
         let changed = data.entries.remove(slot).is_some() | data.disabled.remove(slot) | data.external.remove(slot);
-        if changed {
+        let cleared_editing = data.editing.as_deref() == Some(slot) && data.editing.take().is_some();
+        if changed || cleared_editing {
             self.write(&data)?;
         }
         Ok(())
@@ -288,6 +296,32 @@ impl<S: Sealer> KeyStore<S> {
         } else {
             Source::Unconfigured
         })
+    }
+
+    /// The provider slot the user enabled for AI editing, if any.
+    pub fn editing(&self) -> Result<Option<String>, KeyStoreError> {
+        let data = self.read()?;
+        Ok(data.editing.filter(|slot| valid_slot(slot)))
+    }
+
+    /// Remembers `slot` as the provider enabled for AI editing. Survives restarts; no request is
+    /// sent by recording the choice.
+    pub fn set_editing(&self, slot: &str) -> Result<(), KeyStoreError> {
+        if !valid_slot(slot) {
+            return Err(KeyStoreError::InvalidSecret("unknown provider slot"));
+        }
+        let mut data = self.read()?;
+        data.editing = Some(slot.to_string());
+        self.write(&data)
+    }
+
+    /// Forgets the editing-enabled provider (the key itself is untouched).
+    pub fn clear_editing(&self) -> Result<(), KeyStoreError> {
+        let mut data = self.read()?;
+        if data.editing.take().is_some() {
+            self.write(&data)?;
+        }
+        Ok(())
     }
 
     /// The saved key, for the in-process code that calls the provider. `Ok(None)` when none is saved.
@@ -378,6 +412,54 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("keys.json");
         (KeyStore::new(&path, MockSealer), dir)
+    }
+
+    #[test]
+    fn editing_choice_persists_and_follows_key_removal() {
+        let (s, dir) = store("editing");
+        assert_eq!(s.editing().unwrap(), None);
+        s.set("gemini", "k1").unwrap();
+        s.set_editing("gemini").unwrap();
+        assert_eq!(s.editing().unwrap().as_deref(), Some("gemini"));
+        // A reopened store over the same file still sees the choice (restart persistence).
+        let reopened = KeyStore::new(dir.join("keys.json"), MockSealer);
+        assert_eq!(reopened.editing().unwrap().as_deref(), Some("gemini"));
+        // Changing or resetting a different provider keeps this provider selected.
+        reopened.set("cohere", "other").unwrap();
+        reopened.reset("cohere").unwrap();
+        assert_eq!(reopened.editing().unwrap().as_deref(), Some("gemini"));
+        // Removing the enabled provider's key clears the choice with it.
+        reopened.remove("gemini").unwrap();
+        assert_eq!(reopened.editing().unwrap(), None);
+        // Resetting the provider's choice clears it too.
+        reopened.set("cohere", "k2").unwrap();
+        reopened.set_editing("cohere").unwrap();
+        reopened.reset("cohere").unwrap();
+        assert_eq!(reopened.editing().unwrap(), None);
+        // clear_editing forgets the choice but keeps the key.
+        reopened.set("lajiwa", "k3").unwrap();
+        reopened.set_editing("lajiwa").unwrap();
+        reopened.clear_editing().unwrap();
+        assert_eq!(reopened.editing().unwrap(), None);
+        assert_eq!(reopened.source("lajiwa").unwrap(), Source::Saved);
+        // Enabling one provider replaces the previous one, and bad slots are refused.
+        reopened.set_editing("gemini").unwrap();
+        assert_eq!(reopened.editing().unwrap().as_deref(), Some("gemini"));
+        assert!(reopened.set_editing("bogus slot!").is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn older_store_without_editing_choice_still_loads() {
+        let (s, dir) = store("editing-legacy");
+        s.set("gemini", "k1").unwrap();
+        let mut data: serde_json::Value = serde_json::from_slice(&std::fs::read(s.path()).unwrap()).unwrap();
+        data.as_object_mut().unwrap().remove("editing");
+        std::fs::write(s.path(), serde_json::to_vec(&data).unwrap()).unwrap();
+        assert_eq!(s.editing().unwrap(), None);
+        assert_eq!(s.source("gemini").unwrap(), Source::Saved);
+        assert_eq!(s.get("gemini").unwrap().unwrap().expose(), "k1");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

@@ -4,8 +4,11 @@ use serde_json::Value;
 
 use crate::{EngineError, Result};
 
-#[derive(Clone, Copy)]
-enum Rule {
+/// One parameter rule of a core filter's public dialog-unit contract. Public so
+/// AI/tooling surfaces can mirror the engine's own validation instead of
+/// maintaining a second hand-written copy that drifts.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Rule {
     Number(f64, f64),
     Unsigned(u64),
     Choice(&'static str),
@@ -13,7 +16,8 @@ enum Rule {
 }
 
 impl Rule {
-    fn accepts(self, value: &Value) -> bool {
+    /// Whether one JSON value satisfies this rule.
+    pub fn accepts(self, value: &Value) -> bool {
         match self {
             Self::Number(min, max) => value.as_f64().is_some_and(|n| n.is_finite() && (min..=max).contains(&n)),
             Self::Unsigned(max) => value.as_u64().is_some_and(|n| n <= max),
@@ -34,76 +38,85 @@ impl Rule {
 }
 
 // The bounds and choices are the filters' public dialog-unit contract. Defaults remain in
-// params_for; gallery filters are checked in gallery_cmds.
-fn fields(id: &str) -> Option<&'static [(&'static str, Rule)]> {
-    use Rule::{Bool, Choice, Number, Unsigned};
-    Some(match id {
-        "filter.blur.gaussianBlur" | "filter.other.highPass" => &[("radius", Number(0.1, 1000.0))],
-        "filter.blur.boxBlur" => &[("radius", Number(1.0, 2000.0))],
-        "filter.blur.motionBlur" => &[("angle", Number(-360.0, 360.0)), ("distance", Number(1.0, 2000.0))],
-        "filter.blur.radialBlur" => &[
-            ("amount", Number(1.0, 100.0)),
-            ("method", Choice("spin|zoom")),
-            ("quality", Choice("draft|good|best")),
-            ("centerX", Number(0.0, 1.0)),
-            ("centerY", Number(0.0, 1.0)),
-        ],
-        "filter.blur.smartBlur" => &[
-            ("radius", Number(0.1, 100.0)),
-            ("threshold", Number(0.1, 100.0)),
-            ("quality", Choice("high|medium|low")),
-            ("mode", Choice("normal|edgeOnly|overlayEdge")),
-        ],
-        "filter.blur.shapeBlur" => &[("radius", Number(5.0, 1000.0)), ("shape", Choice("circle|ring|square|diamond|triangle|hexagon|star|heart|cross"))],
-        "filter.noise.reduceNoise" => &[
-            ("strength", Number(0.0, 10.0)),
-            ("preserveDetails", Number(0.0, 100.0)),
-            ("reduceColorNoise", Number(0.0, 100.0)),
-            ("sharpenDetails", Number(0.0, 100.0)),
-            ("removeJpegArtifact", Bool),
-        ],
-        "filter.blur.surfaceBlur" => &[("radius", Number(1.0, 100.0)), ("threshold", Number(2.0, 255.0))],
-        "filter.sharpen.unsharpMask" => &[("amount", Number(1.0, 500.0)), ("radius", Number(0.1, 1000.0)), ("threshold", Number(0.0, 255.0))],
-        "filter.sharpen.smartSharpen" => &[("amount", Number(1.0, 500.0)), ("radius", Number(0.1, 64.0)), ("reduceNoise", Number(0.0, 100.0))],
-        "filter.noise.addNoise" => {
-            &[("amount", Number(0.1, 400.0)), ("distribution", Choice("uniform|gaussian")), ("monochromatic", Bool), ("seed", Unsigned(u32::MAX as u64))]
-        }
-        "filter.noise.median" => &[("radius", Number(1.0, 500.0))],
-        "filter.noise.dustAndScratches" => &[("radius", Number(1.0, 500.0)), ("threshold", Number(0.0, 255.0))],
-        "filter.pixelate.mosaic" => &[("cellSize", Number(2.0, 200.0))],
-        "filter.stylize.emboss" => &[("angle", Number(-180.0, 180.0)), ("height", Number(1.0, 100.0)), ("amount", Number(1.0, 500.0))],
-        "filter.distort.twirl" => &[("angle", Number(-999.0, 999.0))],
-        "filter.distort.pinch" => &[("amount", Number(-100.0, 100.0))],
-        "filter.distort.spherize" => &[("amount", Number(-100.0, 100.0)), ("mode", Choice("normal|horizontalOnly|verticalOnly"))],
-        "filter.distort.wave" => &[
-            ("generators", Number(1.0, 999.0)),
-            ("wavelengthMin", Number(1.0, 998.0)),
-            ("wavelengthMax", Number(2.0, 999.0)),
-            ("amplitudeMin", Number(1.0, 998.0)),
-            ("amplitudeMax", Number(1.0, 999.0)),
-            ("type", Choice("sine|triangle|square")),
-            ("undefinedAreas", Choice("wrap|repeat")),
-            ("seed", Unsigned(u32::MAX as u64)),
-        ],
-        "filter.distort.ripple" => &[("amount", Number(-999.0, 999.0)), ("size", Choice("small|medium|large"))],
-        "filter.distort.polarCoordinates" => &[("mode", Choice("rectangularToPolar|polarToRectangular"))],
-        "filter.other.minimum" | "filter.other.maximum" => &[("radius", Number(0.2, 500.0)), ("preserve", Choice("squareness|roundness"))],
-        "filter.other.offset" => &[
-            // The hint specifies pixels, with no range: keep the existing rounding/saturation.
-            ("horizontal", Number(f64::MIN, f64::MAX)),
-            ("vertical", Number(f64::MIN, f64::MAX)),
-            ("undefinedAreas", Choice("wrap|repeat|transparent")),
-        ],
-        "filter.blur.blur"
-        | "filter.blur.blurMore"
-        | "filter.sharpen.sharpen"
-        | "filter.sharpen.sharpenMore"
-        | "filter.sharpen.sharpenEdges"
-        | "filter.noise.despeckle"
-        | "filter.stylize.findEdges"
-        | "filter.stylize.solarize" => &[],
-        _ => return None,
-    })
+// params_for; gallery filters are checked in gallery_cmds. This table is the single source
+// of truth: the engine validates from it and AI/tooling surfaces mirror it through
+// `fields`/`FILTER_FIELDS` instead of keeping a second copy.
+pub static FILTER_FIELDS: &[(&str, &[(&str, Rule)])] = &[
+    ("filter.blur.gaussianBlur", &[("radius", Rule::Number(0.1, 1000.0))]),
+    ("filter.other.highPass", &[("radius", Rule::Number(0.1, 1000.0))]),
+    ("filter.blur.boxBlur", &[("radius", Rule::Number(1.0, 2000.0))]),
+    ("filter.blur.motionBlur", &[("angle", Rule::Number(-360.0, 360.0)), ("distance", Rule::Number(1.0, 2000.0))]),
+    ("filter.blur.radialBlur", &[
+        ("amount", Rule::Number(1.0, 100.0)),
+        ("method", Rule::Choice("spin|zoom")),
+        ("quality", Rule::Choice("draft|good|best")),
+        ("centerX", Rule::Number(0.0, 1.0)),
+        ("centerY", Rule::Number(0.0, 1.0)),
+    ]),
+    ("filter.blur.smartBlur", &[
+        ("radius", Rule::Number(0.1, 100.0)),
+        ("threshold", Rule::Number(0.1, 100.0)),
+        ("quality", Rule::Choice("high|medium|low")),
+        ("mode", Rule::Choice("normal|edgeOnly|overlayEdge")),
+    ]),
+    ("filter.blur.shapeBlur", &[("radius", Rule::Number(5.0, 1000.0)), ("shape", Rule::Choice("circle|ring|square|diamond|triangle|hexagon|star|heart|cross"))]),
+    ("filter.noise.reduceNoise", &[
+        ("strength", Rule::Number(0.0, 10.0)),
+        ("preserveDetails", Rule::Number(0.0, 100.0)),
+        ("reduceColorNoise", Rule::Number(0.0, 100.0)),
+        ("sharpenDetails", Rule::Number(0.0, 100.0)),
+        ("removeJpegArtifact", Rule::Bool),
+    ]),
+    ("filter.blur.surfaceBlur", &[("radius", Rule::Number(1.0, 100.0)), ("threshold", Rule::Number(2.0, 255.0))]),
+    ("filter.sharpen.unsharpMask", &[("amount", Rule::Number(1.0, 500.0)), ("radius", Rule::Number(0.1, 1000.0)), ("threshold", Rule::Number(0.0, 255.0))]),
+    ("filter.sharpen.smartSharpen", &[("amount", Rule::Number(1.0, 500.0)), ("radius", Rule::Number(0.1, 64.0)), ("reduceNoise", Rule::Number(0.0, 100.0))]),
+    ("filter.noise.addNoise", &[
+        ("amount", Rule::Number(0.1, 400.0)),
+        ("distribution", Rule::Choice("uniform|gaussian")),
+        ("monochromatic", Rule::Bool),
+        ("seed", Rule::Unsigned(u32::MAX as u64)),
+    ]),
+    ("filter.noise.median", &[("radius", Rule::Number(1.0, 500.0))]),
+    ("filter.noise.dustAndScratches", &[("radius", Rule::Number(1.0, 500.0)), ("threshold", Rule::Number(0.0, 255.0))]),
+    ("filter.pixelate.mosaic", &[("cellSize", Rule::Number(2.0, 200.0))]),
+    ("filter.stylize.emboss", &[("angle", Rule::Number(-180.0, 180.0)), ("height", Rule::Number(1.0, 100.0)), ("amount", Rule::Number(1.0, 500.0))]),
+    ("filter.distort.twirl", &[("angle", Rule::Number(-999.0, 999.0))]),
+    ("filter.distort.pinch", &[("amount", Rule::Number(-100.0, 100.0))]),
+    ("filter.distort.spherize", &[("amount", Rule::Number(-100.0, 100.0)), ("mode", Rule::Choice("normal|horizontalOnly|verticalOnly"))]),
+    ("filter.distort.wave", &[
+        ("generators", Rule::Number(1.0, 999.0)),
+        ("wavelengthMin", Rule::Number(1.0, 998.0)),
+        ("wavelengthMax", Rule::Number(2.0, 999.0)),
+        ("amplitudeMin", Rule::Number(1.0, 998.0)),
+        ("amplitudeMax", Rule::Number(1.0, 999.0)),
+        ("type", Rule::Choice("sine|triangle|square")),
+        ("undefinedAreas", Rule::Choice("wrap|repeat")),
+        ("seed", Rule::Unsigned(u32::MAX as u64)),
+    ]),
+    ("filter.distort.ripple", &[("amount", Rule::Number(-999.0, 999.0)), ("size", Rule::Choice("small|medium|large"))]),
+    ("filter.distort.polarCoordinates", &[("mode", Rule::Choice("rectangularToPolar|polarToRectangular"))]),
+    ("filter.other.minimum", &[("radius", Rule::Number(0.2, 500.0)), ("preserve", Rule::Choice("squareness|roundness"))]),
+    ("filter.other.maximum", &[("radius", Rule::Number(0.2, 500.0)), ("preserve", Rule::Choice("squareness|roundness"))]),
+    ("filter.other.offset", &[
+        // The hint specifies pixels, with no range: keep the existing rounding/saturation.
+        ("horizontal", Rule::Number(f64::MIN, f64::MAX)),
+        ("vertical", Rule::Number(f64::MIN, f64::MAX)),
+        ("undefinedAreas", Rule::Choice("wrap|repeat|transparent")),
+    ]),
+    // Paramless filters: fixed settings, nothing to validate.
+    ("filter.blur.blur", &[]),
+    ("filter.blur.blurMore", &[]),
+    ("filter.sharpen.sharpen", &[]),
+    ("filter.sharpen.sharpenMore", &[]),
+    ("filter.sharpen.sharpenEdges", &[]),
+    ("filter.noise.despeckle", &[]),
+    ("filter.stylize.findEdges", &[]),
+    ("filter.stylize.solarize", &[]),
+];
+
+/// The rule table for one core filter id, when it has one.
+pub fn fields(id: &str) -> Option<&'static [(&'static str, Rule)]> {
+    FILTER_FIELDS.iter().find(|(fid, _)| *fid == id).map(|(_, rules)| *rules)
 }
 
 // Remaining extended filters: only their documented choices are checked for now, since some

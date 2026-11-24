@@ -19,7 +19,7 @@
 //! synchronous shell state (tools, panels, view, workspace, window).
 
 use fotodit_automation::AutomationError;
-use fotodit_automation::ai::{AiContext, AiEngine, EditingIntent, EditingPlan, GoalRequest, IntentCategory, LiveEditSession, SemanticGoalRepair};
+use fotodit_automation::ai::{AiContext, AiEngine, EditingIntent, EditingPlan, GoalRequest, GoalStop, IntentCategory, LiveEditSession, SemanticGoalRepair};
 use fotodit_ui_egui::{AssistantBackend, FotoditApp};
 
 /// Borrowed desktop editing destination: the app's live session through its admitted
@@ -134,7 +134,22 @@ impl AssistantBackend for GuiAssistant {
                 return Err("I handle one provider edit at a time and don't carry earlier chat into it. Restate the full edit and name the target - nothing was sent.".into());
             }
             let document = app.session.active().map(fotodit_engine::inspect::document);
-            let scene = document.as_ref().map(|doc| fotodit_automation::ai::PerceptionEngine::new().perceive(doc)).unwrap_or_default();
+            let mut scene = document.as_ref().map(|doc| fotodit_automation::ai::PerceptionEngine::new().perceive(doc)).unwrap_or_default();
+            if document.is_some() {
+                // Local measurements ride with the scene: dominant colors from the
+                // engine histogram, faces from the engine's own detector. Both are
+                // bounded and budget-gated; an unavailable detector just leaves the
+                // field empty - the contract tells the provider how to read that.
+                let mut host = GuiSession { app: &mut *app, ctx };
+                scene.dominant_colors = fotodit_automation::ai::computed_dominant_colors(&mut host);
+                if u64::from(scene.width) * u64::from(scene.height) <= 4_000_000 {
+                    if let Ok(result) = host.command_run("image.detectFaces", serde_json::json!({"minScore": 0.5, "sampleAllLayers": true})) {
+                        if let Some(faces) = result.get("faces").and_then(serde_json::Value::as_array) {
+                            scene.faces = faces.iter().filter_map(fotodit_automation::ai::FaceObservation::from_inspect).take(8).collect();
+                        }
+                    }
+                }
+            }
             let intent = fotodit_automation::ai::NaturalLanguageEngine::new().parse_intent(prompt, &scene, &AiContext::new()).map_err(|e| e.to_string())?;
             if document.is_none() && intent.category != IntentCategory::GraphicDesign {
                 return Err("Open a document before editing, or make an explicit poster/banner creation request. Nothing was sent.".into());
@@ -245,19 +260,29 @@ impl AssistantBackend for GuiAssistant {
             }
             _ => return Some("The provider's reply didn't fit what I asked. No edits were applied.".into()),
         };
-        pending.applied.extend(plan.steps.iter().map(|s| {
-            let text = format!("{} {}", s.command, s.params);
-            text.chars().take(200).collect()
-        }));
         // UI-thread application only, after the immutable snapshot and consent still match.
+        // max_attempts 2 lets the LOCAL repair adapter (no extra provider request)
+        // correct a completed-but-unmet attempt once; the goal coordinator's stop
+        // reason, never raw execution success, decides what is reported (D4).
         let outcome = {
             let engine = AiEngine::with_planner(Box::new(FixedPlan(plan)));
             let mut session = GuiSession { app, ctx };
-            let request = GoalRequest { max_attempts: 1, ..GoalRequest::new(&pending.prompt) };
+            let request = GoalRequest { max_attempts: 2, ..GoalRequest::new(&pending.prompt) };
             engine.process_goal_in(&mut session, &request, &mut AiContext::new(), &SemanticGoalRepair::new())
         };
-        let completed = outcome.attempts.iter().any(|a| a.execution.as_ref().is_some_and(|e| e.is_success));
-        if completed {
+        // Record every attempt that actually executed, including a repair attempt,
+        // so the result review lists what was truly applied.
+        for attempt in &outcome.attempts {
+            if attempt.execution.as_ref().is_some_and(|e| e.is_success) {
+                pending.applied.extend(attempt.plan.steps.iter().map(|s| {
+                    let text = format!("{} {}", s.command, s.params);
+                    text.chars().take(200).collect()
+                }));
+            }
+        }
+        let executed = outcome.attempts.iter().any(|a| a.execution.as_ref().is_some_and(|e| e.is_success));
+        let completed = outcome.stop == GoalStop::Completed;
+        if executed {
             // The apply changed the document: re-anchor the staleness snapshot so
             // the next round compares against the post-edit state, not the original.
             pending.document = app.session.active().map(fotodit_engine::inspect::document);
@@ -266,7 +291,7 @@ impl AssistantBackend for GuiAssistant {
         let next_check = match phase { PendingPhase::Planning => 1, PendingPhase::Verifying { check } => check + 1 };
         // Requests actually sent for this goal so far; result checks only count once sent.
         let requests_made = match phase { PendingPhase::Planning => 1, PendingPhase::Verifying { check } => 1 + check };
-        let can_check = pending.visual && completed
+        let can_check = pending.visual && executed
             && next_check <= fotodit_ui_egui::ai_providers_ui::VISUAL_MAX_CHECKS
             && app.ai_providers.editing_consent().visual_active();
         if can_check {
@@ -318,6 +343,10 @@ impl AssistantBackend for GuiAssistant {
             } else {
                 format!("Done via {}: the edit steps are complete.", provider_name(slot))
             }
+        } else if executed {
+            // Steps ran but the goal coordinator did not verify the goal: say so
+            // instead of calling the edit complete (D4).
+            format!("Edits applied via {}, but the result isn't verified against your request: {} The changes made stay in the document - use Undo if needed.", provider_name(slot), outcome.detail)
         } else if outcome.attempts.iter().any(|a| !a.commands.is_empty()) {
             format!("Stopped partway via {} - some changes may be left in the document. Check the canvas and use Undo if needed. {}", provider_name(slot), outcome.detail)
         } else { format!("No edits were applied via {}. {}", provider_name(slot), outcome.detail) })
@@ -532,7 +561,12 @@ mod tests {
         let initial = fotodit_ui_egui::panels::assistant::submit(&mut app, &ctx, "create a poster called chndrax");
         assert!(initial.starts_with("Asking Gemini"), "{initial}");
         let answer = await_plan(&mut app, &ctx);
-        assert!(answer.starts_with("Done via Gemini"), "{answer}");
+        // The fixture plan creates an empty document: execution succeeds but the
+        // design goal (no type layers at all) is not verified, and the local
+        // repair adapter stops because overwriting user text is unsafe. The chat
+        // must report the unverified truth, never "complete" (D4).
+        assert!(answer.starts_with("Edits applied via Gemini"), "{answer}");
+        assert!(answer.contains("isn't verified"), "{answer}");
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(loads.load(Ordering::SeqCst), 1);
         let doc = fotodit_engine::inspect::document(app.session.active().unwrap());

@@ -5,7 +5,7 @@
 //! "Test connection" is a function pair installed by the app (`set_checker`), so this crate does not depend on the
 //! provider code. It runs only after the owner clicks and confirms; it reads the saved key itself, so the key does not
 //! pass through this window. Providers without a documented validation call show why and send nothing. Saving a key
-//! never turns a provider on.
+//! enables supported chat providers without sending a request.
 
 use fotodit_keystore::{KeyStore, PROVIDERS, Provider, Sealer, Source};
 
@@ -64,7 +64,9 @@ pub struct State {
 /// one goal costs at most 1 + VISUAL_MAX_CHECKS provider requests.
 pub const VISUAL_MAX_CHECKS: u32 = 2;
 
-/// Session-only consent. Saving a credential never grants permission to send prompts.
+/// Editing consent. The owner's rule: saving a credential enables its provider directly, and the
+/// choice persists in the key store so the saved key keeps working across restarts. No request is
+/// sent until a chat Send. Only Gemini, Cohere and Lajiwa can drive chat editing.
 #[derive(Default, Debug)]
 pub struct EditingConsent {
     active: Option<&'static str>,
@@ -84,6 +86,15 @@ impl EditingConsent {
         if matches!(slot, "gemini" | "cohere" | "lajiwa") { self.pending = Some(slot); }
     }
     pub fn confirm_identity(&mut self, identity: [u8; 32]) { self.active = self.pending.take(); self.identity = self.active.map(|_| identity); }
+    /// Enables editing for `slot` directly (save-to-enable and restart restore): no per-session
+    /// confirmation step. Refused for providers that cannot drive chat editing.
+    pub fn activate(&mut self, slot: &'static str, identity: [u8; 32]) {
+        self.disable();
+        if matches!(slot, "gemini" | "cohere" | "lajiwa") {
+            self.active = Some(slot);
+            self.identity = Some(identity);
+        }
+    }
     pub fn binding(&self) -> (Option<&'static str>, Option<[u8; 32]>, u64) { (self.active, self.identity, self.generation) }
     pub fn disable(&mut self) { self.active = None; self.pending = None; self.identity = None; self.visual = false; self.generation = self.generation.wrapping_add(1); }
     /// Image-aware mode sticks only while Gemini editing is active.
@@ -94,6 +105,31 @@ impl EditingConsent {
 impl State {
     pub fn editing_consent(&self) -> &EditingConsent { &self.editing }
     pub fn editing_consent_mut(&mut self) -> &mut EditingConsent { &mut self.editing }
+
+    /// Restores the persisted editing-enabled provider: a saved key keeps working across restarts
+    /// without re-enabling. Any failure - no store, no stored choice, missing credential, no
+    /// identity check - leaves consent off; per-send validation still re-checks the credential.
+    fn restored_with<S: Sealer>(store: Option<&KeyStore<S>>, identity: Option<[u8; 32]>) -> Self {
+        let mut st = State::default();
+        let (Some(store), Some(identity)) = (store, identity) else { return st; };
+        let Ok(Some(slot)) = store.editing() else { return st; };
+        let Some(provider) = PROVIDERS.iter().find(|p| p.slot == slot.as_str()) else { return st; };
+        if !matches!(provider.slot, "gemini" | "cohere" | "lajiwa") { return st; }
+        // The persisted choice stands only while its credential does.
+        if !matches!(store.source(provider.slot), Ok(Source::Saved | Source::External)) { return st; }
+        st.editing.activate(provider.slot, identity);
+        st
+    }
+
+    /// Restores consent from the default key store with the installed identity check.
+    pub fn restored() -> Self {
+        let store = fotodit_keystore::default_store();
+        let identity = store
+            .as_ref()
+            .and_then(|s| s.editing().ok().flatten())
+            .and_then(|slot| EDITING_IDENTITY.get().and_then(|check| check(&slot).ok()));
+        Self::restored_with(store.as_ref(), identity)
+    }
 }
 
 impl std::fmt::Debug for State {
@@ -206,6 +242,8 @@ pub fn show(app: &mut FotoditApp, ctx: &egui::Context) {
                 }
                 let saved = matches!(status.as_ref().map(|s| &s.source), Some(Ok(Source::Saved)));
                 let row = &mut st.rows[i];
+                let mut saved_to_enable = false;
+                let mut removed_ok = false;
                 ui.horizontal(|ui| {
                     ui.add(egui::TextEdit::singleline(&mut row.input).password(true).desired_width(280.0).hint_text(tl!("Paste API key")));
                     let can_save = store.is_some() && fotodit_keystore::supported() && !row.input.trim().is_empty();
@@ -214,77 +252,117 @@ pub fn show(app: &mut FotoditApp, ctx: &egui::Context) {
                         && let Some(store) = &store
                     {
                         dirty = true;
-                        row.notice = Some(match save(store, provider, &mut row.input) {
-                            Ok(()) => tl!("Saved.").to_string(),
-                            Err(e) => e,
-                        });
+                        match save(store, provider, &mut row.input) {
+                            Ok(()) => {
+                                row.notice = Some(tl!("Saved.").to_string());
+                                saved_to_enable = matches!(provider.slot, "gemini" | "cohere" | "lajiwa");
+                            }
+                            Err(e) => row.notice = Some(e),
+                        }
                     }
                     if ui.add_enabled(saved && store.is_some(), egui::Button::new(tl!("Remove"))).clicked()
                         && let Some(store) = &store
                     {
                         dirty = true;
-                        row.notice = Some(match remove(store, provider) {
-                            Ok(()) => tl!("Removed.").to_string(),
-                            Err(e) => e,
-                        });
+                        match remove(store, provider) {
+                            Ok(()) => {
+                                row.notice = Some(tl!("Removed.").to_string());
+                                removed_ok = true;
+                            }
+                            Err(e) => row.notice = Some(e),
+                        }
                     }
                 });
+                // The owner's rule: saving a key turns its provider on and remembers the choice, so
+                // the key keeps working across restarts. No request is sent by saving.
+                if saved_to_enable {
+                    // Persist first: the host identity includes the protected store's bytes.
+                    let persisted = store.as_ref().ok_or_else(|| "Protected provider store is unavailable".to_string())
+                        .and_then(|s| s.set_editing(provider.slot).map_err(|e| e.to_string()));
+                    match persisted.and_then(|()| EDITING_IDENTITY.get().ok_or_else(|| "Editing is not connected in this build".to_string()).and_then(|check| check(provider.slot))) {
+                        Ok(identity) => {
+                            st.editing.activate(provider.slot, identity);
+                            row.notice = Some(tl!("Saved. Provider editing is on; no request is sent until you press Send in chat.").to_string());
+                        }
+                        Err(error) => { st.editing.disable(); row.notice = Some(format!("{} {error}", tl!("Saved."))); }
+                    }
+                }
+                if removed_ok && st.editing.active == Some(provider.slot) {
+                    // The key store already forgot the persisted choice with the key.
+                    st.editing.disable();
+                }
                 let source = status.as_ref().and_then(|s| s.source.as_ref().ok().copied());
                 if matches!(source, Some(Source::Unconfigured | Source::Disabled))
                     && ui.small_button(tl!("Use the environment variable or .env file")).clicked()
                     && let Some(store) = &store
                 {
                     dirty = true;
-                        row.notice = Some(match use_environment(store, provider) {
-                        Ok(()) => tl!("Using the environment variable or .env file.").to_string(),
-                        Err(e) => e,
-                    });
+                    match use_environment(store, provider) {
+                        Ok(()) => {
+                            row.notice = Some(tl!("Using the environment variable or .env file.").to_string());
+                            if st.editing.active == Some(provider.slot) {
+                                // The credential source changed; the saved-key enablement no longer matches it.
+                                st.editing.disable();
+                                if let Err(e) = store.clear_editing() {
+                                    row.notice = Some(format!("Source changed, but the saved editing choice could not be cleared: {e}"));
+                                }
+                            }
+                        }
+                        Err(e) => row.notice = Some(e),
+                    }
                 }
                 if matches!(source, Some(Source::External | Source::Disabled))
                     && ui.small_button(tl!("Clear my choice (use no key)")).clicked()
                     && let Some(store) = &store
                 {
                     dirty = true;
-                        row.notice = Some(match clear_choice(store, provider) {
-                        Ok(()) => tl!("Choice cleared. No key is used.").to_string(),
-                        Err(e) => e,
-                    });
+                    match clear_choice(store, provider) {
+                        Ok(()) => {
+                            row.notice = Some(tl!("Choice cleared. No key is used.").to_string());
+                            if st.editing.active == Some(provider.slot) {
+                                st.editing.disable();
+                            }
+                        }
+                        Err(e) => row.notice = Some(e),
+                    }
                 }
                 if matches!(provider.slot, "gemini" | "cohere" | "lajiwa") {
                     if st.editing.active == Some(provider.slot) {
-                        ui.label(tl!("Provider editing enabled for this session. Chat Send contacts this provider only."));
-                        if provider.slot == "gemini" {
-                            let mut visual = st.editing.visual_active();
-                            if ui.checkbox(&mut visual, tl!("Let Gemini see the canvas (sends a document image)")).changed() {
-                                st.editing.set_visual(visual);
-                            }
-                            if st.editing.visual_active() {
-                                ui.label(tl!("Image-aware editing: each chat Send makes 1 planning request, then up to 2 result-check requests, so at most 3 requests per goal. Every request includes a downscaled PNG image (1024px maximum edge) of your document with your prompt and layer metadata. The image leaves this device and goes to Google using your key. Each request may consume quota or cost money under your Google account; Fotodit cannot guarantee free use. Gemini reports whether the result looks right; that is its own judgment, not proof. Session-only: disabling editing or closing the app ends it. A request already sent before then may still finish, including its document image; its result will not be applied and no further requests will follow."));
-                            }
-                        }
-                        if ui.button(tl!("Disable provider editing")).clicked() { st.editing.disable(); }
-                    } else if matches!(source, Some(Source::Saved | Source::External))
-                        && ui.button(tl!("Enable for editing...")).clicked() {
-                        st.editing.request(provider.slot);
-                    }
-                    if st.editing.pending == Some(provider.slot) {
+                        ui.label(tl!("Provider editing is on. It stays on across restarts until you disable it. Chat Send contacts this provider only."));
                         ui.label(match provider.slot {
                             "gemini" => "Destination: Google, https://generativelanguage.googleapis.com",
                             "cohere" => "Destination: Cohere, https://api.cohere.com",
                             "lajiwa" => "Destination: third-party Lajiwa worker, https://lajiwa.roydeburgs.workers.dev (not Google or Cohere). This worker receives your key and prompt.",
                             _ => "Unavailable",
                         });
-                        ui.label(tl!("Chat Send will send your prompt, canvas size, active layer ID and layer names, text, IDs, kinds and bounds to this provider using your key. Context is capped at 64 layers, 128 characters per name and 512 characters per text layer; truncation is disclosed to the provider. Requests above 4000 prompt characters or 32KB context are refused. Editing is single-turn: earlier chat is not sent or remembered by the provider. Ambiguous follow-ups are refused; restate each edit completely. Requests may consume quota or cost money under your provider account. Fotodit cannot guarantee free use. No request is sent now. Other providers will not be used. Enable only if you accept these terms."));
-                        ui.horizontal(|ui| {
-                            if ui.button(tl!("I agree, enable for this session")).clicked() {
-                                match EDITING_IDENTITY.get().ok_or_else(|| "Editing is not connected in this build".to_string())
-                                    .and_then(|check| check(provider.slot)) {
-                                    Ok(identity) => st.editing.confirm_identity(identity),
-                                    Err(error) => { st.editing.disable(); row.notice = Some(error); }
-                                }
+                        ui.label(tl!("Chat Send sends your prompt, canvas size, active layer ID and layer names, text, IDs, kinds and bounds to this provider using your key. Context is capped at 64 layers, 128 characters per name and 512 characters per text layer; truncation is disclosed to the provider. Requests above 4000 prompt characters or 32KB context are refused. Editing is single-turn: earlier chat is not sent or remembered by the provider. Ambiguous follow-ups are refused; restate each edit completely. Requests may consume quota or cost money under your provider account; Fotodit cannot guarantee free use. No request is sent until you press Send. Other providers will not be used."));
+                        if provider.slot == "gemini" {
+                            let mut visual = st.editing.visual_active();
+                            if ui.checkbox(&mut visual, tl!("Let Gemini see the canvas (sends a document image)")).changed() {
+                                st.editing.set_visual(visual);
                             }
-                            if ui.button(tl!("Cancel")).clicked() { st.editing.disable(); }
-                        });
+                            if st.editing.visual_active() {
+                                ui.label(tl!("Image-aware editing: each chat Send makes 1 planning request, then up to 2 result-check requests, so at most 3 requests per goal. Every request includes a downscaled PNG image (1024px maximum edge) of your document with your prompt and layer metadata. The image leaves this device and goes to Google using your key. Each request may consume quota or cost money under your Google account; Fotodit cannot guarantee free use. Gemini reports whether the result looks right; that is its own judgment, not proof. A request already sent before disabling may still finish, including its document image; its result will not be applied and no further requests will follow."));
+                            }
+                        }
+                        if ui.button(tl!("Disable provider editing")).clicked() {
+                            st.editing.disable();
+                            if let Some(store) = &store
+                                && let Err(e) = store.clear_editing()
+                            {
+                                row.notice = Some(format!("Editing is off now, but the saved choice could not be cleared. It may return after restart: {e}"));
+                            }
+                            dirty = true;
+                        }
+                    } else if matches!(source, Some(Source::Saved | Source::External))
+                        && ui.button(tl!("Enable provider editing")).clicked()
+                    {
+                        let persisted = store.as_ref().ok_or_else(|| "Protected provider store is unavailable".to_string())
+                            .and_then(|s| s.set_editing(provider.slot).map_err(|e| e.to_string()));
+                        match persisted.and_then(|()| EDITING_IDENTITY.get().ok_or_else(|| "Editing is not connected in this build".to_string()).and_then(|check| check(provider.slot))) {
+                            Ok(identity) => { st.editing.activate(provider.slot, identity); dirty = true; }
+                            Err(error) => { st.editing.disable(); row.notice = Some(error); }
+                        }
                     }
                 }
                 if saved {
@@ -323,10 +401,23 @@ pub fn show(app: &mut FotoditApp, ctx: &egui::Context) {
                 }
             }
             ui.add_space(6.0);
-            ui.label(tl!("Fotodit never sends a request to check a key on its own. Saving a key does not turn a provider on."));
+            ui.label(tl!("Fotodit never sends a request to check a key on its own. Saving a key turns on AI editing for providers that support it; no request is sent until you press Send in chat."));
         });
     if dirty {
-        st.editing.disable();
+        // These mutations came from this settings window. Refresh the still-active binding
+        // after all writes: the host fingerprints the store file, including other provider rows.
+        // External file changes still revoke the binding on Send/poll as before.
+        if let Some(slot) = st.editing.active {
+            match EDITING_IDENTITY.get().ok_or_else(|| "Editing is not connected in this build".to_string()).and_then(|check| check(slot)) {
+                Ok(identity) => st.editing.identity = Some(identity),
+                Err(error) => {
+                    st.editing.disable();
+                    if let Some(i) = PROVIDERS.iter().position(|p| p.slot == slot) {
+                        st.rows[i].notice = Some(error);
+                    }
+                }
+            }
+        }
         st.cache = None;
     }
     if !open {
@@ -398,26 +489,63 @@ mod tests {
     }
 
     #[test]
-    fn editing_consent_requires_confirmation_and_resets() {
+    fn editing_activates_directly_and_resets() {
         let mut consent = EditingConsent::default();
         assert_eq!(consent.active(), None);
         consent.confirm_identity([7; 32]);
+        assert_eq!(consent.active(), None, "identity alone does not enable");
+        // Direct activation (save-to-enable and restart restore).
+        consent.activate("gemini", [7; 32]);
+        assert_eq!(consent.active(), Some("gemini"));
+        assert_eq!(consent.binding().1, Some([7; 32]));
+        consent.activate("cohere", [9; 32]);
+        assert_eq!(consent.active(), Some("cohere"), "switching replaces the provider and its identity");
+        assert_eq!(consent.binding().1, Some([9; 32]));
+        consent.disable();
         assert_eq!(consent.active(), None);
+        consent.activate("pollinations", [7; 32]);
+        assert_eq!(consent.active(), None, "image-only provider cannot enable text editing");
+        consent.activate("openrouter", [7; 32]);
+        assert_eq!(consent.active(), None, "unavailable provider remains disabled");
+        // The staged request/confirm path still works for callers that use it.
         consent.request("gemini");
         assert_eq!(consent.active(), None);
         consent.confirm_identity([7; 32]);
         assert_eq!(consent.active(), Some("gemini"));
         consent.request("cohere");
-        assert_eq!(consent.active(), None, "switch disables the previous account before confirmation");
-        consent.disable();
-        consent.confirm_identity([7; 32]);
-        assert_eq!(consent.active(), None);
-        consent.request("pollinations");
-        consent.confirm_identity([7; 32]);
-        assert_eq!(consent.active(), None, "image-only provider cannot enable text editing");
-        consent.request("openrouter");
-        consent.confirm_identity([7; 32]);
-        assert_eq!(consent.active(), None, "unavailable provider remains disabled");
+        assert_eq!(consent.active(), None, "request disables the previous provider before confirmation");
+    }
+
+    #[test]
+    fn restore_keeps_a_saved_key_working_across_restarts() {
+        let (s, dir) = store("restore");
+        s.set("gemini", "k1").unwrap();
+        s.set_editing("gemini").unwrap();
+        // A fresh State over the same store is the restart: consent comes back on.
+        let st = State::restored_with(Some(&s), Some([7; 32]));
+        assert_eq!(st.editing_consent().active(), Some("gemini"));
+        assert_eq!(st.editing_consent().binding().1, Some([7; 32]));
+        // Explicitly disabling persists across a fresh State without deleting the key.
+        s.clear_editing().unwrap();
+        assert_eq!(State::restored_with(Some(&s), Some([7; 32])).editing_consent().active(), None);
+        assert_eq!(s.source("gemini").unwrap(), Source::Saved);
+        s.set_editing("gemini").unwrap();
+        // Persisted unsupported provider choices do not enable editing.
+        s.set("pollinations", "other").unwrap();
+        s.set_editing("pollinations").unwrap();
+        assert_eq!(State::restored_with(Some(&s), Some([7; 32])).editing_consent().active(), None);
+        s.set_editing("gemini").unwrap();
+        // Without the identity hook (feature off) consent stays off.
+        assert_eq!(State::restored_with(Some(&s), None).editing_consent().active(), None);
+        // No store or no stored choice: off.
+        assert_eq!(State::restored_with::<MockSealer>(None, Some([7; 32])).editing_consent().active(), None);
+        let (s2, dir2) = store("restore-empty");
+        assert_eq!(State::restored_with(Some(&s2), Some([7; 32])).editing_consent().active(), None);
+        // The stored choice without its credential does not enable.
+        s.remove("gemini").unwrap();
+        assert_eq!(State::restored_with(Some(&s), Some([7; 32])).editing_consent().active(), None);
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(dir2);
     }
 
     #[test]

@@ -37,6 +37,40 @@ pub struct VisualElement {
     /// results (`SubjectCandidate`), not on the element record itself.
     #[serde(default = "full_confidence")]
     pub confidence: f32,
+    /// Live layer opacity 0..1 (engine `opacity`).
+    #[serde(default)]
+    pub opacity: Option<f64>,
+    /// Live fill opacity 0..1 (engine `fill`).
+    #[serde(default)]
+    pub fill: Option<f64>,
+    /// Live blend-mode label.
+    #[serde(default)]
+    pub blend: Option<String>,
+    /// Clipped to the layer below.
+    #[serde(default)]
+    pub clipped: bool,
+    /// Has a vector mask (any enabled state).
+    #[serde(default)]
+    pub has_vector_mask: bool,
+    /// Selected in the editor right now.
+    #[serde(default)]
+    pub selected: bool,
+    /// Adjustment kind for adjustment layers, using the same names the
+    /// adjustment commands take (e.g. `levels`, `colorBalance`).
+    #[serde(default)]
+    pub adjustment_kind: Option<String>,
+    /// Live adjustment parameters in command form.
+    #[serde(default)]
+    pub adjustment_params: Option<Value>,
+    /// Applied layer-style kinds; `(off)` marks a disabled one.
+    #[serde(default)]
+    pub effects: Vec<String>,
+    /// Nesting depth: 0 = top level, 1+ = inside that many groups.
+    #[serde(default)]
+    pub depth: u32,
+    /// Group layer id this element sits in (None = top level).
+    #[serde(default)]
+    pub parent_id: Option<u64>,
 }
 
 fn full_confidence() -> f32 {
@@ -63,6 +97,46 @@ pub struct SubjectCandidate {
     pub layer_id: u64,
     pub confidence: f32,
     pub basis: SubjectBasis,
+}
+
+/// One locally detected face: a bounded observation from the engine's own
+/// face detector (`image.detectFaces`), not a provider vision claim.
+/// Landmarks are five points in document pixels: left eye, right eye, nose,
+/// left and right mouth corners.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FaceObservation {
+    pub score: f32,
+    /// `[x, y, width, height]` in document pixels.
+    pub rect: [f64; 4],
+    pub landmarks: [[f64; 2]; 5],
+}
+
+impl FaceObservation {
+    /// Parses one entry of the engine `image.detectFaces` result.
+    pub fn from_inspect(value: &Value) -> Option<Self> {
+        let score = value.get("score").and_then(Value::as_f64)?;
+        let rect = value.get("rect").and_then(Value::as_array)?;
+        if rect.len() < 4 {
+            return None;
+        }
+        let mut r = [0.0; 4];
+        for (i, slot) in r.iter_mut().enumerate() {
+            *slot = rect[i].as_f64()?;
+        }
+        // Engine result: `{"rightEye","leftEye","nose","mouthRight","mouthLeft"}`,
+        // each `[x, y]`; order here is right eye, left eye, nose, mouth right,
+        // mouth left (the engine's own order).
+        let landmarks = value.get("landmarks")?;
+        let mut pts = [[0.0; 2]; 5];
+        for (i, key) in ["rightEye", "leftEye", "nose", "mouthRight", "mouthLeft"].iter().enumerate() {
+            let p = landmarks.get(key).and_then(Value::as_array)?;
+            if p.len() < 2 {
+                return None;
+            }
+            pts[i] = [p[0].as_f64()?, p[1].as_f64()?];
+        }
+        Some(Self { score: score as f32, rect: r, landmarks: pts })
+    }
 }
 
 /// Typography inventory item extracted from the document.
@@ -108,6 +182,14 @@ pub struct VisualScene {
     pub whitespace_margins: [i32; 4],
     pub has_selection: bool,
     pub selection_bounds: Option<[i32; 4]>,
+    /// Currently selected layer ids.
+    #[serde(default)]
+    pub selected_layer_ids: Vec<u64>,
+    /// Locally detected faces (bounded, budget-gated); empty when the
+    /// detector found none, the document exceeds the pixel budget, or the
+    /// detector is unavailable on this build.
+    #[serde(default)]
+    pub faces: Vec<FaceObservation>,
 }
 
 impl VisualScene {
@@ -221,61 +303,116 @@ impl PerceptionEngine {
         let mut visual_elements = Vec::new();
         let mut typography = Vec::new();
 
+        /// Records one layer (and recurses into group children) so nested
+        /// content is perceived with its full live state, not only the
+        /// top-level stack.
+        fn push_layer(
+            layer_val: &Value,
+            depth: u32,
+            parent_id: Option<u64>,
+            visual_elements: &mut Vec<VisualElement>,
+            typography: &mut Vec<TypographyElement>,
+        ) {
+            let id = layer_val.get("id").and_then(Value::as_u64).unwrap_or(0);
+            let name = layer_val.get("name").and_then(Value::as_str).unwrap_or("Layer").to_string();
+            let kind = layer_val.get("kind").and_then(Value::as_str).unwrap_or("Pixel").to_string();
+            let is_visible = layer_val.get("visible").and_then(Value::as_bool).unwrap_or(true);
+            let has_mask = layer_val.get("hasMask").and_then(Value::as_bool).unwrap_or(false);
+
+            let bounds = if let Some(b) = layer_val.get("bounds").and_then(Value::as_array) {
+                let x0 = b.first().and_then(Value::as_i64).unwrap_or(0) as i32;
+                let y0 = b.get(1).and_then(Value::as_i64).unwrap_or(0) as i32;
+                let w = b.get(2).and_then(Value::as_i64).unwrap_or(0) as i32;
+                let h = b.get(3).and_then(Value::as_i64).unwrap_or(0) as i32;
+                [x0, y0, w, h]
+            } else {
+                // Absent or null inspect geometry is UNKNOWN, not
+                // canvas-sized content: record zero bounds so consumers
+                // (the goal evaluator) withhold geometry-based
+                // satisfaction instead of counting unmeasured ink as a
+                // full-canvas pass.
+                [0, 0, 0, 0]
+            };
+
+            let mut text_content = None;
+            let mut font_size_pt = None;
+
+            if let Some(text_obj) = layer_val.get("text") {
+                let text_str = text_obj.get("text").and_then(Value::as_str).unwrap_or("").to_string();
+                let font = text_obj.get("font").and_then(Value::as_str).unwrap_or("Inter").to_string();
+                let size = text_obj.get("sizePt").and_then(Value::as_f64).unwrap_or(12.0) as f32;
+
+                typography.push(TypographyElement {
+                    layer_id: id,
+                    text: text_str.clone(),
+                    font_family: font,
+                    size_pt: size,
+                    bounds,
+                    is_heading: size >= 20.0,
+                });
+
+                text_content = Some(text_str);
+                font_size_pt = Some(size);
+            }
+
+            let opacity = layer_val.get("opacity").and_then(Value::as_f64);
+            let fill = layer_val.get("fill").and_then(Value::as_f64);
+            let blend = layer_val.get("blend").and_then(Value::as_str).map(str::to_string);
+            let clipped = layer_val.get("clipped").and_then(Value::as_bool).unwrap_or(false);
+            let has_vector_mask = layer_val.get("hasVectorMask").and_then(Value::as_bool).unwrap_or(false);
+            let selected = layer_val.get("selected").and_then(Value::as_bool).unwrap_or(false);
+            let adjustment = layer_val.get("adjustment");
+            let adjustment_kind = adjustment.and_then(|a| a.get("kind")).and_then(Value::as_str).map(str::to_string);
+            let adjustment_params = adjustment.and_then(|a| a.get("params")).cloned();
+            let effects = layer_val
+                .get("effects")
+                .and_then(|e| e.get("items"))
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|item| {
+                            let kind = item.get("kind").and_then(Value::as_str)?;
+                            let enabled = item.get("enabled").and_then(Value::as_bool).unwrap_or(true);
+                            Some(if enabled { kind.to_string() } else { format!("{kind} (off)") })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            visual_elements.push(VisualElement {
+                id,
+                name,
+                kind,
+                text_content,
+                font_size_pt,
+                bounds,
+                is_visible,
+                has_mask,
+                confidence: 1.0,
+                opacity,
+                fill,
+                blend,
+                clipped,
+                has_vector_mask,
+                selected,
+                adjustment_kind,
+                adjustment_params,
+                effects,
+                depth,
+                parent_id,
+            });
+
+            if let Some(children) = layer_val.get("children").and_then(Value::as_array) {
+                for child in children {
+                    push_layer(child, depth + 1, Some(id), visual_elements, typography);
+                }
+            }
+        }
+
         if let Some(layers_arr) = doc_json.get("layers").and_then(Value::as_array) {
             for layer_val in layers_arr {
-                let id = layer_val.get("id").and_then(Value::as_u64).unwrap_or(0);
-                let name = layer_val.get("name").and_then(Value::as_str).unwrap_or("Layer").to_string();
-                let kind = layer_val.get("kind").and_then(Value::as_str).unwrap_or("Pixel").to_string();
-                let is_visible = layer_val.get("visible").and_then(Value::as_bool).unwrap_or(true);
-                let has_mask = layer_val.get("hasMask").and_then(Value::as_bool).unwrap_or(false);
-
-                let bounds = if let Some(b) = layer_val.get("bounds").and_then(Value::as_array) {
-                    let x0 = b.first().and_then(Value::as_i64).unwrap_or(0) as i32;
-                    let y0 = b.get(1).and_then(Value::as_i64).unwrap_or(0) as i32;
-                    let w = b.get(2).and_then(Value::as_i64).unwrap_or(0) as i32;
-                    let h = b.get(3).and_then(Value::as_i64).unwrap_or(0) as i32;
-                    [x0, y0, w, h]
-                } else {
-                    // Absent or null inspect geometry is UNKNOWN, not
-                    // canvas-sized content: record zero bounds so consumers
-                    // (the goal evaluator) withhold geometry-based
-                    // satisfaction instead of counting unmeasured ink as a
-                    // full-canvas pass.
-                    [0, 0, 0, 0]
-                };
-
-                let mut text_content = None;
-                let mut font_size_pt = None;
-
-                if let Some(text_obj) = layer_val.get("text") {
-                    let text_str = text_obj.get("text").and_then(Value::as_str).unwrap_or("").to_string();
-                    let font = text_obj.get("font").and_then(Value::as_str).unwrap_or("Inter").to_string();
-                    let size = text_obj.get("sizePt").and_then(Value::as_f64).unwrap_or(12.0) as f32;
-
-                    typography.push(TypographyElement {
-                        layer_id: id,
-                        text: text_str.clone(),
-                        font_family: font,
-                        size_pt: size,
-                        bounds,
-                        is_heading: size >= 20.0,
-                    });
-
-                    text_content = Some(text_str);
-                    font_size_pt = Some(size);
-                }
-
-                visual_elements.push(VisualElement {
-                    id,
-                    name,
-                    kind,
-                    text_content,
-                    font_size_pt,
-                    bounds,
-                    is_visible,
-                    has_mask,
-                    confidence: 1.0,
-                });
+                push_layer(layer_val, 0, None, &mut visual_elements, &mut typography);
             }
         }
 
@@ -305,9 +442,15 @@ impl PerceptionEngine {
 
         // No pixel data is available in `inspect::document` JSON, so dominant
         // colors cannot be computed here; leave empty instead of inventing
-        // values. The honest source is an engine-side histogram/color query
-        // (tracked as a proposed `crates/engine` addition).
+        // values. The caller populates them via `computed_dominant_colors`,
+        // the engine's bounded histogram query.
         let dominant_colors = Vec::new();
+
+        let selected_layer_ids = doc_json
+            .get("selectedLayers")
+            .and_then(Value::as_array)
+            .map(|arr| arr.iter().filter_map(Value::as_u64).collect())
+            .unwrap_or_default();
 
         VisualScene {
             revision,
@@ -322,6 +465,8 @@ impl PerceptionEngine {
             whitespace_margins,
             has_selection,
             selection_bounds,
+            selected_layer_ids,
+            faces: Vec::new(),
         }
     }
 }

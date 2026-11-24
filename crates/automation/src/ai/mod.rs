@@ -35,7 +35,7 @@ pub use goal_session::{GoalAttempt, GoalCommandRecord, GoalOutcome, GoalRepairAd
     GoalRepairDecision, GoalRepairInput, GoalRequest, GoalStop, NoGoalRepair};
 pub use live::LiveEditSession;
 pub use natural_language::{EditingIntent, IntentCategory, NaturalLanguageEngine};
-pub use perception::{DocumentStructure, PerceptionEngine, SubjectBasis, SubjectCandidate, VisualElement, VisualScene};
+pub use perception::{DocumentStructure, FaceObservation, PerceptionEngine, SubjectBasis, SubjectCandidate, VisualElement, VisualScene};
 pub use planner::{AiPlanner, DeterministicRulePlanner, PlanStep};
 pub use provider_bridge::{
     AiProviderBridge, ContextLoadBalancer, ContextProfile, HttpTransport, ProviderConfig,

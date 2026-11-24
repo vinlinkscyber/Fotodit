@@ -574,6 +574,7 @@ mod tests {
             is_visible: true,
             has_mask: false,
             confidence: 1.0,
+            ..Default::default()
         });
 
         let context = AiContext::new();

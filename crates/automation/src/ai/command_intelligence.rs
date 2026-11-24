@@ -30,6 +30,26 @@ pub struct ValidatedCommand {
     pub params: Value,
 }
 
+/// The engine's core validated filter contract is the single source of truth
+/// (crates/engine/src/filters/validation.rs `FILTER_FIELDS`); the AI surfaces
+/// mirror it through these adapters instead of maintaining a second
+/// hand-written copy that drifts. Extended/gallery filters (mezzotint,
+/// lensBlur, displace, lightingEffects, ...) are not in the engine's core
+/// table: they take external maps, colour tables or interactive-only
+/// parameters and stay out of the AI contract until reviewed per filter.
+pub(crate) use fotodit_engine::filters::filter_fields;
+use fotodit_engine::filters::{FILTER_FIELDS, FilterParamRule};
+
+/// The engine rule table for one filter id, when it is a core validated filter.
+pub(crate) fn filter_rules(id: &str) -> Option<&'static [(&'static str, FilterParamRule)]> {
+    filter_fields(id)
+}
+
+/// Validates a value against one engine filter rule.
+pub(crate) fn filter_value_ok(rule: &FilterParamRule, value: &Value) -> bool {
+    rule.accepts(value)
+}
+
 /// Capability index and parameter validator.
 #[derive(Clone, Debug)]
 pub struct CommandCatalog {
@@ -154,25 +174,21 @@ impl CommandCatalog {
                 description: "Add a non-destructive Photo Filter adjustment layer".into(),
             },
             CommandCapability {
-                id: "layer.setOpacity".into(),
-                label: "Set Opacity".into(),
+                // Engine cmd.rs "layer.setProps": opacity/fill are 0..1 fractions
+                // (never percent); blend takes the engine's blend_from_str names.
+                id: "layer.setProps".into(),
+                label: "Layer Properties".into(),
                 category: "Layer".into(),
-                params_schema: r#"{"layer": id?, "opacity": 0..100}"#.into(),
-                description: "Set the opacity percentage of a layer".into(),
+                params_schema: r##"{"layer": id?, "visible": bool?, "opacity": 0..1?, "fill": 0..1?, "blend": "normal|multiply|screen|overlay|softLight|hardLight"?, "name": str?; at least one property}"##.into(),
+                description: "Set visibility, opacity, fill, blend mode or name of a layer; opacity and fill are 0..1 fractions (1 = 100%)".into(),
             },
             CommandCapability {
-                id: "layer.setBlendMode".into(),
-                label: "Set Blend Mode".into(),
+                // Engine cmd.rs "layer.moveTo" / layer_multi_cmds/moves.rs.
+                id: "layer.moveTo".into(),
+                label: "Move Layer".into(),
                 category: "Layer".into(),
-                params_schema: r#"{"layer": id?, "mode": "normal|multiply|screen|overlay|softLight|hardLight"}"#.into(),
-                description: "Set the blend mode of a layer".into(),
-            },
-            CommandCapability {
-                id: "layer.reorder".into(),
-                label: "Reorder Layer".into(),
-                category: "Layer".into(),
-                params_schema: r#"{"layer": id, "to": index}"#.into(),
-                description: "Move a layer to a different position in the layer stack".into(),
+                params_schema: r#"{"layer": id, "target": id, "position": "above|below"="above"}"#.into(),
+                description: "Move a layer above or below another layer in the layer stack".into(),
             },
             CommandCapability {
                 id: "layer.duplicate".into(),
@@ -199,8 +215,65 @@ impl CommandCatalog {
                 id: "filter.sharpen.unsharpMask".into(),
                 label: "Unsharp Mask…".into(),
                 category: "Filter".into(),
-                params_schema: r#"{"amount": 1..500=50, "radius": 0.1..250.0=1.0, "threshold": 0..255=0}"#.into(),
+                // Engine filters/validation.rs: radius is 0.1..1000 like Gaussian blur.
+                params_schema: r#"{"amount": 1..500=50, "radius": 0.1..1000.0=1.0, "threshold": 0..255=0}"#.into(),
                 description: "Sharpen pixels using the unsharp mask algorithm".into(),
+            },
+            CommandCapability {
+                id: "layer.newAdjustmentLayer.exposure".into(),
+                label: "Exposure…".into(),
+                category: "Adjustment".into(),
+                params_schema: r#"{"exposure": -20..20=0, "offset": -0.5..0.5=0, "gamma": 0.01..9.99=1}"#.into(),
+                description: "Add a non-destructive Exposure adjustment layer".into(),
+            },
+            CommandCapability {
+                id: "layer.newAdjustmentLayer.invert".into(),
+                label: "Invert".into(),
+                category: "Adjustment".into(),
+                params_schema: r#"{}"#.into(),
+                description: "Add a non-destructive Invert adjustment layer".into(),
+            },
+            CommandCapability {
+                id: "layer.newAdjustmentLayer.posterize".into(),
+                label: "Posterize…".into(),
+                category: "Adjustment".into(),
+                params_schema: r#"{"levels": 2..255=4}"#.into(),
+                description: "Add a non-destructive Posterize adjustment layer".into(),
+            },
+            CommandCapability {
+                id: "layer.newAdjustmentLayer.threshold".into(),
+                label: "Threshold…".into(),
+                category: "Adjustment".into(),
+                params_schema: r#"{"level": 1..255=128}"#.into(),
+                description: "Add a non-destructive Threshold adjustment layer".into(),
+            },
+            CommandCapability {
+                id: "layer.newAdjustmentLayer.gradientMap".into(),
+                label: "Gradient Map…".into(),
+                category: "Adjustment".into(),
+                params_schema: r##"{"stops": [[location 0..1, "#rrggbb"], ...] 2..64, "reverse": bool=false, "dither": bool=false}"##.into(),
+                description: "Add a non-destructive Gradient Map adjustment layer mapping tones to a color ramp".into(),
+            },
+            CommandCapability {
+                id: "layer.newAdjustmentLayer.channelMixer".into(),
+                label: "Channel Mixer…".into(),
+                category: "Adjustment".into(),
+                params_schema: r#"{"red": [r%,g%,b%,constant%] -200..200?, "green": [...]?, "blue": [...]?, "gray": [...]?, "monochrome": bool=false}"#.into(),
+                description: "Add a non-destructive Channel Mixer adjustment layer".into(),
+            },
+            CommandCapability {
+                id: "layer.newAdjustmentLayer.selectiveColor".into(),
+                label: "Selective Color…".into(),
+                category: "Adjustment".into(),
+                params_schema: r#"{"method": "relative|absolute"="relative", "colors": "reds|yellows|greens|cyans|blues|magentas|whites|neutrals|blacks"="reds", "cyan": -100..100=0, "magenta": -100..100=0, "yellow": -100..100=0, "black": -100..100=0}"#.into(),
+                description: "Add a non-destructive Selective Color adjustment layer for one color range".into(),
+            },
+            CommandCapability {
+                id: "layer.delete".into(),
+                label: "Delete Layer".into(),
+                category: "Layer".into(),
+                params_schema: r#"{"layer": id?}"#.into(),
+                description: "Delete a layer from the document".into(),
             },
             CommandCapability {
                 id: "edit.undo".into(),
@@ -220,6 +293,41 @@ impl CommandCatalog {
 
         for entry in entries {
             commands.insert(entry.id.clone(), entry);
+        }
+
+        // Every core engine filter enters the catalog from the engine's own
+        // rule table, so discovery, the provider contract and validation share
+        // one source of truth and cannot drift. Explicit entries above keep
+        // their hand-written text.
+        for (id, rules) in FILTER_FIELDS {
+            if commands.contains_key(*id) {
+                continue;
+            }
+            let schema = if rules.is_empty() {
+                "{}".to_string()
+            } else {
+                let parts: Vec<String> = rules
+                    .iter()
+                    .map(|(key, rule)| {
+                        let rule_text = match rule {
+                            FilterParamRule::Number(low, high) => format!("{low}..{high}"),
+                            FilterParamRule::Choice(choices) => (*choices).to_string(),
+                            FilterParamRule::Bool => "bool".to_string(),
+                            FilterParamRule::Unsigned(max) => format!("0..{max}"),
+                        };
+                        format!("\"{key}\": {rule_text}")
+                    })
+                    .collect();
+                format!("{{{}}}", parts.join(", "))
+            };
+            let name = id.rsplit('.').next().unwrap_or(id);
+            commands.insert((*id).to_string(), CommandCapability {
+                id: (*id).to_string(),
+                label: name.to_string(),
+                category: "Filter".into(),
+                params_schema: schema,
+                description: format!("Apply the engine {id} filter to the active layer"),
+            });
         }
 
         Self { commands }
@@ -378,7 +486,110 @@ impl CommandCatalog {
                     });
                 }
             }
-            _ => {}
+            "filter.sharpen.unsharpMask" => {
+                let number = |key: &str, low: f64, high: f64, required: bool| -> Result<(), AiError> {
+                    match params.get(key).and_then(Value::as_f64) {
+                        Some(v) if v.is_finite() && (low..=high).contains(&v) => Ok(()),
+                        Some(_) => Err(AiError::ValidationError {
+                            command: id.into(),
+                            message: format!("unsharpMask '{key}' must be in {low}..={high}"),
+                        }),
+                        None if required => Err(AiError::ValidationError {
+                            command: id.into(),
+                            message: format!("unsharpMask requires '{key}' in {low}..={high}"),
+                        }),
+                        None => Ok(()),
+                    }
+                };
+                // Engine filters/validation.rs: amount 1..500, radius 0.1..1000, threshold 0..255.
+                number("amount", 1.0, 500.0, true)?;
+                number("radius", 0.1, 1000.0, true)?;
+                number("threshold", 0.0, 255.0, false)?;
+            }
+            "layer.setProps" => {
+                let map = params.as_object();
+                let has_change = map.is_some_and(|m| ["visible", "opacity", "fill", "blend", "name"].iter().any(|k| m.contains_key(*k)));
+                if !has_change {
+                    return Err(AiError::ValidationError {
+                        command: id.into(),
+                        message: "layer.setProps needs at least one of visible, opacity, fill, blend or name".into(),
+                    });
+                }
+                for key in ["opacity", "fill"] {
+                    if let Some(v) = params.get(key) {
+                        if !v.as_f64().is_some_and(|x| (0.0..=1.0).contains(&x)) {
+                            return Err(AiError::ValidationError {
+                                command: id.into(),
+                                message: format!("layer.setProps '{key}' must be a 0..1 fraction (1 = 100%)"),
+                            });
+                        }
+                    }
+                }
+                if let Some(v) = params.get("visible") {
+                    if !v.is_boolean() {
+                        return Err(AiError::ValidationError {
+                            command: id.into(),
+                            message: "layer.setProps 'visible' must be true or false".into(),
+                        });
+                    }
+                }
+                if let Some(v) = params.get("blend") {
+                    if !v.is_string() {
+                        return Err(AiError::ValidationError {
+                            command: id.into(),
+                            message: "layer.setProps 'blend' must be a blend-mode string".into(),
+                        });
+                    }
+                }
+                if let Some(v) = params.get("name") {
+                    if !v.as_str().is_some_and(|s| !s.is_empty()) {
+                        return Err(AiError::ValidationError {
+                            command: id.into(),
+                            message: "layer.setProps 'name' must be a non-empty string".into(),
+                        });
+                    }
+                }
+            }
+            "layer.moveTo" => {
+                let id_of = |key: &str| params.get(key).and_then(Value::as_u64);
+                if id_of("layer").is_none() || id_of("target").is_none() {
+                    return Err(AiError::ValidationError {
+                        command: id.into(),
+                        message: "layer.moveTo requires 'layer' and 'target' layer ids".into(),
+                    });
+                }
+                if let Some(v) = params.get("position") {
+                    if !matches!(v.as_str(), Some("above" | "below")) {
+                        return Err(AiError::ValidationError {
+                            command: id.into(),
+                            message: "layer.moveTo 'position' must be \"above\" or \"below\"".into(),
+                        });
+                    }
+                }
+            }
+            other => {
+                // Every core engine filter is validated against the mirrored
+                // engine rule table; gaussianBlur and unsharpMask keep their
+                // stricter required-key arms above.
+                if let Some(rules) = filter_rules(other) {
+                    if let Some(map) = params.as_object() {
+                        for (key, value) in map {
+                            let Some((_, rule)) = rules.iter().find(|(k, _)| *k == key.as_str()) else {
+                                return Err(AiError::ValidationError {
+                                    command: id.into(),
+                                    message: format!("unsupported filter parameter '{key}'"),
+                                });
+                            };
+                            if !filter_value_ok(rule, value) {
+                                return Err(AiError::ValidationError {
+                                    command: id.into(),
+                                    message: format!("filter parameter '{key}' is outside the engine range"),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         Ok(ValidatedCommand {
@@ -450,5 +661,21 @@ mod tests {
 
         let invalid = catalog.validate_command("layer.newFillLayer.solidColor", &json!({"color": "not_a_hex"}));
         assert!(invalid.is_err());
+    }
+
+    #[test]
+    fn filter_catalog_entries_mirror_the_engine_rule_table() {
+        let catalog = CommandCatalog::new();
+        for (id, rules) in FILTER_FIELDS {
+            assert!(catalog.get(id).is_some_and(|c| c.category == "Filter"), "{id} missing from the catalog");
+            if rules.is_empty() {
+                assert!(catalog.get(id).is_some_and(|c| c.params_schema == "{}"), "{id} takes no parameters");
+            }
+        }
+        assert!(catalog.validate_command("filter.blur.motionBlur", &json!({"angle": -45, "distance": 40})).is_ok());
+        assert!(catalog.validate_command("filter.blur.motionBlur", &json!({"angle": 361})).is_err());
+        assert!(catalog.validate_command("filter.blur.motionBlur", &json!({"speed": 4})).is_err(), "unknown keys refuse, never silently ignored");
+        assert!(catalog.validate_command("filter.sharpen.sharpen", &json!({})).is_ok());
+        assert!(catalog.validate_command("filter.render.lensFlare", &json!({"lens": "zoom"})).is_err(), "gallery filters stay out");
     }
 }

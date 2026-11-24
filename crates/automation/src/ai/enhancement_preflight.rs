@@ -1,7 +1,10 @@
 //! Early honesty for photo enhancement, not a safety or authorization boundary.
 //!
-//! Inspection does not expose effective locks. The admitted first sharpening command
-//! remains authoritative and must refuse locks before any adjustment is created.
+//! Inspection does not expose effective locks. The admitted filter commands
+//! remain authoritative and must refuse locks before any adjustment is created.
+//! A filter step may omit `layer`: engine filters then target the live active
+//! layer, which this check has just verified. Requiring the key would deadlock
+//! against the provider contract, which forbids it (D1 in docs/ai-editing-plan.md).
 //! Dry-run plans are not certificates of executability. Deferred execution still needs
 //! the host's document identity/revision binding; layer IDs alone do not provide it.
 
@@ -28,13 +31,28 @@ fn active_layer(layers: &[Value], id: u64) -> Option<&Value> {
 }
 
 pub(super) fn validate(document: &Value, plan: &EditingPlan) -> Result<(), AiError> {
+    // Document state gates every enhancement plan, adjustment-only included:
+    // adjustment creation consumes selections and channel state, exactly what
+    // this verifies. Only the sharpening-specific sequencing relaxes for
+    // plans without a pixel-targeting filter step.
     let id = validate_document_state(document)?;
-    let first = plan.steps.first().ok_or_else(|| refusal("the plan has no sharpening step"))?;
-    if first.command != "filter.sharpen.unsharpMask" {
-        return Err(refusal("sharpening must be the first step, before adjustment layers"));
+    let Some(first_filter) = plan.steps.iter().position(|s| s.command.starts_with("filter.")) else {
+        return Ok(());
+    };
+    if let Some(first_adjustment) = plan.steps.iter().position(|s| s.command.starts_with("layer.newAdjustmentLayer."))
+        && first_adjustment < first_filter
+    {
+        return Err(refusal("a pixel filter step must be the first step, before adjustment layers"));
     }
-    if first.params.get("layer").and_then(Value::as_u64) != Some(id) {
-        return Err(refusal("the planned sharpening target differs from the current active layer; plan again"));
+    let first = &plan.steps[first_filter];
+    // Engine filter commands take no `layer` parameter and always target the
+    // active layer. A paramless step therefore targets the live active layer
+    // this function just verified; an explicit `layer` must match it exactly,
+    // or the plan would filter a different layer than intended.
+    if let Some(target) = first.params.get("layer").and_then(Value::as_u64) {
+        if target != id {
+            return Err(refusal("the planned sharpening target differs from the current active layer; plan again"));
+        }
     }
     if first.params.get("target").is_some() {
         return Err(refusal("the sharpening step must not override the pixel target"));

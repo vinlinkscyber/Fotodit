@@ -187,7 +187,9 @@ impl FotoditApp {
             gpu_fault: None,
             gpu_oom_retries: 0,
             started: None,
-            ai_providers: Default::default(),
+            // Restores the persisted editing-enabled provider so a saved key keeps working
+            // across restarts; falls back to the default (off) on any failure.
+            ai_providers: crate::ai_providers_ui::State::restored(),
             perf: Default::default(),
             stroke_trace: stroke_trace::StrokeTrace::from_env(),
             render_path: Default::default(),
