@@ -133,10 +133,12 @@ fn completed_but_unmet_repairs_with_fresh_scene_and_immutable_original_goal() {
     assert_eq!(&*repair.layer_counts.borrow(), &[initial_layers + 1]);
     assert_eq!(outcome.attempts.len(), 2);
     assert!(outcome.attempts[1].execution.as_ref().unwrap().is_success);
-    // This assertion binds to the evaluator at the agreed base, not independent
-    // visual verification. An evaluator revision needs its own semantic fixtures.
-    assert_eq!(outcome.stop, GoalStop::Completed);
-    assert!(!outcome.final_state_unverified);
+    // The evaluator accepts the repaired result, but completion now requires
+    // exact per-pixel grounding and this scripted host serves no pixel data
+    // (probes answer with an empty object), so the honest stop is unverified.
+    assert!(outcome.attempts[1].evaluation.as_ref().unwrap().intent_satisfied);
+    assert_eq!(outcome.stop, GoalStop::FinalStateUnverified, "{}", outcome.detail);
+    assert!(outcome.final_state_unverified);
     assert!(context.prompt_history.iter().all(|prompt| prompt == GOAL));
 }
 

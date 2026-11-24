@@ -238,8 +238,10 @@ impl AiEngine {
             // scene's selection is NOT the target when the plan first selects.
             let plan_drives_selection = plan_uses_active_selection(&plan);
             let region_watch = (!plan_drives_selection).then(|| RegionWatch::new(&scene, &plan));
-            let region_before = region_watch.as_ref().and_then(|w| w.capture(&mut host));
+            // The ledger window opens BEFORE the pre-execution captures so a
+            // deferred or failed observation that stops the attempt is recorded.
             let start = host.calls.len();
+            let region_before = region_watch.as_ref().and_then(|w| w.capture(&mut host));
             let mut attempt = GoalAttempt { plan: plan.clone(), execution: None, evaluation: None,
                 evidence: None, commands: Vec::new(), error: None };
             match ExecutionEngine::execute_plan_in_with_evidence(&mut host, &plan) {
