@@ -780,10 +780,34 @@ fn pixel_digest(s: &mut Session, p: &Value) -> Result<Value> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let d = st.doc.clone();
     let revision = st.revision;
-    let r = Rect::new(0, 0, d.size.width as i32, d.size.height as i32);
-    if r.is_empty() {
+    let canvas = Rect::new(0, 0, d.size.width as i32, d.size.height as i32);
+    if canvas.is_empty() {
         return Err(bad(CMD, "the canvas is empty"));
     }
+    // Optional exact region, all four fields or none: the measured AI criteria
+    // compare digests over a known target region and over known protected
+    // regions, and a sampled whole-canvas digest cannot prove either. The
+    // region is clamped to the canvas; small regions (up to 1M px) sample
+    // every pixel at stride 1, which makes equal digests an exact
+    // unchanged-pixel proof for that region.
+    let region_fields = ["x", "y", "width", "height"].iter().map(|k| p.get(*k).and_then(Value::as_i64)).collect::<Vec<_>>();
+    let r = if region_fields.iter().all(Option::is_some) {
+        let (x, y) = (region_fields[0].unwrap(), region_fields[1].unwrap());
+        let (rw, rh) = (region_fields[2].unwrap(), region_fields[3].unwrap());
+        if !(1..=i64::from(u32::MAX)).contains(&rw) || !(1..=i64::from(u32::MAX)).contains(&rh)
+            || x < i64::from(i32::MIN) || x > i64::from(i32::MAX) || y < i64::from(i32::MIN) || y > i64::from(i32::MAX) {
+            return Err(bad(CMD, "region needs integer x/y and width/height in 1..=u32::MAX"));
+        }
+        let region = canvas.intersect(&Rect::from_xywh(x as i32, y as i32, rw as u32, rh as u32));
+        if region.is_empty() {
+            return Err(bad(CMD, "the region does not intersect the canvas"));
+        }
+        region
+    } else if region_fields.iter().any(Option::is_some) {
+        return Err(bad(CMD, "region needs all of x, y, width and height"));
+    } else {
+        canvas
+    };
     // Checked u64 area before any usize conversion or allocation (#933 pattern,
     // same as color statistics). Callers can tighten the budget with `maxPixels`
     // (the automatic AI caller does); they cannot raise it past the cap.
@@ -809,7 +833,8 @@ fn pixel_digest(s: &mut Session, p: &Value) -> Result<Value> {
         hash ^= u64::from(byte);
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     };
-    for b in (w as u64).to_le_bytes().into_iter().chain((h as u64).to_le_bytes()).chain((stride as u64).to_le_bytes()) {
+    for b in (w as u64).to_le_bytes().into_iter().chain((h as u64).to_le_bytes()).chain((stride as u64).to_le_bytes())
+        .chain((r.x0 as i64).to_le_bytes()).chain((r.y0 as i64).to_le_bytes()) {
         mix(b);
     }
     let quant = |c: f32| (c.clamp(0.0, 1.0) * 255.0).round() as u8;
@@ -830,7 +855,9 @@ fn pixel_digest(s: &mut Session, p: &Value) -> Result<Value> {
         "hash": "fnv1a64",
         "quantization": "8bit/channel",
         "digest": format!("{:016x}", hash),
-        "domain": "canvas",
+        "domain": if r == canvas { "canvas" } else { "region" },
+        "x": r.x0,
+        "y": r.y0,
         "width": w,
         "height": h,
         "stride": stride,
@@ -1466,7 +1493,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.analysis.pixelDigest",
             "Pixel Digest",
             ["Image", "Analysis"],
-            r##"{"maxPixels":int=16000000 (1..=16000000)} → read-only position-sensitive digest of the rendered canvas composite"##,
+            r##"{"maxPixels":int=16000000 (1..=16000000),"x":int,"y":int,"width":int,"height":int (all four for an exact region, clamped to the canvas)} → read-only position-sensitive digest of the rendered composite; a region of up to 1M px is sampled at every pixel, so equal region digests prove unchanged pixels there"##,
             has_doc,
             pixel_digest,
             false
