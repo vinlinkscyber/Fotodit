@@ -1613,6 +1613,20 @@ fn contract_capabilities() -> (Value, Value) {
             "params":r##"{contents:color|foreground|background|white|black|gray|contentAware optional (default color; pattern/history not admitted),color:#rrggbb or [r,g,b] 0..1 optional (used when contents is color),opacity:percent 0..100 optional,mode:blend mode optional,preserveTransparency:bool optional,target:pixels|mask optional,colorAdaptation:bool optional (contentAware),scaleAdaptation:bool optional,mirror:bool optional,rotationAdaptation:bool optional,scale:1..1000 optional,angle:deg optional}"##,
             "description":"Fill the active selection or active pixel layer with a color or content-aware fill"}));
     }
+    // More core commands without a CommandCatalog entry. Keys mirror the
+    // validator's per-command key lists (validate_selected_plan), so the
+    // provider is shown exactly what is admitted.
+    for (id, params, description) in [
+        ("layer.groupLayers", r##"{layer:existing visible layer id or {"$step":N} optional (default: active layer),name:string optional,color:label color none|red|orange|yellow|green|seafoam|blue|indigo|magenta|fuchsia|violet|gray optional,mode:blend mode optional,opacity:percent 0..100 optional}"##, "Group a layer into a new layer group"),
+        ("layer.mergeDown", r##"{layer:existing visible layer id}"##, "Merge a layer into the layer below it"),
+        ("select.magicWand", r##"{x:integer px inside canvas,y:integer px inside canvas,tolerance:0..255 optional,contiguous:bool optional,antiAlias:bool optional,sampleAllLayers:bool optional,mode:replace|add|subtract|intersect optional}"##, "Select pixels of similar color around a point"),
+        ("select.subject", r##"{sampleAllLayers:bool optional,mode:replace|add|subtract|intersect optional}"##, "Select the main subject locally (no generative AI)"),
+        ("shape.create", r##"{kind:rect|roundedRect|ellipse|polygon|star|line optional (default rect),rect:[x,y,w,h] (required for all kinds except line),from:[x,y] and to:[x,y] (line),radii,sides,starRatio,cornerRadius,weight,arrowStart,arrowEnd,arrowWidth,arrowLength,arrowConcavity,fill:#rrggbb,stroke:{width,color,align},name:string; all optional unless noted}"##, "Create a geometric vector shape layer"),
+    ] {
+        if CORE_CONTRACT_COMMANDS.contains(&id) && !capabilities.iter().any(|c| c["command"] == id) {
+            capabilities.push(json!({"command":id,"params":params,"description":description}));
+        }
+    }
     let mut index = serde_json::Map::new();
     for id in SELECTED_COMMANDS.iter().copied().filter(|id| !CORE_CONTRACT_COMMANDS.contains(id)) {
         let family = id.split('.').next().unwrap_or(id).to_string();
@@ -3780,7 +3794,7 @@ mod tests {
         ] { assert!(bridge.parse_plan_json(&bad.to_string(), &intent).is_err()); }
         // contract.describe: schema discovery bounded to admitted ids, 12 at
         // most, and to the one documented parameter key.
-        match bridge.parse_plan_json(&json!({"observe":[{"command":"contract.describe","params":{"commands":["select.refineEdge","filter.blur.gaussian"]}}],"steps":[]}).to_string(), &intent).unwrap() {
+        match bridge.parse_plan_json(&json!({"observe":[{"command":"contract.describe","params":{"commands":["select.refineEdge","filter.blur.gaussianBlur"]}}],"steps":[]}).to_string(), &intent).unwrap() {
             PlanResponse::Observe(requests) => assert_eq!(requests[0].command, "contract.describe"),
             other => panic!("expected observation request, got {other:?}"),
         }

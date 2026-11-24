@@ -1131,9 +1131,9 @@ mod region_watch_tests {
     fn region_watch_unions_target_bounds_and_measures_the_complement() {
         let scene = scene(1000, 800, &[(2, [100, 100, 300, 200]), (3, [150, 250, 100, 100])]);
         let watch = RegionWatch::new(&scene, &plan(&[("layer.fill.set", 2), ("layer.opacity.set", 3)]));
-        assert_eq!(watch.target, Some([100, 100, 350, 250]));
+        assert_eq!(watch.target, Some([100, 100, 300, 250]), "union of x 100..400 and 150..250, y 100..300 and 250..350");
         assert_eq!(watch.protected, vec![
-            [0, 0, 1000, 100], [0, 350, 1000, 450], [0, 100, 100, 250], [450, 100, 550, 250]]);
+            [0, 0, 1000, 100], [0, 350, 1000, 450], [0, 100, 100, 250], [400, 100, 600, 250]]);
     }
 
     #[test]
