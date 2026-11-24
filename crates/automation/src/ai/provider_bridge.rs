@@ -1429,6 +1429,10 @@ const SELECTED_COMMANDS: &[&str] = &["file.new", "type.create", "type.edit", "ty
     "layer.layerMask.revealSelection", "layer.layerMask.hideSelection",
     "layer.layerMask.fromTransparency", "layer.layerMask.delete", "layer.layerMask.apply",
     "select.all", "select.deselect", "select.inverse", "select.rect",
+    "select.lasso", "select.magicWand", "select.colorRange",
+    "select.modify.border", "select.modify.smooth", "select.modify.expand",
+    "select.modify.contract", "select.modify.feather",
+    "select.grow", "select.similar",
     "edit.transform", "layer.removeBackground"];
 
 /// Layer-creating commands whose output a later step of the same plan can
@@ -1561,6 +1565,15 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
                 "layer.translate" => vec!["layer", "dx", "dy"],
                 "select.all" | "select.deselect" | "select.inverse" => vec![],
                 "select.rect" => vec!["x", "y", "width", "height", "mode", "ellipse", "line", "antiAlias", "feather"],
+                "select.magicWand" => vec!["x", "y", "tolerance", "contiguous", "antiAlias", "sampleAllLayers", "mode"],
+                "select.lasso" => vec!["points", "mode", "antiAlias", "feather", "polygonal"],
+                // detectFaces is deliberately not a key: the engine command
+                // refuses it as not available yet, so a plan asking for it is
+                // refused by the key filter.
+                "select.colorRange" => vec!["select", "color", "colors", "points", "subtractPoints", "order", "fuzziness", "localized", "range", "tonalRange", "invert", "sampleAllLayers", "mode"],
+                "select.modify.border" => vec!["radius"],
+                "select.modify.smooth" | "select.modify.expand" | "select.modify.contract" | "select.modify.feather" => vec!["radius", "applyAtCanvasBounds"],
+                "select.grow" | "select.similar" => vec!["tolerance", "sampleAllLayers"],
                 "edit.transform" => vec!["layer", "dx", "dy", "scaleX", "scaleY", "rotate", "reference", "interpolation"],
                 "layer.removeBackground" => vec!["layer", "sampleAllLayers", "refine"],
                 _ => return Err(refuse()),
@@ -1927,12 +1940,20 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
         // and the active-layer identity, so nothing known survives it: last
         // step only.
         if step.command == "layer.flattenImage" && index + 1 != plan.steps.len() { return Err(refuse()); }
-        // Selection-dependent steps: inverse and selection masks need a live
-        // selection at the point they run.
-        if step.command == "select.inverse" && !sel { return Err(refuse()); }
+        // Selection-dependent steps: inverse, the modify family, grow/similar
+        // and selection masks need a live selection at the point they run.
+        if matches!(step.command.as_str(), "select.inverse" | "select.modify.border" | "select.modify.smooth"
+            | "select.modify.expand" | "select.modify.contract" | "select.modify.feather"
+            | "select.grow" | "select.similar") && !sel { return Err(refuse()); }
         if matches!(step.command.as_str(), "layer.layerMask.revealSelection" | "layer.layerMask.hideSelection") && !sel { return Err(refuse()); }
         match step.command.as_str() {
             "select.all" | "select.rect" => sel = true,
+            // A subtract/intersect pick on no selection yields no selection;
+            // only replace/add (or an existing pick) leave one live.
+            "select.magicWand" | "select.lasso" | "select.colorRange" => {
+                let mode = map.get("mode").and_then(Value::as_str).unwrap_or("replace");
+                sel = matches!(mode, "replace" | "add") || sel;
+            }
             "select.deselect" => sel = false,
             // The engine drops the selection once it becomes a mask (Photoshop).
             "layer.layerMask.revealSelection" | "layer.layerMask.hideSelection" => sel = false,
@@ -1947,6 +1968,65 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
                 Some("none" | "red" | "orange" | "yellow" | "green" | "seafoam" | "blue" | "indigo" | "magenta" | "fuchsia" | "violet" | "gray"))) { return Err(refuse()); }
             if map.get("mode").is_some_and(|v| !v.as_str().is_some_and(|s| !s.is_empty() && s.len() <= 32)) { return Err(refuse()); }
             if map.get("opacity").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (0.0..=100.0).contains(&x))) { return Err(refuse()); }
+        }
+        if step.command == "select.magicWand" {
+            // The wand samples a canvas pixel, so the point must be inside it.
+            if !map.get("x").and_then(Value::as_i64).is_some_and(|v| v >= 0 && v < i64::from(width))
+                || !map.get("y").and_then(Value::as_i64).is_some_and(|v| v >= 0 && v < i64::from(height)) { return Err(refuse()); }
+            if map.get("tolerance").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (0.0..=255.0).contains(&x))) { return Err(refuse()); }
+            for key in ["contiguous", "antiAlias", "sampleAllLayers"] {
+                if map.get(key).is_some_and(|v| !v.is_boolean()) { return Err(refuse()); }
+            }
+            if map.get("mode").is_some_and(|v| !matches!(v.as_str(), Some("replace" | "add" | "subtract" | "intersect"))) { return Err(refuse()); }
+        }
+        if step.command == "select.lasso" {
+            // A lasso is a polygon: at least three finite points. Points may
+            // legitimately leave the canvas edge, so bounds stay generous.
+            let point_ok = |p: &Value| p.as_array().is_some_and(|pt| pt.len() == 2
+                && pt.iter().all(|c| c.as_f64().is_some_and(|x| x.is_finite() && (-1_000_000.0..=1_000_000.0).contains(&x))));
+            if !map.get("points").is_some_and(|v| v.as_array().is_some_and(|a| (3..=256).contains(&a.len()) && a.iter().all(point_ok))) { return Err(refuse()); }
+            if map.get("mode").is_some_and(|v| !matches!(v.as_str(), Some("replace" | "add" | "subtract" | "intersect"))) { return Err(refuse()); }
+            if map.get("antiAlias").is_some_and(|v| !v.is_boolean()) || map.get("polygonal").is_some_and(|v| !v.is_boolean()) { return Err(refuse()); }
+            if map.get("feather").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (0.0..=1000.0).contains(&x))) { return Err(refuse()); }
+        }
+        if step.command == "select.colorRange" {
+            if map.get("select").is_some_and(|v| !matches!(v.as_str(), Some("sampledColors" | "reds" | "yellows" | "greens" | "cyans" | "blues" | "magentas" | "highlights" | "midtones" | "shadows" | "skinTones" | "outOfGamut"))) { return Err(refuse()); }
+            let hex = |v: &Value| v.as_str().is_some_and(|c| c.len() == 7 && c.starts_with('#') && c.as_bytes()[1..].iter().all(u8::is_ascii_hexdigit));
+            if map.get("color").is_some_and(|v| !hex(v)) { return Err(refuse()); }
+            if map.get("colors").is_some_and(|v| !v.as_array().is_some_and(|a| (1..=32).contains(&a.len()) && a.iter().all(hex))) { return Err(refuse()); }
+            // Eyedropper samples are canvas points.
+            for key in ["points", "subtractPoints"] {
+                if let Some(v) = map.get(key) {
+                    if !v.as_array().is_some_and(|a| a.len() <= 64 && a.iter().all(|p| p.as_array().is_some_and(|pt| pt.len() == 2
+                        && pt.iter().all(|c| c.as_i64().is_some_and(|n| n >= 0 && n < 65536))))) { return Err(refuse()); }
+                }
+            }
+            if map.get("order").is_some_and(|v| !v.as_array().is_some_and(|a| a.len() <= 128 && a.iter().all(|s| matches!(s.as_str(), Some("+" | "-"))))) { return Err(refuse()); }
+            if map.get("fuzziness").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (0.0..=200.0).contains(&x))) { return Err(refuse()); }
+            if map.get("range").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (0.0..=100.0).contains(&x))) { return Err(refuse()); }
+            if let Some(v) = map.get("tonalRange") {
+                let level = v.as_f64().is_some_and(|x| x.is_finite() && (0.0..=255.0).contains(&x));
+                let band = v.as_array().is_some_and(|a| a.len() == 2
+                    && a.iter().all(|c| c.as_f64().is_some_and(|x| x.is_finite() && (0.0..=255.0).contains(&x)))
+                    && a[0].as_f64() <= a[1].as_f64());
+                if !level && !band { return Err(refuse()); }
+            }
+            for key in ["localized", "invert", "sampleAllLayers"] {
+                if map.get(key).is_some_and(|v| !v.is_boolean()) { return Err(refuse()); }
+            }
+            if map.get("mode").is_some_and(|v| !matches!(v.as_str(), Some("replace" | "add" | "subtract" | "intersect"))) { return Err(refuse()); }
+        }
+        if step.command == "select.modify.border"
+            && map.get("radius").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (1.0..=200.0).contains(&x))) { return Err(refuse()); }
+        if matches!(step.command.as_str(), "select.modify.smooth" | "select.modify.expand" | "select.modify.contract")
+            && map.get("radius").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (1.0..=500.0).contains(&x))) { return Err(refuse()); }
+        if step.command == "select.modify.feather"
+            && map.get("radius").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (0.1..=1000.0).contains(&x))) { return Err(refuse()); }
+        if step.command.starts_with("select.modify.")
+            && map.get("applyAtCanvasBounds").is_some_and(|v| !v.is_boolean()) { return Err(refuse()); }
+        if matches!(step.command.as_str(), "select.grow" | "select.similar") {
+            if map.get("tolerance").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (0.0..=255.0).contains(&x))) { return Err(refuse()); }
+            if map.get("sampleAllLayers").is_some_and(|v| !v.is_boolean()) { return Err(refuse()); }
         }
         if step.command == "select.rect" {
             if map.get("x").and_then(Value::as_i64).is_none() || map.get("y").and_then(Value::as_i64).is_none()
@@ -2170,6 +2250,36 @@ mod tests {
         assert!(validate_selected_plan(&contract_plan("layer.mergeDown", json!({"layer": 9})), &contract_scene()).is_ok());
         assert!(validate_selected_plan(&contract_plan("layer.mergeGroup", json!({"layer": 11})), &contract_scene()).is_ok());
         assert!(validate_selected_plan(&contract_plan("layer.flattenImage", json!({})), &contract_scene()).is_ok());
+    }
+
+    #[test]
+    fn selected_plan_admits_selection_tools_within_contract() {
+        assert!(validate_selected_plan(&contract_plan("select.magicWand", json!({"x": 10, "y": 20, "tolerance": 40})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("select.lasso", json!({"points": [[0, 0], [100, 0], [50, 80]], "feather": 2})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("select.colorRange", json!({"select": "reds", "fuzziness": 60})), &contract_scene()).is_ok());
+        // A made selection feeds the selection-dependent commands.
+        let mut plan = contract_plan("select.colorRange", json!({"select": "shadows"}));
+        for (command, params) in [("select.modify.expand", json!({"radius": 3})), ("select.modify.feather", json!({"radius": 0.5})),
+            ("select.grow", json!({"tolerance": 10})), ("select.similar", json!({"tolerance": 10}))] {
+            plan.steps.push(PlanStep { command: command.into(), params, description: "fixture".into() });
+        }
+        assert!(validate_selected_plan(&plan, &contract_scene()).is_ok());
+    }
+
+    #[test]
+    fn selected_plan_refuses_selection_tools_outside_contract() {
+        // The wand samples a canvas pixel.
+        assert!(validate_selected_plan(&contract_plan("select.magicWand", json!({"x": 400, "y": 20})), &contract_scene()).is_err());
+        // A lasso is a polygon: three points minimum.
+        assert!(validate_selected_plan(&contract_plan("select.lasso", json!({"points": [[0, 0], [1, 1]]})), &contract_scene()).is_err());
+        // detectFaces is refused by the engine command itself, so the key is not admitted.
+        assert!(validate_selected_plan(&contract_plan("select.colorRange", json!({"select": "skinTones", "detectFaces": true})), &contract_scene()).is_err());
+        // The modify family and grow/similar need a live selection when they run.
+        assert!(validate_selected_plan(&contract_plan("select.modify.smooth", json!({"radius": 2})), &contract_scene()).is_err());
+        let mut plan = contract_plan("select.all", json!({}));
+        plan.steps.push(PlanStep { command: "select.deselect".into(), params: json!({}), description: "fixture".into() });
+        plan.steps.push(PlanStep { command: "select.grow".into(), params: json!({"tolerance": 5}), description: "fixture".into() });
+        assert!(validate_selected_plan(&plan, &contract_scene()).is_err());
     }
 
     #[test]
