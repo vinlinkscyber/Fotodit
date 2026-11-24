@@ -1412,6 +1412,8 @@ fn selected_contract_prompt(intent: &EditingIntent, scene: &VisualScene, image: 
 /// plan steps - an explicit design choice to keep plans effect-only).
 const SELECTED_COMMANDS: &[&str] = &["file.new", "type.create", "type.edit", "type.setStyle",
     "layer.newFillLayer.solidColor", "layer.newFillLayer.gradient",
+    "type.orientation.horizontal", "type.orientation.vertical",
+    "type.convertToParagraphText", "type.convertToPointText", "type.rasterize", "type.warpText",
     "layer.newAdjustmentLayer.brightnessContrast",
     "layer.newAdjustmentLayer.vibrance", "layer.newAdjustmentLayer.hueSaturation",
     "layer.newAdjustmentLayer.levels", "layer.newAdjustmentLayer.colorBalance",
@@ -1511,6 +1513,10 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
     // this plan's steps (mirrors `hidden`): delete/apply only target a layer
     // that actually carries a mask.
     let mut masked: Vec<u64> = scene.layers.iter().filter(|l| l.has_mask).map(|l| l.id).collect();
+    // Type layers this plan has rasterized: the scene's kind string is
+    // pre-plan, so type-only steps after a rasterize must fail and
+    // pixel-only steps must pass.
+    let mut rasterized: Vec<u64> = Vec::new();
     let mut masked_created: Vec<usize> = Vec::new();
     // Live pixel selection, starting from the pre-plan scene; selection steps
     // update it so selection-dependent steps validate against the state they
@@ -1541,6 +1547,9 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
                 // mirrors the GUI's selected Type layers, which a plan has no
                 // equivalent of, and metricsAsShown involves transform-scale
                 // semantics the scene does not carry.
+                "type.orientation.horizontal" | "type.orientation.vertical"
+                | "type.convertToParagraphText" | "type.convertToPointText" | "type.rasterize" => vec!["layer"],
+                "type.warpText" => vec!["layer", "style", "orientation", "bend", "horizontalDistortion", "verticalDistortion"],
                 "type.setStyle" => vec!["layer", "range", "size", "color",
                     "font", "fontStyle", "weight", "italic", "tracking", "leading", "baselineShift",
                     "horizontalScale", "verticalScale", "underline", "strikethrough", "fauxBold", "fauxItalic",
@@ -1728,7 +1737,7 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
         if matches!(step.command.as_str(), "type.edit" | "type.setStyle") {
             match layer_ref(map.get("layer")).ok_or_else(refuse)? {
                 LayerRef::Existing(id) => {
-                    if hidden.contains(&id)
+                    if hidden.contains(&id) || rasterized.contains(&id)
                         || !scene.layers.iter().any(|l| l.id == id && l.kind == "Type" && l.is_visible) { return Err(refuse()); }
                 }
                 LayerRef::Created(n) => {
@@ -1782,12 +1791,53 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
             }
             if !["dx", "dy", "scaleX", "scaleY", "rotate"].iter().any(|k| map.contains_key(*k)) { return Err(refuse()); }
         }
+        // Type structure commands: orientation, point/paragraph conversion
+        // and warping all target a live type layer (the scene cannot tell
+        // point text from paragraph text, so a conversion that does not
+        // apply fails truthfully at execution).
+        if matches!(step.command.as_str(), "type.orientation.horizontal" | "type.orientation.vertical"
+            | "type.convertToParagraphText" | "type.convertToPointText" | "type.warpText") {
+            match layer_ref(map.get("layer")).ok_or_else(refuse)? {
+                LayerRef::Existing(id) => {
+                    if hidden.contains(&id) || rasterized.contains(&id)
+                        || !scene.layers.iter().any(|l| l.id == id && l.kind == "Type" && l.is_visible) { return Err(refuse()); }
+                }
+                LayerRef::Created(n) => {
+                    if n >= pos || hidden_created.contains(&n)
+                        || created_at(&created, n) != Some(CreatedKind::Type) { return Err(refuse()); }
+                }
+            }
+        }
+        if step.command == "type.warpText" {
+            if map.get("style").is_some_and(|v| !matches!(v.as_str(), Some("none" | "arc" | "arcLower" | "arcUpper" | "arch" | "bulge"
+                | "shellLower" | "shellUpper" | "flag" | "wave" | "fish" | "rise" | "fisheye" | "inflate" | "squeeze" | "twist"))) { return Err(refuse()); }
+            if map.get("orientation").is_some_and(|v| !matches!(v.as_str(), Some("horizontal" | "vertical"))) { return Err(refuse()); }
+            for key in ["bend", "horizontalDistortion", "verticalDistortion"] {
+                if map.get(key).is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (-100.0..=100.0).contains(&x))) { return Err(refuse()); }
+            }
+        }
+        // Rasterize turns a type layer into pixel content: tracked so later
+        // type-only steps fail and pixel-only steps pass. A plan-created
+        // layer's post-rasterize kind cannot be modeled by the created-kind
+        // tracking, so created refs are refused.
+        if step.command == "type.rasterize" {
+            match layer_ref(map.get("layer")).ok_or_else(refuse)? {
+                LayerRef::Existing(id) => {
+                    if hidden.contains(&id) || rasterized.contains(&id)
+                        || !scene.layers.iter().any(|l| l.id == id && l.kind == "Type" && l.is_visible) { return Err(refuse()); }
+                    rasterized.push(id);
+                }
+                LayerRef::Created(_) => return Err(refuse()),
+            }
+        }
         if step.command == "layer.removeBackground" {
             if let Some(value) = map.get("layer") {
                 match layer_ref(Some(value)).ok_or_else(refuse)? {
                     LayerRef::Existing(id) => {
-                        if hidden.contains(&id) || !scene.layers.iter()
-                            .any(|l| l.id == id && l.is_visible && matches!(l.kind.as_str(), "Pixel" | "Raster")) { return Err(refuse()); }
+                        // A type layer rasterized by an earlier step is pixel
+                        // content now, whatever the pre-plan scene says.
+                        if hidden.contains(&id) || !(rasterized.contains(&id) || scene.layers.iter()
+                            .any(|l| l.id == id && l.is_visible && matches!(l.kind.as_str(), "Pixel" | "Raster"))) { return Err(refuse()); }
                     }
                     // Only a pixel copy qualifies; fill, adjustment and type
                     // layers are not pixel content the subject finder can mask.
@@ -2422,6 +2472,37 @@ mod tests {
             plan.steps.push(PlanStep { command: command.into(), params, description: "fixture".into() });
         }
         assert!(validate_selected_plan(&plan, &contract_scene()).is_ok());
+    }
+
+    #[test]
+    fn selected_plan_admits_type_structure_commands_within_contract() {
+        assert!(validate_selected_plan(&contract_plan("type.orientation.vertical", json!({"layer": 9})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("type.warpText", json!({"layer": 9, "style": "arc", "bend": 30})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("type.convertToParagraphText", json!({"layer": 9})), &contract_scene()).is_ok());
+        // A created type layer can be warped by reference.
+        let mut plan = contract_plan("type.create", json!({"x": 10, "y": 40, "text": "Title", "size": 24}));
+        plan.steps.push(PlanStep { command: "type.warpText".into(), params: json!({"layer": {"$step": 1}, "style": "wave"}), description: "fixture".into() });
+        assert!(validate_selected_plan(&plan, &contract_scene()).is_ok());
+        // Rasterized type is pixel content for what follows.
+        let mut plan = contract_plan("type.rasterize", json!({"layer": 9}));
+        plan.steps.push(PlanStep { command: "layer.removeBackground".into(), params: json!({"layer": 9}), description: "fixture".into() });
+        assert!(validate_selected_plan(&plan, &contract_scene()).is_ok());
+    }
+
+    #[test]
+    fn selected_plan_refuses_type_structure_commands_outside_contract() {
+        // Type-only steps fail after the layer was rasterized.
+        let mut plan = contract_plan("type.rasterize", json!({"layer": 9}));
+        plan.steps.push(PlanStep { command: "type.edit".into(), params: json!({"layer": 9, "text": "New"}), description: "fixture".into() });
+        assert!(validate_selected_plan(&plan, &contract_scene()).is_err());
+        // Rasterize needs a type layer, once.
+        assert!(validate_selected_plan(&contract_plan("type.rasterize", json!({"layer": 7})), &contract_scene()).is_err());
+        let mut plan = contract_plan("type.rasterize", json!({"layer": 9}));
+        plan.steps.push(PlanStep { command: "type.rasterize".into(), params: json!({"layer": 9}), description: "fixture".into() });
+        assert!(validate_selected_plan(&plan, &contract_scene()).is_err());
+        assert!(validate_selected_plan(&contract_plan("type.warpText", json!({"layer": 9, "style": "spiral"})), &contract_scene()).is_err());
+        assert!(validate_selected_plan(&contract_plan("type.warpText", json!({"layer": 9, "bend": 150})), &contract_scene()).is_err());
+        assert!(validate_selected_plan(&contract_plan("type.warpText", json!({"layer": 7, "style": "arc"})), &contract_scene()).is_err());
     }
 
     #[test]
