@@ -682,7 +682,7 @@ pub enum PlanResponse {
 /// Discovery is the contract prompt's observations_available list; anything
 /// outside this set is refused at parse, and execution stays on the admitted
 /// menu path. Filesystem, network and asset commands are never observations.
-pub const OBSERVATION_COMMANDS: &[&str] = &["image.detectFaces", "image.analysis.pixelDigest", "gradient.fill.get", "scene.layers", "contract.describe"];
+pub const OBSERVATION_COMMANDS: &[&str] = &["image.detectFaces", "image.analysis.pixelDigest", "image.analysis.colorStats", "gradient.fill.get", "scene.layers", "contract.describe"];
 
 /// Explicit request budget: at most this many observation rounds per goal,
 /// shared by the first plan and the one structured correction. Total
@@ -1319,10 +1319,26 @@ impl AiProviderBridge {
                         "layer" => v.as_u64().is_some(),
                         _ => false,
                     }),
-                    _ => map.iter().any(|(k, v)| !match k.as_str() {
+                    "image.analysis.pixelDigest" => {
+                        // Optional exact region: all four of x/y/width/height
+                        // or none (the whole canvas).
+                        let region = ["x", "y", "width", "height"].iter().filter(|k| map.contains_key(**k)).count();
+                        (region != 0 && region != 4) || map.iter().any(|(k, v)| !match k.as_str() {
+                            "maxPixels" => v.as_u64().is_some_and(|x| (1..=4_000_000).contains(&x)),
+                            "x" | "y" => v.as_i64().is_some(),
+                            "width" | "height" => v.as_u64().is_some_and(|n| (1..=4_000_000).contains(&n)),
+                            _ => false,
+                        })
+                    }
+                    "image.analysis.colorStats" => map.iter().any(|(k, v)| !match k.as_str() {
+                        // Selection-aware colour measurement: dominant/mean
+                        // colour of the active selection (or canvas when
+                        // nothing is selected).
                         "maxPixels" => v.as_u64().is_some_and(|x| (1..=4_000_000).contains(&x)),
+                        "maxColors" => v.as_u64().is_some_and(|x| (1..=16).contains(&x)),
                         _ => false,
                     }),
+                    _ => true,
                 };
                 if bad { return Err(invalid()); }
                 parsed.push(ObservationRequest { command: command.into(), params });
@@ -1453,7 +1469,8 @@ fn selected_contract_prompt(intent: &EditingIntent, scene: &VisualScene, image: 
     // return as `measurements` with the single replanning request.
     request_json["observations_available"] = json!([
         {"command":"image.detectFaces","params":"{minScore:number 0..1 optional, sampleAllLayers:bool optional}","returns":"face rectangles with scores and landmarks; detections carry detector uncertainty and are never identities"},
-        {"command":"image.analysis.pixelDigest","params":"{maxPixels:integer 1..4000000 optional}","returns":"a bounded statistical digest of the composite pixels"},
+        {"command":"image.analysis.pixelDigest","params":"{maxPixels:integer 1..4000000 optional; x,y,width,height optional all-or-none exact region}","returns":"a bounded statistical digest of the composite pixels"},
+        {"command":"image.analysis.colorStats","params":"{maxPixels:integer 1..4000000 optional, maxColors:integer 1..16 optional}","returns":"dominant and mean colours of the active selection (or the canvas when nothing is selected)"},
         {"command":"gradient.fill.get","params":"{layer:integer id optional, default the active layer}","returns":"the current gradient fill settings: style, angle, scale, stops, transparency, midpoints"},
         {"command":"scene.layers","params":"one mode: {ids:array of 1..8 layer ids} | {name:substring} | {parent:group layer id} | {offset:int, limit:int 1..32}","returns":"ids mode: full per-layer scene entries (unknown ids under missing); the other modes: compact id/name/kind/parent/depth entries so layers cut from the scene list, grouped or off-page stay discoverable"},
         {"command":"contract.describe","params":"{commands:array of 1..12 ids from command_index; at most 12 described ids per round}","returns":"the full engine parameter schemas for those commands"}
@@ -3670,12 +3687,24 @@ mod tests {
             }
             other => panic!("expected observation request, got {other:?}"),
         }
+        // colourStats and region digests parse with validated params.
+        for good in [
+            json!({"observe":[{"command":"image.analysis.colorStats","params":{"maxColors":8}}],"steps":[]}),
+            json!({"observe":[{"command":"image.analysis.pixelDigest","params":{"x":10,"y":10,"width":200,"height":100}}],"steps":[]}),
+        ] {
+            match bridge.parse_plan_json(&good.to_string(), &intent).unwrap() {
+                PlanResponse::Observe(_) => {}
+                other => panic!("expected observation request, got {other:?}"),
+            }
+        }
         // Unknown commands, plan+observe mixes, oversized rounds and bad
         // params are all refused whole.
         for bad in [
             json!({"observe":[{"command":"asset.import","params":{}}],"steps":[]}),
             json!({"observe":[{"command":"image.detectFaces","params":{"minScore":2}}],"steps":[]}),
             json!({"observe":[{"command":"image.analysis.pixelDigest","params":{"maxPixels":9000000}}],"steps":[]}),
+            json!({"observe":[{"command":"image.analysis.pixelDigest","params":{"x":0,"y":0}}],"steps":[]}),
+            json!({"observe":[{"command":"image.analysis.colorStats","params":{"maxColors":17}}],"steps":[]}),
             json!({"observe":[{"command":"image.detectFaces"}],"steps":[{"command":"select.all","params":{}}]}),
             json!({"observe":[{"command":"image.detectFaces"},{"command":"image.detectFaces"},{"command":"image.detectFaces"},{"command":"image.detectFaces"}],"steps":[]}),
         ] { assert!(bridge.parse_plan_json(&bad.to_string(), &intent).is_err()); }
