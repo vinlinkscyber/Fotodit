@@ -1438,6 +1438,8 @@ const SELECTED_COMMANDS: &[&str] = &["file.new", "type.create", "type.edit", "ty
     "select.grow", "select.similar",
     "select.subject", "select.object", "select.sky", "select.focusArea", "select.loadLuminosity",
     "select.transformSelection", "select.refineEdge",
+    "select.quick", "select.magneticLasso",
+    "select.float", "select.drop", "select.reselect",
     "edit.transform", "layer.removeBackground",
     "edit.fill", "edit.stroke", "image.autoTone", "image.autoContrast", "image.autoColor"];
 
@@ -1577,6 +1579,14 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
     // update it so selection-dependent steps validate against the state they
     // would actually meet.
     let mut sel = scene.has_selection;
+    // True once an earlier step of this plan created a selection: reselect
+    // restores the most recent selection from history, so it is admitted only
+    // with a known in-plan antecedent, never a pre-plan UI one.
+    let mut had_plan_selection = false;
+    // A floated piece (select.float) survives only float/drop; any other
+    // command drops it (engine float_cmds keeps_floating). A plan may not end
+    // with a piece still floating.
+    let mut floating = false;
     // Resolves a reference for scene checks: visibility and kind of the
     // referred layer, whether existing or plan-created. Backward-only
     // references make cyclic plans impossible by construction.
@@ -1675,6 +1685,10 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
                 "select.loadLuminosity" => vec![],
                 // Warp meshes (style/mesh/grid keys) are not admitted.
                 "select.transformSelection" => vec!["rect", "quad", "corners", "matrix", "scaleX", "scaleY", "rotate", "skewX", "skewY", "dx", "dy", "stepName", "reference", "interpolation"],
+                "select.quick" => vec!["points", "size", "mode", "sampleAllLayers", "enhanceEdge"],
+                "select.magneticLasso" => vec!["points", "width", "contrast", "close", "trace", "mode", "antiAlias", "feather"],
+                "select.float" => vec!["dx", "dy", "copy", "stepName", "target"],
+                "select.drop" | "select.reselect" => vec![],
                 // Only the outputs that keep the plan in this document and on
                 // provable targets: selection (default) and layerMask (active
                 // layer). newLayer/newDocument outputs are refused.
@@ -2361,15 +2375,38 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
         if step.command == "select.refineEdge" && !sel
             && !scene.active_layer_id.is_some_and(|a| masked.contains(&a)) { return Err(refuse()); }
         if matches!(step.command.as_str(), "layer.layerMask.revealSelection" | "layer.layerMask.hideSelection") && !sel { return Err(refuse()); }
+        // select.float needs a live selection and the scene's active pixel
+        // layer unless a piece already floats (then it just moves further).
+        if step.command == "select.float" && !floating {
+            let pixel_active = scene.active_layer_id.and_then(|a| scene.layers.iter().find(|l| l.id == a))
+                .is_some_and(|l| matches!(l.kind.as_str(), "Pixel" | "Raster"));
+            if !sel || active_changed || !pixel_active { return Err(refuse()); }
+        }
+        // select.reselect restores the most recent selection from history:
+        // refused while a selection is live (the engine errors then) and
+        // without an in-plan antecedent (else it revives unknown UI state).
+        if step.command == "select.reselect" && (sel || !had_plan_selection) { return Err(refuse()); }
+        // A floated piece is dropped by any command but float/drop (engine
+        // keeps_floating); model the auto-drop before this step's effects.
+        if !matches!(step.command.as_str(), "select.float" | "select.drop") { floating = false; }
+        let had_sel = sel;
         match step.command.as_str() {
             "select.all" | "select.rect" | "select.loadLuminosity" => sel = true,
             // A subtract/intersect pick on no selection yields no selection;
             // only replace/add (or an existing pick) leave one live.
-            "select.magicWand" | "select.lasso" | "select.colorRange"
+            "select.magicWand" | "select.lasso" | "select.colorRange" | "select.magneticLasso"
             | "select.subject" | "select.object" | "select.sky" | "select.focusArea" => {
                 let mode = map.get("mode").and_then(Value::as_str).unwrap_or("replace");
                 sel = matches!(mode, "replace" | "add") || sel;
             }
+            // Quick Selection's default mode is add, unlike the other pickers.
+            "select.quick" => {
+                let mode = map.get("mode").and_then(Value::as_str).unwrap_or("add");
+                sel = matches!(mode, "replace" | "add") || sel;
+            }
+            "select.float" => floating = true,
+            "select.drop" => floating = false,
+            "select.reselect" => sel = true,
             "select.deselect" => sel = false,
             // The engine drops the selection once it becomes a mask (Photoshop).
             "layer.layerMask.revealSelection" | "layer.layerMask.hideSelection" => sel = false,
@@ -2385,6 +2422,7 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
             }
             _ => {}
         }
+        if sel && !had_sel { had_plan_selection = true; }
         // layer.translate: an explicit whole-pixel offset, both axes required.
         if step.command == "layer.translate"
             && (map.get("dx").and_then(Value::as_i64).is_none() || map.get("dy").and_then(Value::as_i64).is_none()) { return Err(refuse()); }
@@ -2608,6 +2646,38 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
             if map.get("tolerance").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (0.0..=255.0).contains(&x))) { return Err(refuse()); }
             if map.get("sampleAllLayers").is_some_and(|v| !v.is_boolean()) { return Err(refuse()); }
         }
+        if step.command == "select.quick" {
+            // Seeds sample canvas pixels, so they sit inside it (as the wand).
+            let point_ok = |p: &Value| p.as_array().is_some_and(|pt| pt.len() == 2
+                && pt[0].as_i64().is_some_and(|v| v >= 0 && v < i64::from(width))
+                && pt[1].as_i64().is_some_and(|v| v >= 0 && v < i64::from(height)));
+            if !map.get("points").is_some_and(|v| v.as_array().is_some_and(|a| (1..=64).contains(&a.len()) && a.iter().all(point_ok))) { return Err(refuse()); }
+            if map.get("size").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (1.0..=5000.0).contains(&x))) { return Err(refuse()); }
+            if map.get("mode").is_some_and(|v| !matches!(v.as_str(), Some("add" | "subtract" | "replace"))) { return Err(refuse()); }
+            for key in ["sampleAllLayers", "enhanceEdge"] {
+                if map.get(key).is_some_and(|v| !v.is_boolean()) { return Err(refuse()); }
+            }
+        }
+        if step.command == "select.magneticLasso" {
+            // Fastening points trace an outline: at least three, generously
+            // bounded like the lasso's polygon points.
+            let point_ok = |p: &Value| p.as_array().is_some_and(|pt| pt.len() == 2
+                && pt.iter().all(|c| c.as_f64().is_some_and(|x| x.is_finite() && (-1_000_000.0..=1_000_000.0).contains(&x))));
+            if !map.get("points").is_some_and(|v| v.as_array().is_some_and(|a| (3..=256).contains(&a.len()) && a.iter().all(point_ok))) { return Err(refuse()); }
+            if map.get("width").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (1.0..=256.0).contains(&x))) { return Err(refuse()); }
+            if map.get("contrast").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (1.0..=100.0).contains(&x))) { return Err(refuse()); }
+            if map.get("close").is_some_and(|v| !matches!(v.as_str(), Some("magnetic" | "straight"))) { return Err(refuse()); }
+            if map.get("trace").is_some_and(|v| !v.is_boolean()) || map.get("antiAlias").is_some_and(|v| !v.is_boolean()) { return Err(refuse()); }
+            if map.get("feather").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (0.0..=1000.0).contains(&x))) { return Err(refuse()); }
+            if map.get("mode").is_some_and(|v| !matches!(v.as_str(), Some("replace" | "add" | "subtract" | "intersect"))) { return Err(refuse()); }
+        }
+        if step.command == "select.float" {
+            if map.get("dx").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && x.abs() <= 1.0e7))
+                || map.get("dy").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && x.abs() <= 1.0e7)) { return Err(refuse()); }
+            if map.get("copy").is_some_and(|v| !v.is_boolean()) { return Err(refuse()); }
+            if map.get("stepName").is_some_and(|v| !v.as_str().is_some_and(|s| !s.is_empty() && s.chars().count() <= 64)) { return Err(refuse()); }
+            if map.get("target").is_some_and(|v| !matches!(v.as_str(), Some("pixels" | "mask"))) { return Err(refuse()); }
+        }
         if step.command == "select.rect" {
             if map.get("x").and_then(Value::as_i64).is_none() || map.get("y").and_then(Value::as_i64).is_none()
                 || !map.get("width").and_then(Value::as_u64).is_some_and(|v| v >= 1)
@@ -2621,6 +2691,9 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
             if map.get(key).is_some_and(|v| v.as_i64().is_none()) { return Err(refuse()); }
         }
     }
+    // A plan may not leave a piece floating: execution would hold the
+    // document mid-move until the next command drops it.
+    if floating { return Err(refuse()); }
     Ok(())
 }
 
@@ -2846,6 +2919,48 @@ mod tests {
             plan.steps.push(PlanStep { command: command.into(), params, description: "fixture".into() });
         }
         assert!(validate_selected_plan(&plan, &contract_scene()).is_ok());
+    }
+
+    #[test]
+    fn selected_plan_admits_quick_magnetic_float_and_reselect_within_contract() {
+        // Quick Selection: canvas-bounded seeds; the default add mode leaves
+        // a selection the next selection-dependent step can use.
+        let mut plan = contract_plan("select.quick", json!({"points": [[10, 20]], "size": 40, "enhanceEdge": true}));
+        plan.steps.push(PlanStep { command: "select.modify.expand".into(), params: json!({"radius": 2}), description: "fixture".into() });
+        assert!(validate_selected_plan(&plan, &contract_scene()).is_ok());
+        // Magnetic Lasso: three or more fastening points, traced params.
+        assert!(validate_selected_plan(&contract_plan("select.magneticLasso",
+            json!({"points": [[0, 0], [100, 0], [50, 80]], "width": 12, "contrast": 20, "close": "straight", "trace": false, "feather": 1})), &contract_scene()).is_ok());
+        // Float/drop as a cut-move pair on the active pixel layer.
+        let mut plan = contract_plan("select.rect", json!({"x": 0, "y": 0, "width": 10, "height": 10}));
+        plan.steps.push(PlanStep { command: "select.float".into(), params: json!({"dx": 5, "dy": -3}), description: "fixture".into() });
+        plan.steps.push(PlanStep { command: "select.drop".into(), params: json!({}), description: "fixture".into() });
+        assert!(validate_selected_plan(&plan, &contract_scene()).is_ok());
+        // Reselect after an in-plan selection was dropped.
+        let mut plan = contract_plan("select.all", json!({}));
+        plan.steps.push(PlanStep { command: "select.deselect".into(), params: json!({}), description: "fixture".into() });
+        plan.steps.push(PlanStep { command: "select.reselect".into(), params: json!({}), description: "fixture".into() });
+        assert!(validate_selected_plan(&plan, &contract_scene()).is_ok());
+        for (name, plan) in [
+            ("quick seeds off-canvas", contract_plan("select.quick", json!({"points": [[400, 20]]}))),
+            ("quick needs points", contract_plan("select.quick", json!({"points": []}))),
+            ("quick size out of range", contract_plan("select.quick", json!({"points": [[1, 1]], "size": 6000}))),
+            ("quick mode enum", contract_plan("select.quick", json!({"points": [[1, 1]], "mode": "intersect"}))),
+            ("magnetic needs 3 points", contract_plan("select.magneticLasso", json!({"points": [[0, 0], [1, 1]]}))),
+            ("magnetic width range", contract_plan("select.magneticLasso", json!({"points": [[0,0],[1,0],[0,1]], "width": 300}))),
+            ("float without selection", contract_plan("select.float", json!({"dx": 1}))),
+            ("reselect without antecedent", contract_plan("select.reselect", json!({}))),
+        ] {
+            assert!(validate_selected_plan(&plan, &contract_scene()).is_err(), "{name}");
+        }
+        // A plan may not end with a piece still floating.
+        let mut plan = contract_plan("select.rect", json!({"x": 0, "y": 0, "width": 10, "height": 10}));
+        plan.steps.push(PlanStep { command: "select.float".into(), params: json!({"copy": true}), description: "fixture".into() });
+        assert!(validate_selected_plan(&plan, &contract_scene()).is_err(), "undropped float");
+        // Reselect refused while a selection is live (the engine errors then).
+        let mut plan = contract_plan("select.all", json!({}));
+        plan.steps.push(PlanStep { command: "select.reselect".into(), params: json!({}), description: "fixture".into() });
+        assert!(validate_selected_plan(&plan, &contract_scene()).is_err(), "reselect over live selection");
     }
 
     #[test]
