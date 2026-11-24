@@ -60,9 +60,14 @@ pub trait LiveEditSession {
     /// - `max_pixels` caps the composite render work of one capture;
     ///   implementations must pass it through and must not exceed it. The digest
     ///   bounds the composite buffer only; renderer-internal intermediates and
-    ///   wall-clock time remain governed by the renderer.
-    fn visual_digest(&mut self, max_pixels: u64) -> Option<Result<Value, String>> {
-        let _ = max_pixels;
+    ///   wall-clock time remain governed by the renderer;
+    /// - `region` is an exact `[x, y, width, height]` canvas rect for the
+    ///   engine's region digest: measured before/after criteria compare
+    ///   digests over a known target region and known protected regions,
+    ///   which a sampled whole-canvas digest cannot prove. `None` keeps the
+    ///   whole-canvas capture.
+    fn visual_digest(&mut self, max_pixels: u64, region: Option<[i64; 4]>) -> Option<Result<Value, String>> {
+        let _ = (max_pixels, region);
         None
     }
 }
@@ -77,10 +82,14 @@ impl LiveEditSession for Headless {
         Headless::command_run(self, command, params)
     }
 
-    fn visual_digest(&mut self, max_pixels: u64) -> Option<Result<Value, String>> {
+    fn visual_digest(&mut self, max_pixels: u64, region: Option<[i64; 4]>) -> Option<Result<Value, String>> {
         // The same admitted path as every other command (see above): admission,
         // job synchronization and cache cleanup are preserved. `image.analysis.pixelDigest`
         // is read-only and non-journaling.
-        Some(Headless::command_run(self, "image.analysis.pixelDigest", serde_json::json!({"maxPixels": max_pixels})).map_err(|e| e.to_string()))
+        let params = match region {
+            Some([x, y, width, height]) => serde_json::json!({"maxPixels": max_pixels, "x": x, "y": y, "width": width, "height": height}),
+            None => serde_json::json!({"maxPixels": max_pixels}),
+        };
+        Some(Headless::command_run(self, "image.analysis.pixelDigest", params).map_err(|e| e.to_string()))
     }
 }

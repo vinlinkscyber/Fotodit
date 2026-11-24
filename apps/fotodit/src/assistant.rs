@@ -38,11 +38,15 @@ impl LiveEditSession for GuiSession<'_> {
         fotodit_ui_egui::menus::invoke_completed(self.app, self.ctx, command, params).map_err(AutomationError::App)
     }
 
-    fn visual_digest(&mut self, max_pixels: u64) -> Option<Result<serde_json::Value, String>> {
+    fn visual_digest(&mut self, max_pixels: u64, region: Option<[i64; 4]>) -> Option<Result<serde_json::Value, String>> {
         // The same admitted menu path as every editing command: authorization
         // and discard interception are preserved exactly, and a refusal is
         // reported as capture failure - never bypassed.
-        Some(fotodit_ui_egui::menus::invoke_completed(self.app, self.ctx, "image.analysis.pixelDigest", serde_json::json!({"maxPixels": max_pixels})))
+        let params = match region {
+            Some([x, y, width, height]) => serde_json::json!({"maxPixels": max_pixels, "x": x, "y": y, "width": width, "height": height}),
+            None => serde_json::json!({"maxPixels": max_pixels}),
+        };
+        Some(fotodit_ui_egui::menus::invoke_completed(self.app, self.ctx, "image.analysis.pixelDigest", params))
     }
 }
 

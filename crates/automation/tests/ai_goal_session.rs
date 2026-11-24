@@ -106,7 +106,7 @@ impl LiveEditSession for Host {
             _ => Ok(json!({})),
         }
     }
-    fn visual_digest(&mut self, _max_pixels: u64) -> Option<Result<Value, String>> {
+    fn visual_digest(&mut self, _max_pixels: u64, _region: Option<[i64; 4]>) -> Option<Result<Value, String>> {
         if self.mode == Mode::DigestPending {
             Some(Ok(json!({"pending": true, "job": 9})))
         } else if self.mode == Mode::DigestChanges {

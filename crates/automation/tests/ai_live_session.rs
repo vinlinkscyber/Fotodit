@@ -45,7 +45,7 @@ impl LiveEditSession for MockSession {
         Ok(self.document.clone())
     }
 
-    fn visual_digest(&mut self, _max_pixels: u64) -> Option<Result<Value, String>> {
+    fn visual_digest(&mut self, _max_pixels: u64, _region: Option<[i64; 4]>) -> Option<Result<Value, String>> {
         if self.digest_script.is_empty() {
             // No-capability host: the trait default, exercised on purpose.
             return None;
@@ -314,7 +314,7 @@ impl LiveEditSession for BorrowedTestSession<'_> {
         self.session.execute(command, params).map_err(AutomationError::from)
     }
 
-    fn visual_digest(&mut self, max_pixels: u64) -> Option<Result<Value, String>> {
+    fn visual_digest(&mut self, max_pixels: u64, _region: Option<[i64; 4]>) -> Option<Result<Value, String>> {
         // Source-positive admitted path: exactly the same authorization gates as
         // any other command, including a custom Session.authorize hook.
         Some(self.command_run("image.analysis.pixelDigest", json!({"maxPixels": max_pixels})).map_err(|e| e.to_string()))
@@ -823,8 +823,8 @@ fn headless_visual_evidence_reflects_real_pixel_changes() {
     assert!(result.is_success);
     let visual = &evidence.steps[0].visual;
     assert_eq!(visual.class, VisualEvidenceClass::Changed, "{}", visual.detail);
-    let first = LiveEditSession::visual_digest(&mut headless, 4_000_000).unwrap().unwrap();
-    let second = LiveEditSession::visual_digest(&mut headless, 4_000_000).unwrap().unwrap();
+    let first = LiveEditSession::visual_digest(&mut headless, 4_000_000, None).unwrap().unwrap();
+    let second = LiveEditSession::visual_digest(&mut headless, 4_000_000, None).unwrap().unwrap();
     assert_eq!(first["digest"], second["digest"]);
     assert_eq!(first["schema"], json!(1));
     assert_eq!(first["hash"], json!("fnv1a64"));
@@ -847,7 +847,7 @@ fn paint(session: &mut Session, x0: i32, y0: i32, x1: i32, y1: i32, rgba: [f32; 
 
 fn real_digest(session: &mut Session) -> String {
     let mut host = BorrowedTestSession { session };
-    let value = host.visual_digest(4_000_000).unwrap().unwrap();
+    let value = host.visual_digest(4_000_000, None).unwrap().unwrap();
     value["digest"].as_str().unwrap().to_string()
 }
 

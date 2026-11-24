@@ -360,9 +360,9 @@ impl<S: LiveEditSession + ?Sized> LiveEditSession for GoalHost<'_, S> {
         result
     }
 
-    fn visual_digest(&mut self, max_pixels: u64) -> Option<Result<Value, String>> {
+    fn visual_digest(&mut self, max_pixels: u64, region: Option<[i64; 4]>) -> Option<Result<Value, String>> {
         if let Err(error) = self.inspect_active() { return Some(Err(error.to_string())); }
-        let result = self.inner.visual_digest(max_pixels);
+        let result = self.inner.visual_digest(max_pixels, region);
         self.calls.push(GoalCommandRecord { command: "visual_digest".into(),
             output: result.as_ref().and_then(|result| result.as_ref().ok().cloned()),
             error: result.as_ref().and_then(|result| result.as_ref().err().cloned()), observation: true });

@@ -173,6 +173,10 @@ struct DigestMark {
     /// different but numerically identical digests (e.g. case differences)
     /// can never register as a change.
     digest: u64,
+    /// Canvas origin of the captured region; (0, 0) for a whole-canvas
+    /// capture. Digests are only ever compared over an identical rect.
+    x: i64,
+    y: i64,
     width: u64,
     height: u64,
     stride: u64,
@@ -234,13 +238,13 @@ impl ExecutionEngine {
     /// failed the fixed-schema validation below. Never fails the step it
     /// observes. The hook contract forbids mutation and requires the active
     /// document to be preserved (see `LiveEditSession::visual_digest`).
-    fn capture_digest<S: LiveEditSession + ?Sized>(session: &mut S) -> Result<Option<DigestMark>, String> {
-        let Some(result) = session.visual_digest(EVIDENCE_MAX_PIXELS) else {
+    fn capture_digest<S: LiveEditSession + ?Sized>(session: &mut S, region: Option<[i64; 4]>) -> Result<Option<DigestMark>, String> {
+        let Some(result) = session.visual_digest(EVIDENCE_MAX_PIXELS, region) else {
             return Ok(None);
         };
         let value = result?;
         let invalid = || "the host's digest output failed schema validation".to_string();
-        if value.get("domain").and_then(Value::as_str) != Some("canvas")
+        if value.get("domain").and_then(Value::as_str) != Some(if region.is_some() { "region" } else { "canvas" })
             || value.get("schema").and_then(Value::as_u64) != Some(1)
             || value.get("hash").and_then(Value::as_str) != Some("fnv1a64")
             || value.get("quantization").and_then(Value::as_str) != Some("8bit/channel")
@@ -256,6 +260,10 @@ impl ExecutionEngine {
         let height = value.get("height").and_then(Value::as_u64).filter(|v| *v >= 1).ok_or_else(invalid)?;
         let stride = value.get("stride").and_then(Value::as_u64).filter(|v| *v >= 1).ok_or_else(invalid)?;
         let sampled = value.get("sampledPixels").and_then(Value::as_u64).ok_or_else(invalid)?;
+        let (x, y) = if region.is_some() {
+            (value.get("x").and_then(Value::as_i64).ok_or_else(invalid)?,
+             value.get("y").and_then(Value::as_i64).ok_or_else(invalid)?)
+        } else { (0, 0) };
         // Declared geometry must not overflow and must stay within the capture
         // budget we requested; actual resource use remains a host precondition
         // (the hook contract), not something this JSON can prove.
@@ -268,7 +276,7 @@ impl ExecutionEngine {
         if cols.checked_mul(rows) != Some(sampled) {
             return Err(invalid());
         }
-        Ok(Some(DigestMark { digest, width, height, stride, sampled }))
+        Ok(Some(DigestMark { digest, x, y, width, height, stride, sampled }))
     }
 
     /// Compare two captures. A dimension change is an observable change of
@@ -277,6 +285,12 @@ impl ExecutionEngine {
     /// differ, so the digests are incomparable and the honest class is
     /// Unknown. Digests are only compared over an identical grid.
     fn compare_digests(before: &DigestMark, after: &DigestMark) -> VisualEvidence {
+        if (before.x, before.y) != (after.x, after.y) {
+            return VisualEvidence {
+                class: VisualEvidenceClass::Unknown,
+                detail: "the capture origins differ; the digests cover different regions and are not comparable".into(),
+            };
+        }
         if (before.width, before.height) != (after.width, after.height) {
             return VisualEvidence {
                 class: VisualEvidenceClass::Changed,
@@ -532,7 +546,7 @@ impl ExecutionEngine {
                         before_note = Some(format!("the plan's visual-evidence capture budget ({EVIDENCE_MAX_CAPTURES}) is exhausted; skipped to bound render cost"));
                     } else {
                         evidence_captures += 1;
-                        match Self::capture_digest(session) {
+                        match Self::capture_digest(session, None) {
                             Ok(Some(mark)) => {
                                 before_digest = Some(mark.clone());
                                 last_digest = Some(mark);
@@ -660,7 +674,7 @@ impl ExecutionEngine {
                                     }
                                 } else {
                                     evidence_captures += 1;
-                                    let after_outcome = Self::capture_digest(session);
+                                    let after_outcome = Self::capture_digest(session, None);
                                     match (before_digest, after_outcome) {
                                         (Some(before), Ok(Some(mark))) => {
                                             last_digest = Some(mark.clone());
