@@ -1433,6 +1433,7 @@ const SELECTED_COMMANDS: &[&str] = &["file.new", "type.create", "type.edit", "ty
     "select.modify.border", "select.modify.smooth", "select.modify.expand",
     "select.modify.contract", "select.modify.feather",
     "select.grow", "select.similar",
+    "select.subject", "select.object", "select.sky", "select.focusArea", "select.loadLuminosity",
     "edit.transform", "layer.removeBackground"];
 
 /// Layer-creating commands whose output a later step of the same plan can
@@ -1574,6 +1575,11 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
                 "select.modify.border" => vec!["radius"],
                 "select.modify.smooth" | "select.modify.expand" | "select.modify.contract" | "select.modify.feather" => vec!["radius", "applyAtCanvasBounds"],
                 "select.grow" | "select.similar" => vec!["tolerance", "sampleAllLayers"],
+                "select.subject" => vec!["sampleAllLayers", "mode"],
+                "select.object" => vec!["rect", "point", "mode", "sampleAllLayers"],
+                "select.sky" => vec!["mode", "sampleAllLayers", "threshold", "softness"],
+                "select.focusArea" => vec!["range", "noise", "sampleAllLayers", "mode"],
+                "select.loadLuminosity" => vec![],
                 "edit.transform" => vec!["layer", "dx", "dy", "scaleX", "scaleY", "rotate", "reference", "interpolation"],
                 "layer.removeBackground" => vec!["layer", "sampleAllLayers", "refine"],
                 _ => return Err(refuse()),
@@ -1587,7 +1593,10 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
             || matches!(step.command.as_str(), "select.all" | "select.deselect" | "select.inverse" | "layer.flattenImage"
                 // groupLayers' no-layer form groups the engine's active layer;
                 // any layer kind may be grouped, so no scene kind proof is due.
-                | "layer.groupLayers");
+                | "layer.groupLayers"
+                // Luminosity selection is parameter-free, and the local
+                // subject/sky/focus pickers all have documented defaults.
+                | "select.loadLuminosity" | "select.subject" | "select.sky" | "select.focusArea");
         if map.is_empty() && !paramless { return Err(refuse()); }
         if let Some(rules) = filter {
             for (key, value) in map {
@@ -1947,10 +1956,11 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
             | "select.grow" | "select.similar") && !sel { return Err(refuse()); }
         if matches!(step.command.as_str(), "layer.layerMask.revealSelection" | "layer.layerMask.hideSelection") && !sel { return Err(refuse()); }
         match step.command.as_str() {
-            "select.all" | "select.rect" => sel = true,
+            "select.all" | "select.rect" | "select.loadLuminosity" => sel = true,
             // A subtract/intersect pick on no selection yields no selection;
             // only replace/add (or an existing pick) leave one live.
-            "select.magicWand" | "select.lasso" | "select.colorRange" => {
+            "select.magicWand" | "select.lasso" | "select.colorRange"
+            | "select.subject" | "select.object" | "select.sky" | "select.focusArea" => {
                 let mode = map.get("mode").and_then(Value::as_str).unwrap_or("replace");
                 sel = matches!(mode, "replace" | "add") || sel;
             }
@@ -2014,6 +2024,35 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
             for key in ["localized", "invert", "sampleAllLayers"] {
                 if map.get(key).is_some_and(|v| !v.is_boolean()) { return Err(refuse()); }
             }
+            if map.get("mode").is_some_and(|v| !matches!(v.as_str(), Some("replace" | "add" | "subtract" | "intersect"))) { return Err(refuse()); }
+        }
+        if step.command == "select.subject" {
+            if map.get("sampleAllLayers").is_some_and(|v| !v.is_boolean()) { return Err(refuse()); }
+            if map.get("mode").is_some_and(|v| !matches!(v.as_str(), Some("replace" | "add" | "subtract" | "intersect"))) { return Err(refuse()); }
+        }
+        if step.command == "select.object" {
+            // Exactly one of rect or point picks the object.
+            let rect_ok = map.get("rect").is_some_and(|v| v.as_array().is_some_and(|a| a.len() == 4
+                && a.iter().all(|c| c.as_i64().is_some_and(|n| n >= 0 && n < 65536))
+                && a[2].as_i64().is_some_and(|w| w >= 1) && a[3].as_i64().is_some_and(|h| h >= 1)));
+            let point_ok = map.get("point").is_some_and(|v| v.as_array().is_some_and(|a| a.len() == 2
+                && a.iter().all(|c| c.as_i64().is_some_and(|n| n >= 0 && n < 65536))));
+            if rect_ok == point_ok { return Err(refuse()); }
+            if map.get("sampleAllLayers").is_some_and(|v| !v.is_boolean()) { return Err(refuse()); }
+            if map.get("mode").is_some_and(|v| !matches!(v.as_str(), Some("replace" | "add" | "subtract" | "intersect"))) { return Err(refuse()); }
+        }
+        if step.command == "select.sky" {
+            for key in ["threshold", "softness"] {
+                if map.get(key).is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (0.0..=100.0).contains(&x))) { return Err(refuse()); }
+            }
+            if map.get("sampleAllLayers").is_some_and(|v| !v.is_boolean()) { return Err(refuse()); }
+            if map.get("mode").is_some_and(|v| !matches!(v.as_str(), Some("replace" | "add" | "subtract" | "intersect"))) { return Err(refuse()); }
+        }
+        if step.command == "select.focusArea" {
+            for key in ["range", "noise"] {
+                if map.get(key).is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (0.0..=1.0).contains(&x))) { return Err(refuse()); }
+            }
+            if map.get("sampleAllLayers").is_some_and(|v| !v.is_boolean()) { return Err(refuse()); }
             if map.get("mode").is_some_and(|v| !matches!(v.as_str(), Some("replace" | "add" | "subtract" | "intersect"))) { return Err(refuse()); }
         }
         if step.command == "select.modify.border"
@@ -2264,6 +2303,32 @@ mod tests {
             plan.steps.push(PlanStep { command: command.into(), params, description: "fixture".into() });
         }
         assert!(validate_selected_plan(&plan, &contract_scene()).is_ok());
+    }
+
+    #[test]
+    fn selected_plan_admits_local_perception_pickers_within_contract() {
+        assert!(validate_selected_plan(&contract_plan("select.subject", json!({})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("select.sky", json!({"threshold": 70, "softness": 20})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("select.focusArea", json!({"range": 0.4})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("select.loadLuminosity", json!({})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("select.object", json!({"rect": [0, 0, 100, 80]})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("select.object", json!({"point": [10, 12]})), &contract_scene()).is_ok());
+        // A subject pick feeds a mask, and the pick consumes the selection.
+        let mut plan = contract_plan("select.subject", json!({}));
+        plan.steps.push(PlanStep { command: "layer.layerMask.revealSelection".into(), params: json!({"layer": 7}), description: "fixture".into() });
+        plan.steps.push(PlanStep { command: "select.modify.smooth".into(), params: json!({"radius": 2}), description: "fixture".into() });
+        assert!(validate_selected_plan(&plan, &contract_scene()).is_err(), "the selection became a mask, so a later modify is refused");
+    }
+
+    #[test]
+    fn selected_plan_refuses_local_perception_pickers_outside_contract() {
+        // Exactly one of rect or point picks the object.
+        assert!(validate_selected_plan(&contract_plan("select.object", json!({})), &contract_scene()).is_err());
+        assert!(validate_selected_plan(&contract_plan("select.object", json!({"rect": [0, 0, 100, 80], "point": [10, 12]})), &contract_scene()).is_err());
+        assert!(validate_selected_plan(&contract_plan("select.object", json!({"rect": [0, 0, 0, 80]})), &contract_scene()).is_err());
+        assert!(validate_selected_plan(&contract_plan("select.sky", json!({"threshold": 120})), &contract_scene()).is_err());
+        assert!(validate_selected_plan(&contract_plan("select.focusArea", json!({"range": 2})), &contract_scene()).is_err());
+        assert!(validate_selected_plan(&contract_plan("select.subject", json!({"mode": "xor"})), &contract_scene()).is_err());
     }
 
     #[test]
