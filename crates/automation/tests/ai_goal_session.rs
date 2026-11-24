@@ -92,6 +92,9 @@ impl LiveEditSession for Host {
         Ok(Some(self.document.clone()))
     }
     fn command_run(&mut self, command: &str, _params: Value) -> Result<Value, AutomationError> {
+        // Read-only measurement probes are not edits: they neither count as
+        // dispatched commands nor mutate the scripted document.
+        if command.starts_with("image.analysis.") { return Ok(json!({})); }
         self.calls.push(command.into());
         if command == "edit.undo" {
             self.document["history"].as_array_mut().unwrap().pop();
