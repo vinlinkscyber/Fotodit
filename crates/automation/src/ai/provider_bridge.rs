@@ -1415,6 +1415,7 @@ const SELECTED_COMMANDS: &[&str] = &["file.new", "type.create", "type.edit", "ty
     "type.orientation.horizontal", "type.orientation.vertical",
     "type.convertToParagraphText", "type.convertToPointText", "type.rasterize", "type.warpText",
     "shape.create", "shape.edit", "shape.rasterize",
+    "gradient.fill.create", "gradient.fill.set",
     "layer.newAdjustmentLayer.brightnessContrast",
     "layer.newAdjustmentLayer.vibrance", "layer.newAdjustmentLayer.hueSaturation",
     "layer.newAdjustmentLayer.levels", "layer.newAdjustmentLayer.colorBalance",
@@ -1454,7 +1455,8 @@ pub(crate) fn is_layer_creating(command: &str) -> bool {
         | "layer.newAdjustmentLayer.exposure" | "layer.newAdjustmentLayer.invert"
         | "layer.newAdjustmentLayer.posterize" | "layer.newAdjustmentLayer.threshold"
         | "layer.newAdjustmentLayer.gradientMap" | "layer.newAdjustmentLayer.channelMixer"
-        | "layer.newAdjustmentLayer.selectiveColor" | "layer.new.group" | "layer.newFillLayer.gradient" | "shape.create")
+        | "layer.newAdjustmentLayer.selectiveColor" | "layer.new.group" | "layer.newFillLayer.gradient" | "shape.create"
+        | "gradient.fill.create")
 }
 
 /// A plan step's reference to a layer: an existing scene layer id, or the
@@ -1485,7 +1487,7 @@ fn layer_ref(value: Option<&Value>) -> Option<LayerRef> {
 
 /// Kind of layer a plan step creates, for kind-checked intra-plan references.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CreatedKind { Type, Pixel, Other }
+enum CreatedKind { Type, Pixel, GradientFill, Other }
 
 /// Blend modes the provider contract admits for `layer.setProps` (engine
 /// `blend_from_str` accepts more; the contract stays a reviewed subset).
@@ -1559,6 +1561,9 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
                 "shape.edit" => vec!["layer", "kind", "rect", "radii", "sides", "starRatio", "cornerRadius", "from", "to", "weight",
                     "arrowStart", "arrowEnd", "arrowWidth", "arrowLength", "arrowConcavity", "move", "transform", "fillRule", "fill", "stroke", "name"],
                 "shape.rasterize" => vec!["layer"],
+                // The preset-name gradient key is an asset reference: not admitted.
+                "gradient.fill.create" => vec!["from", "to", "style", "stops", "transparency", "reverse", "dither", "opacity", "mode"],
+                "gradient.fill.set" => vec!["layer", "from", "to", "style", "angle", "scale", "offset", "reverse", "dither", "align", "stops", "transparency", "midpoints"],
                 "type.setStyle" => vec!["layer", "range", "size", "color",
                     "font", "fontStyle", "weight", "italic", "tracking", "leading", "baselineShift",
                     "horizontalScale", "verticalScale", "underline", "strikethrough", "fauxBold", "fauxItalic",
@@ -1943,6 +1948,64 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
                 LayerRef::Created(_) => return Err(refuse()),
             }
         }
+        // Gradient fill edits: live drag-created layers and edits to an
+        // existing gradient fill, sharing the engine's geometry/stop forms.
+        if matches!(step.command.as_str(), "gradient.fill.create" | "gradient.fill.set") {
+            let pt = |v: &Value| v.as_array().is_some_and(|a| a.len() == 2
+                && a.iter().all(|c| c.as_f64().is_some_and(|x| x.is_finite() && x.abs() <= 1.0e7)));
+            let stop_color = |v: &Value| {
+                if let Some(s) = v.as_str() {
+                    if s == "foreground" || s == "background" { return true; }
+                    let h = s.strip_prefix('#').unwrap_or(s);
+                    return (h.len() == 6 || h.len() == 8) && h.as_bytes().iter().all(u8::is_ascii_hexdigit);
+                }
+                v.as_array().is_some_and(|a| (3..=4).contains(&a.len())
+                    && a.iter().all(|c| c.as_f64().is_some_and(|x| x.is_finite() && (0.0..=1.0).contains(&x))))
+            };
+            for key in ["from", "to"] {
+                if map.get(key).is_some_and(|v| !pt(v)) { return Err(refuse()); }
+            }
+            if map.get("style").is_some_and(|v| !matches!(v.as_str(), Some("linear" | "radial" | "angle" | "reflected" | "diamond"))) { return Err(refuse()); }
+            if map.get("angle").is_some_and(|v| !v.as_f64().is_some_and(f64::is_finite)) { return Err(refuse()); }
+            if map.get("scale").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (1.0..=1000.0).contains(&x))) { return Err(refuse()); }
+            if map.get("offset").is_some_and(|v| !v.as_array().is_some_and(|a| a.len() == 2
+                && a.iter().all(|c| c.as_f64().is_some_and(|x| x.is_finite() && x.abs() <= 1.0e5)))) { return Err(refuse()); }
+            for key in ["reverse", "dither", "align"] {
+                if map.get(key).is_some_and(|v| !v.is_boolean()) { return Err(refuse()); }
+            }
+            if map.get("stops").is_some_and(|v| !v.as_array().is_some_and(|a| (2..=1024).contains(&a.len())
+                && a.iter().all(|s| s.as_array().is_some_and(|pair| pair.len() == 2
+                    && pair[0].as_f64().is_some_and(f64::is_finite) && stop_color(&pair[1]))))) { return Err(refuse()); }
+            if map.get("transparency").is_some_and(|v| !v.as_array().is_some_and(|a| a.len() <= 1024
+                && a.iter().all(|s| s.as_array().is_some_and(|pair| pair.len() == 2
+                    && pair.iter().all(|c| c.as_f64().is_some_and(f64::is_finite)))))) { return Err(refuse()); }
+            let segments = map.get("stops").and_then(Value::as_array).map_or(2, Vec::len).saturating_sub(1);
+            if map.get("midpoints").is_some_and(|v| !v.as_array().is_some_and(|a| a.len() <= segments
+                && a.iter().all(|m| m.as_f64().is_some_and(f64::is_finite)))) { return Err(refuse()); }
+        }
+        if step.command == "gradient.fill.create" {
+            // A live gradient is a drag: both handles required.
+            if !(map.contains_key("from") && map.contains_key("to")) { return Err(refuse()); }
+            if map.get("opacity").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (0.0..=100.0).contains(&x))) { return Err(refuse()); }
+            if map.get("mode").is_some_and(|v| !v.as_str().is_some_and(|m| SELECTED_BLEND_MODES.contains(&m))) { return Err(refuse()); }
+        }
+        if step.command == "gradient.fill.set" {
+            // An edit must change something, not just name a target.
+            if !map.keys().any(|k| k != "layer") { return Err(refuse()); }
+            match layer_ref(map.get("layer")).ok_or_else(refuse)? {
+                LayerRef::Existing(id) => {
+                    // The scene cannot tell a gradient fill from a solid one;
+                    // the engine refuses a non-gradient fill truthfully at
+                    // execution.
+                    if hidden.contains(&id) || rasterized.contains(&id)
+                        || !scene.layers.iter().any(|l| l.id == id && l.kind == "Fill" && l.is_visible) { return Err(refuse()); }
+                }
+                LayerRef::Created(n) => {
+                    if n >= pos || hidden_created.contains(&n)
+                        || created_at(&created, n) != Some(CreatedKind::GradientFill) { return Err(refuse()); }
+                }
+            }
+        }
         if step.command == "layer.removeBackground" {
             if let Some(value) = map.get("layer") {
                 match layer_ref(Some(value)).ok_or_else(refuse)? {
@@ -2056,6 +2119,7 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
                 Some(LayerRef::Created(n)) => created_at(&created, n).unwrap_or(CreatedKind::Other),
                 None => CreatedKind::Other,
             }),
+            "layer.newFillLayer.gradient" | "gradient.fill.create" => Some(CreatedKind::GradientFill),
             cmd if is_layer_creating(cmd) => Some(CreatedKind::Other),
             _ => None,
         };
@@ -2562,6 +2626,7 @@ mod tests {
             VisualElement { id: 9, kind: "Type".into(), name: "Heading".into(), text_content: Some("Original".into()), is_visible: true, ..Default::default() },
             VisualElement { id: 11, kind: "Group".into(), name: "Set".into(), is_visible: true, ..Default::default() },
             VisualElement { id: 13, kind: "Shape".into(), name: "Badge".into(), is_visible: true, ..Default::default() },
+            VisualElement { id: 15, kind: "Fill".into(), name: "Tint".into(), is_visible: true, ..Default::default() },
         ], ..Default::default() }
     }
 
@@ -2586,6 +2651,29 @@ mod tests {
             plan.steps.push(PlanStep { command: command.into(), params, description: "fixture".into() });
         }
         assert!(validate_selected_plan(&plan, &contract_scene()).is_ok());
+    }
+
+    #[test]
+    fn selected_plan_admits_gradient_fill_edits_within_contract() {
+        assert!(validate_selected_plan(&contract_plan("gradient.fill.create", json!({"from": [0, 0], "to": [400, 300],
+            "stops": [[0.0, "#000000"], [1.0, "background"]], "opacity": 80, "mode": "multiply"})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("gradient.fill.set", json!({"layer": 15, "angle": 45, "scale": 150, "reverse": true})), &contract_scene()).is_ok());
+        // A plan-made gradient fill can be tuned by reference.
+        let mut plan = contract_plan("layer.newFillLayer.gradient", json!({"from": "#000000", "to": "#ffffff"}));
+        plan.steps.push(PlanStep { command: "gradient.fill.set".into(), params: json!({"layer": {"$step": 1}, "angle": 0}), description: "fixture".into() });
+        assert!(validate_selected_plan(&plan, &contract_scene()).is_ok());
+    }
+
+    #[test]
+    fn selected_plan_refuses_gradient_fill_edits_outside_contract() {
+        // A live gradient is a drag: both handles required.
+        assert!(validate_selected_plan(&contract_plan("gradient.fill.create", json!({"from": [0, 0]})), &contract_scene()).is_err());
+        // The preset-name gradient key is an asset reference: not admitted.
+        assert!(validate_selected_plan(&contract_plan("gradient.fill.create", json!({"from": [0, 0], "to": [10, 10], "gradient": "Blue Sky"})), &contract_scene()).is_err());
+        // A solid color fill is not provably a gradient fill; only Fill kinds pass.
+        assert!(validate_selected_plan(&contract_plan("gradient.fill.set", json!({"layer": 7, "angle": 45})), &contract_scene()).is_err());
+        // An edit that only names a target changes nothing.
+        assert!(validate_selected_plan(&contract_plan("gradient.fill.set", json!({"layer": 15})), &contract_scene()).is_err());
     }
 
     #[test]
