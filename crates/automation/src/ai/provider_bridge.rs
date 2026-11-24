@@ -1227,6 +1227,10 @@ impl AiProviderBridge {
         if let Some(requests) = val.get("observe").and_then(Value::as_array) {
             if arr.is_some_and(|a| !a.is_empty()) || requests.is_empty() || requests.len() > 3 { return Err(invalid()); }
             let mut parsed = Vec::new();
+            // Schema payload budget: at most 12 described ids per ROUND in
+            // total (one full describe), so the measurements that ride the
+            // replan stay inside the request budget accounting.
+            let mut described = 0usize;
             for item in requests {
                 let item = item.as_object().ok_or_else(invalid)?;
                 let command = item.get("command").and_then(Value::as_str).ok_or_else(invalid)?;
@@ -1244,7 +1248,8 @@ impl AiProviderBridge {
                         // ids whose full engine schemas come back as the
                         // measurement. Nothing else is a valid parameter.
                         let ids = map.get("commands").and_then(Value::as_array);
-                        map.len() != 1 || ids.is_none_or(|a| a.is_empty() || a.len() > 12
+                        let over_round_budget = ids.is_some_and(|a| { described += a.len(); described > 12 });
+                        map.len() != 1 || over_round_budget || ids.is_none_or(|a| a.is_empty() || a.len() > 12
                             || a.iter().any(|id| id.as_str().is_none_or(|id| !SELECTED_COMMANDS.contains(&id)
                                 && !fotodit_engine::filters::FILTER_FIELDS.iter().any(|(f, _)| *f == id))))
                     }
@@ -1306,17 +1311,25 @@ impl AiPlanner for AiProviderBridge {
 /// The scene block shared by the planning contract and the result check. Scene
 /// strings are data, never planner instructions; caps stay identical so both
 /// request kinds disclose the same fields.
+// Scene disclosure bounds, set against the 32768-char request cap: static
+// floor (instruction + core schemas + command_index + lists) measures
+// roughly 11-14K chars, recent_turns is bounded to about 3.2K, the user
+// request to 2K and one observation round's measurements to about 9K, so
+// this scene budget of roughly 12K keeps the typical envelope under the cap
+// with margin. A pathological scene (every layer max-name, max-text, max-
+// effects) can still push past the cap; the hard refusal at the send site
+// is the truthful guard for that corner, and `truncated` marks every cut.
 fn selected_scene_json(scene: &VisualScene) -> Value {
     json!({"width":scene.width,"height":scene.height,"active_layer_id":scene.active_layer_id,
-        "layers":scene.layers.iter().take(64).map(|l| json!({"id":l.id,"name":l.name.chars().take(128).collect::<String>(),"kind":l.kind,
-            "visible":l.is_visible,"bounds":l.bounds,"text":l.text_content.as_ref().map(|t| t.chars().take(512).collect::<String>()),
+        "layers":scene.layers.iter().take(32).map(|l| json!({"id":l.id,"name":l.name.chars().take(96).collect::<String>(),"kind":l.kind,
+            "visible":l.is_visible,"bounds":l.bounds,"text":l.text_content.as_ref().map(|t| t.chars().take(256).collect::<String>()),
             "opacity":l.opacity,"fill":l.fill,"blend":l.blend,"clipped":l.clipped,"hasMask":l.has_mask,"hasVectorMask":l.has_vector_mask,
-            "selected":l.selected,"adjustment":l.adjustment_kind,"effects":l.effects.iter().take(8).collect::<Vec<_>>(),
+            "selected":l.selected,"adjustment":l.adjustment_kind,"effects":l.effects.iter().take(6).collect::<Vec<_>>(),
             "depth":l.depth,"parentId":l.parent_id})).collect::<Vec<_>>(),
         "selection":{"active":scene.has_selection,"bounds":scene.selection_bounds,"layers":scene.selected_layer_ids.iter().take(32).collect::<Vec<_>>()},
         "dominant_colors":scene.dominant_colors.iter().take(8).collect::<Vec<_>>(),
         "faces":scene.faces.iter().take(8).map(|f| json!({"score":f.score,"rect":f.rect,"landmarks":f.landmarks})).collect::<Vec<_>>(),
-        "truncated":scene.layers.len()>64 || scene.layers.iter().any(|l| l.name.chars().count()>128 || l.text_content.as_ref().is_some_and(|t| t.chars().count()>512))
+        "truncated":scene.layers.len()>32 || scene.layers.iter().any(|l| l.name.chars().count()>96 || l.text_content.as_ref().is_some_and(|t| t.chars().count()>256))
             || scene.dominant_colors.len()>8 || scene.faces.len()>8})
 }
 
@@ -1336,9 +1349,14 @@ fn selected_contract_prompt(intent: &EditingIntent, scene: &VisualScene, image: 
     } else {
         "Metadata only. No image pixels or semantic visual understanding are provided. Layer state (opacity, blend, masks, effects, nesting), selection, dominant colors and faces in the scene are local bounded measurements; face detections carry detector uncertainty and are never identities."
     };
+    // The user's own words, verbatim up to a bounded length; a cut is marked
+    // the same way recent_turns marks one.
+    let user_request: String = intent.raw_prompt.chars().take(2000).collect();
+    let user_request_cut = intent.raw_prompt.chars().count() > 2000;
     let mut request_json = json!({
         "instruction":instruction,
-        "user_request":intent.raw_prompt,
+        "user_request":user_request,
+        "user_request_cut":user_request_cut,
         "commands":capabilities,
         "command_index":command_index,
         "limits":{"max_steps":16,"new_document_max_dimension":8192,"new_document_max_pixels":16777216},
@@ -1372,7 +1390,7 @@ fn selected_contract_prompt(intent: &EditingIntent, scene: &VisualScene, image: 
         {"command":"image.detectFaces","params":"{minScore:number 0..1 optional, sampleAllLayers:bool optional}","returns":"face rectangles with scores and landmarks; detections carry detector uncertainty and are never identities"},
         {"command":"image.analysis.pixelDigest","params":"{maxPixels:integer 1..4000000 optional}","returns":"a bounded statistical digest of the composite pixels"},
         {"command":"gradient.fill.get","params":"{layer:integer id optional, default the active layer}","returns":"the current gradient fill settings: style, angle, scale, stops, transparency, midpoints"},
-        {"command":"contract.describe","params":"{commands:array of 1..12 ids from command_index}","returns":"the full engine parameter schemas for those commands"}
+        {"command":"contract.describe","params":"{commands:array of 1..12 ids from command_index; at most 12 described ids per round}","returns":"the full engine parameter schemas for those commands"}
     ]);
     if !observations.is_empty() {
         request_json["measurements"] = json!({
@@ -3615,6 +3633,7 @@ mod tests {
             json!({"observe":[{"command":"contract.describe","params":{"commands":["layer.delete","asset.import"]}}],"steps":[]}),
             json!({"observe":[{"command":"contract.describe","params":{"commands":[]}}],"steps":[]}),
             json!({"observe":[{"command":"contract.describe","params":{"commands":thirteen}}],"steps":[]}),
+            json!({"observe":[{"command":"contract.describe","params":{"commands":["select.refineEdge","select.refineEdge","select.refineEdge","select.refineEdge","select.refineEdge","select.refineEdge","select.refineEdge"]}},{"command":"contract.describe","params":{"commands":["select.refineEdge","select.refineEdge","select.refineEdge","select.refineEdge","select.refineEdge","select.refineEdge","select.refineEdge"]}}],"steps":[]}),
             json!({"observe":[{"command":"contract.describe","params":{"commands":["layer.delete"],"extra":true}}],"steps":[]}),
             json!({"observe":[{"command":"contract.describe","params":{}}],"steps":[]}),
         ] { assert!(bridge.parse_plan_json(&bad.to_string(), &intent).is_err()); }

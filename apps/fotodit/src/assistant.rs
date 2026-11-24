@@ -382,11 +382,15 @@ impl AssistantBackend for GuiAssistant {
                 if verdict.satisfied {
                     return Some(format!("Gemini reviewed the result and says it matches your request."));
                 }
-                if verdict.corrective.steps.is_empty() {
-                    let note = if verdict.critique.is_empty() { String::new() } else { format!(": {}", verdict.critique) };
-                    return Some(format!("Gemini reviewed the result and doesn't think it matches{note}. The changes made so far stay in the document - use Undo if needed."));
+                // Language/math-only doctrine: an image review is a report,
+                // never the correction mechanism. A corrective suggestion is
+                // surfaced, not applied; the user decides in words, and the
+                // next request re-plans with structured observations.
+                let note = if verdict.critique.is_empty() { String::new() } else { format!(": {}", verdict.critique) };
+                if !verdict.corrective.steps.is_empty() {
+                    return Some(format!("Gemini reviewed the result and doesn't think it matches{note}. It suggested more edits, which I haven't applied - tell me in words what to change. The changes made so far stay in the document - use Undo if needed."));
                 }
-                verdict.corrective
+                return Some(format!("Gemini reviewed the result and doesn't think it matches{note}. The changes made so far stay in the document - use Undo if needed."));
             }
             _ => return Some("The provider's reply didn't fit what I asked. No edits were applied.".into()),
         };
