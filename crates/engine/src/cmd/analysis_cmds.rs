@@ -661,9 +661,28 @@ fn color_stats(s: &mut Session, p: &Value) -> Result<Value> {
     let d = st.doc.clone();
     let revision = st.revision;
     let max_colors = p.get("maxColors").and_then(Value::as_u64).unwrap_or(5).clamp(1, 16) as usize;
-    let (r, domain) = match &d.selection {
-        Some(sel) => (sel.content_bounds().intersect(&d.bounds()), "selection"),
-        None => (Rect::new(0, 0, d.size.width as i32, d.size.height as i32), "canvas"),
+    // Optional exact rect, all four fields or none: measured AI criteria need
+    // colour statistics over a known region after the selection that defined
+    // it was consumed. A rect measures every pixel in it (no selection
+    // coverage): it is the selection's bounding region, honestly a coarser
+    // measurement than the selection domain's coverage-aware one.
+    let region_fields = ["x", "y", "width", "height"].iter().map(|k| p.get(*k).and_then(Value::as_i64)).collect::<Vec<_>>();
+    let (r, domain) = if region_fields.iter().all(Option::is_some) {
+        let (x, y) = (region_fields[0].unwrap(), region_fields[1].unwrap());
+        let (rw, rh) = (region_fields[2].unwrap(), region_fields[3].unwrap());
+        if !(1..=i64::from(u32::MAX)).contains(&rw) || !(1..=i64::from(u32::MAX)).contains(&rh)
+            || x < i64::from(i32::MIN) || x > i64::from(i32::MAX) || y < i64::from(i32::MIN) || y > i64::from(i32::MAX) {
+            return Err(bad(CMD, "region needs integer x/y and width/height in 1..=u32::MAX"));
+        }
+        let region = d.bounds().intersect(&Rect::from_xywh(x as i32, y as i32, rw as u32, rh as u32));
+        (region, "region")
+    } else if region_fields.iter().any(Option::is_some) {
+        return Err(bad(CMD, "region needs all of x, y, width and height"));
+    } else {
+        match &d.selection {
+            Some(sel) => (sel.content_bounds().intersect(&d.bounds()), "selection"),
+            None => (Rect::new(0, 0, d.size.width as i32, d.size.height as i32), "canvas"),
+        }
     };
     if r.is_empty() {
         return Err(bad(CMD, "the region is empty"));
@@ -689,7 +708,7 @@ fn color_stats(s: &mut Session, p: &Value) -> Result<Value> {
     // Coverage-aware: only pixels with selection coverage ≥ 0.5 count, so hollow,
     // disjoint or partially covered selections measure the covered pixels, not the
     // bounding box (the canvas domain counts every pixel).
-    let mask = selection_mask(&d, r, n);
+    let mask = if domain == "region" { vec![true; n] } else { selection_mask(&d, r, n) };
     let mut bins = [0u64; 4096];
     let mut sum = [0f64; 3];
     let mut n_sampled = 0u64;
@@ -1485,7 +1504,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.analysis.colorStats",
             "Color Statistics",
             ["Image", "Analysis"],
-            r##"{"maxColors":int=5 (1..=16),"maxPixels":int=16000000 (1..=16000000)} → read-only composite dominant colors (4-bit quantized) + mean color"##,
+            r##"{"maxColors":int=5 (1..=16),"maxPixels":int=16000000 (1..=16000000),"x":int,"y":int,"width":int,"height":int (all four for an exact rect, every pixel counted, no selection coverage)} → read-only composite dominant colors (4-bit quantized) + mean color"##,
             has_doc,
             color_stats,
             false

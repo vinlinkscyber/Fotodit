@@ -233,8 +233,12 @@ impl AiEngine {
                 }
             }
             outcome.planned_commands += plan.steps.len();
-            let region_watch = RegionWatch::new(&scene, &plan);
-            let region_before = region_watch.capture(&mut host);
+            // A selection-driving plan is measured at its target-selection
+            // stage (execution.rs captures it mid-plan); the pre-execution
+            // scene's selection is NOT the target when the plan first selects.
+            let plan_drives_selection = plan.steps.iter().any(|s| s.command.starts_with("select.") || s.command.contains("mask"));
+            let region_watch = (!plan_drives_selection).then(|| RegionWatch::new(&scene, &plan));
+            let region_before = region_watch.as_ref().and_then(|w| w.capture(&mut host));
             let start = host.calls.len();
             let mut attempt = GoalAttempt { plan: plan.clone(), execution: None, evaluation: None,
                 evidence: None, commands: Vec::new(), error: None };
@@ -263,14 +267,18 @@ impl AiEngine {
                         }
                     };
                     let final_scene = self.perception_engine.perceive(&final_document);
-                    let measured = region_watch.measure(&mut host, region_before);
+                    let selection_capture = attempt.evidence.as_ref().and_then(|e| e.selection_capture.clone());
+                    let measured = match &region_watch {
+                        Some(watch) => watch.measure(&mut host, region_before),
+                        None => measure_from_selection_stage(&mut host, selection_capture.as_ref()),
+                    };
                     let mut evaluation = self.eval_engine.evaluate(&intent, &scene, &final_scene, &execution);
                     let grounding = measured.apply(intent.category, &mut evaluation);
                     // The target-colour criterion: when the request named a
                     // colour, the final selection's measured colour must match
                     // it (mismatch = unmet) and must be measurable at all for
                     // completion (unavailable = unverified, never completed).
-                    let colour = measure_target_colour(&mut host, &intent, &plan, &final_scene);
+                    let colour = measure_target_colour(&mut host, &intent, &plan, &final_scene, selection_capture.as_ref(), &mut evaluation);
                     let mut unverified: Vec<String> = match grounding {
                         CompletionGrounding::Grounded => Vec::new(),
                         CompletionGrounding::Unverified(reason) => vec![reason],
@@ -280,11 +288,11 @@ impl AiEngine {
                         ColourCriterion::Checked(check) if !check.within_tolerance => {
                             evaluation.intent_satisfied = false;
                             evaluation.observations.push(format!(
-                                "Measured colour criterion: the target selection's mean colour {} does not match the requested {}.",
+                                "Measured colour criterion: {} does not match the requested {}.",
                                 check.measured, check.requested));
                         }
                         ColourCriterion::Checked(check) => evaluation.observations.push(format!(
-                            "Measured colour criterion: the target selection's mean colour {} matches the requested {} within tolerance.",
+                            "Measured colour criterion: {} matches the requested {} within tolerance.",
                             check.measured, check.requested)),
                         ColourCriterion::Unavailable(reason) => unverified.push(reason.clone()),
                     }
@@ -634,6 +642,8 @@ impl RegionMeasurement {
 /// its reason, never assumed match or mismatch.
 struct ColourCheck {
     requested: String,
+    /// What was compared (a mean colour value, or the basis note for the
+    /// weak bounding-region tier).
     measured: String,
     within_tolerance: bool,
 }
@@ -652,7 +662,33 @@ fn parse_hex_rgb(hex: &str) -> Option<[u8; 3]> {
     Some([((v >> 16) & 0xff) as u8, ((v >> 8) & 0xff) as u8, (v & 0xff) as u8])
 }
 
-fn measure_target_colour<S: LiveEditSession + ?Sized>(session: &mut S, intent: &EditingIntent, plan: &EditingPlan, final_scene: &VisualScene) -> ColourCriterion {
+/// Measurement for a selection-driving plan, built from the execution-time
+/// target-selection stage capture plus after-execution captures over the
+/// identical regions. The pre-execution scene's selection is never used:
+/// when the plan first selects the shirt, the target IS the plan's selection.
+fn measure_from_selection_stage<S: LiveEditSession + ?Sized>(session: &mut S, capture: Option<&SelectionCapture>) -> RegionMeasurement {
+    let unavailable = || RegionMeasurement { target: None, protected: Vec::new(), available: false, target_is_canvas: false, target_source: "nothing measurable" };
+    let Some(capture) = capture else { return unavailable() };
+    let failed = |why: &str| VisualEvidence { class: VisualEvidenceClass::Unknown, detail: why.to_string() };
+    let target = capture.region.as_ref().map(|before| match ExecutionEngine::capture_digest(session, Some(capture.bounds)) {
+        Ok(Some(after)) => ExecutionEngine::compare_digests(before, &after),
+        _ => failed("the after-execution region capture failed or was refused"),
+    });
+    let mut protected = Vec::new();
+    for (rect, before) in &capture.protected {
+        protected.push(match before {
+            Some(before) => match ExecutionEngine::capture_digest(session, Some(*rect)) {
+                Ok(Some(after)) => ExecutionEngine::compare_digests(before, &after),
+                _ => failed("an after-execution protected-region capture failed or was refused"),
+            },
+            None => failed("the protected region's before-execution capture failed or was refused"),
+        });
+    }
+    RegionMeasurement { target, protected, available: true, target_is_canvas: false,
+        target_source: "the plan's selection at its target-selection stage (bounding region)" }
+}
+
+fn measure_target_colour<S: LiveEditSession + ?Sized>(session: &mut S, intent: &EditingIntent, plan: &EditingPlan, final_scene: &VisualScene, capture: Option<&SelectionCapture>, evaluation: &mut EvaluationReport) -> ColourCriterion {
     let Some(requested) = intent.extracted_color.clone() else { return ColourCriterion::NotApplicable };
     let colours = NaturalLanguageEngine::new().colour_terms(&intent.raw_prompt);
     if colours.len() > 1 {
@@ -663,23 +699,57 @@ fn measure_target_colour<S: LiveEditSession + ?Sized>(session: &mut S, intent: &
         return ColourCriterion::Unavailable(
             "no selection- or mask-based step bound the request's target; a surviving arbitrary selection proves nothing".into());
     }
-    if !final_scene.has_selection {
-        return ColourCriterion::Unavailable("no selection survived to the final state to measure".into());
+    // The target's ORIGINAL colour, captured coverage-aware at the
+    // target-selection stage, is recorded for the report.
+    if let Some(stats) = capture.and_then(|c| c.color_stats.as_ref()) {
+        if let Some(before_mean) = stats.get("meanColor").and_then(Value::as_str) {
+            evaluation.observations.push(format!(
+                "Measured colour criterion: the target selection's mean colour before the edit was {before_mean} (coverage-aware)."));
+        }
     }
-    let unknown = |why: &str| ColourCriterion::Unavailable(format!("the selection's colour could not be measured ({why})"));
-    let value = match session.command_run("image.analysis.colorStats",
-        serde_json::json!({"maxPixels": EVIDENCE_MAX_PIXELS})) {
-        Ok(v) => v,
-        Err(_) => return unknown("the capture failed or was refused"),
+    let unknown = |why: &str| ColourCriterion::Unavailable(format!("the target's colour could not be measured ({why})"));
+    if final_scene.has_selection {
+        let value = match session.command_run("image.analysis.colorStats",
+            serde_json::json!({"maxPixels": EVIDENCE_MAX_PIXELS})) {
+            Ok(v) => v,
+            Err(_) => return unknown("the capture failed or was refused"),
+        };
+        if value.get("domain").and_then(Value::as_str) != Some("selection") { return unknown("no selection domain"); }
+        let Some(measured) = value.get("meanColor").and_then(Value::as_str).map(str::to_string) else { return unknown("no mean colour in the result") };
+        let (Some(want), Some(got)) = (parse_hex_rgb(&requested), parse_hex_rgb(&measured)) else { return unknown("an unparseable colour") };
+        // Per-channel tolerance for shading/quantization: a recolour that
+        // missed its hue lands far outside this; a quantized rendering of the
+        // right colour lands inside.
+        let within_tolerance = want.iter().zip(got.iter()).all(|(a, b)| (*a as i32 - *b as i32).abs() <= 32);
+        return ColourCriterion::Checked(ColourCheck { requested, measured, within_tolerance });
+    }
+    // The selection was consumed: measure its recorded bounding region as an
+    // exact rect. Every pixel counts (no selection coverage), so the mean
+    // mixes in unselected surroundings; the weaker criterion asks whether the
+    // requested colour became a DOMINANT colour of the region instead.
+    let Some(capture) = capture else {
+        return ColourCriterion::Unavailable("no selection survived to the final state and none was captured at the target-selection stage".into());
     };
-    if value.get("domain").and_then(Value::as_str) != Some("selection") { return unknown("no selection domain"); }
-    let Some(measured) = value.get("meanColor").and_then(Value::as_str).map(str::to_string) else { return unknown("no mean colour in the result") };
-    let (Some(want), Some(got)) = (parse_hex_rgb(&requested), parse_hex_rgb(&measured)) else { return unknown("an unparseable colour") };
-    // Per-channel tolerance for shading/quantization: a recolour that missed
-    // its hue lands far outside this; a quantized rendering of the right
-    // colour lands inside.
-    let within_tolerance = want.iter().zip(got.iter()).all(|(a, b)| (*a as i32 - *b as i32).abs() <= 32);
-    ColourCriterion::Checked(ColourCheck { requested, measured, within_tolerance })
+    let [x, y, width, height] = capture.bounds;
+    let value = match session.command_run("image.analysis.colorStats",
+        serde_json::json!({"maxPixels": EVIDENCE_MAX_PIXELS, "x": x, "y": y, "width": width, "height": height})) {
+        Ok(v) => v,
+        Err(_) => return unknown("the bounding-region capture failed or was refused"),
+    };
+    if value.get("domain").and_then(Value::as_str) != Some("region") { return unknown("no region domain in the result"); }
+    let Some(want) = parse_hex_rgb(&requested) else { return unknown("an unparseable requested colour") };
+    let matched = value.get("dominantColors").and_then(Value::as_array).map(|colors| colors.iter().any(|c| {
+        c.get("color").and_then(Value::as_str).and_then(parse_hex_rgb)
+            .is_some_and(|got| want.iter().zip(got.iter()).all(|(a, b)| (*a as i32 - *b as i32).abs() <= 32))
+    }));
+    match matched {
+        Some(within_tolerance) => {
+            evaluation.observations.push(
+                "Measured colour criterion (weak): the selection was consumed, so its bounding region was measured whole - unselected surroundings count.".into());
+            ColourCriterion::Checked(ColourCheck { requested, measured: "dominant colours of the bounding region".into(), within_tolerance })
+        }
+        None => unknown("no dominant colours in the region result"),
+    }
 }
 
 #[cfg(test)]

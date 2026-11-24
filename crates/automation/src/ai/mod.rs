@@ -29,7 +29,7 @@ pub mod provider_bridge;
 pub use command_intelligence::{CommandCapability, CommandCatalog, ValidatedCommand};
 pub use creative_design::{ColorHarmony, DesignArchetype, LayoutEngine, TypographyHierarchy};
 pub use evaluation::{EvaluationEngine, EvaluationReport};
-pub use execution::{ExecutionEngine, ExecutionEvidence, ExecutionResult, StepExecution, StepVisualEvidence, VisualEvidence, VisualEvidenceClass};
+pub use execution::{DigestMark, ExecutionEngine, ExecutionEvidence, ExecutionResult, SelectionCapture, StepExecution, StepVisualEvidence, VisualEvidence, VisualEvidenceClass};
 pub use goal_repair::SemanticGoalRepair;
 pub use goal_session::{GoalAttempt, GoalCommandRecord, GoalOutcome, GoalRepairAdapter,
     GoalRepairDecision, GoalRepairInput, GoalRequest, GoalStop, NoGoalRepair};

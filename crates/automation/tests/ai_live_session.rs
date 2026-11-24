@@ -887,3 +887,56 @@ fn real_digest_quantization_hides_hdr_and_sub_byte_differences() {
     paint(&mut original, 0, 0, 1, 1, [0.0, 0.0, 0.0, 1.0]);
     assert_ne!(real_digest(&mut original), plain);
 }
+
+/// REAL-ENGINE FIXTURE (authored now; runs only under an approved CI run):
+/// a plan that selects before editing yields a target-selection capture at
+/// the selection stage - bounds, region digest, protected-complement state
+/// and coverage-aware colour statistics - binding the measured criteria to
+/// the plan's actual target, not to any pre-existing selection.
+#[test]
+fn selection_stage_capture_binds_the_plans_target_before_the_edit() {
+    let mut headless = Headless::new();
+    LiveEditSession::command_run(&mut headless, "file.new", json!({"width": 64, "height": 64, "background": "white"})).unwrap();
+    // A pre-existing selection is deliberately absent: the plan's own
+    // selection step is what defines the target.
+    let plan = EditingPlan {
+        title: "Invert the selection".into(),
+        rationale: "select, then edit".into(),
+        category: IntentCategory::ColorStyling,
+        steps: vec![
+            PlanStep { command: "select.all".into(), params: json!({}), description: "target the canvas".into() },
+            PlanStep { command: "image.adjustments.invert".into(), params: json!({}), description: "the edit".into() },
+        ],
+        creates_document: false,
+        target_size: None,
+    };
+    let (result, evidence) = ExecutionEngine::execute_plan_in_with_evidence(&mut headless, &plan).unwrap();
+    assert!(result.is_success);
+    let capture = evidence.selection_capture.expect("a plan with a selection step yields a target-selection capture");
+    assert_eq!(capture.step_index, 0);
+    assert_eq!(capture.bounds, [0, 0, 64, 64]);
+    assert!(capture.region.is_some(), "the selection's bounding region is digested before the edit");
+    assert!(capture.protected.is_empty(), "a full-canvas selection leaves no protected complement to measure");
+    let stats = capture.color_stats.expect("coverage-aware colour statistics ride the capture");
+    assert_eq!(stats.get("domain").and_then(Value::as_str), Some("selection"));
+    assert_eq!(stats.get("meanColor").and_then(Value::as_str), Some("#FFFFFF"),
+        "the pre-edit selection colour is white; the capture happened BEFORE the invert");
+}
+
+/// REAL-ENGINE FIXTURE: exact-rect digests and region colour statistics
+/// measure the requested pixels, labeled by domain.
+#[test]
+fn region_digest_and_color_stats_measure_exact_rects() {
+    let mut headless = Headless::new();
+    LiveEditSession::command_run(&mut headless, "file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
+    let digest = LiveEditSession::visual_digest(&mut headless, 4_000_000, Some([0, 0, 4, 4])).unwrap().unwrap();
+    assert_eq!(digest.get("domain").and_then(Value::as_str), Some("region"));
+    assert_eq!(digest.get("stride").and_then(Value::as_u64), Some(1), "a 16-px region samples every pixel");
+    assert_eq!(digest.get("sampledPixels").and_then(Value::as_u64), Some(16));
+    let stats = LiveEditSession::command_run(&mut headless, "image.analysis.colorStats",
+        json!({"x": 0, "y": 0, "width": 8, "height": 8})).unwrap();
+    assert_eq!(stats.get("domain").and_then(Value::as_str), Some("region"));
+    assert_eq!(stats.get("meanColor").and_then(Value::as_str), Some("#FFFFFF"));
+    // All-or-none region params are refused, never partially applied.
+    assert!(LiveEditSession::command_run(&mut headless, "image.analysis.colorStats", json!({"x": 0})).is_err());
+}

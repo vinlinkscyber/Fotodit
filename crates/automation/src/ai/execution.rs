@@ -71,6 +71,33 @@ pub struct StepVisualEvidence {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionEvidence {
     pub steps: Vec<StepVisualEvidence>,
+    /// The plan's target selection, captured right after its LAST selection-
+    /// or mask-driving step ran: the actual target-selection stage, before a
+    /// following edit could consume the selection. A selection that existed
+    /// before the plan is never mistaken for the plan's target. None when the
+    /// plan drives no selection/mask step, the selection is empty at that
+    /// point, or the host lacks the capability.
+    #[serde(default)]
+    pub selection_capture: Option<SelectionCapture>,
+}
+
+/// What was true at the plan's target-selection stage: the selection's
+/// content bounds, a digest over that bounding region (includes unselected
+/// pixels within it), the canvas-complement border digests (the protected
+/// regions' BEFORE state), and coverage-aware colour statistics of the
+/// selection itself. All observational; none of it feeds success, rollback
+/// or dispatch.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SelectionCapture {
+    pub step_index: usize,
+    /// Selection content bounds [x, y, width, height] at capture time.
+    pub bounds: [i64; 4],
+    pub revision: Option<u64>,
+    pub region: Option<DigestMark>,
+    /// Up to four border rects (top, bottom, left, right) with their digests.
+    pub protected: Vec<([i64; 4], Option<DigestMark>)>,
+    /// Selection-domain colour statistics (engine JSON shape), when captured.
+    pub color_stats: Option<Value>,
 }
 
 /// Detailed trace of an executed plan step.
@@ -167,23 +194,23 @@ enum EvidenceKind {
 /// output inherits no engine consistency - so every field of the fixed schema
 /// must be present, well-formed and self-consistent before the capture is
 /// trusted.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct DigestMark {
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DigestMark {
     /// The digest as a NUMBER (parsed from the host's hex), so textually
     /// different but numerically identical digests (e.g. case differences)
     /// can never register as a change.
-    pub(crate) digest: u64,
+    pub digest: u64,
     /// Canvas origin of the captured region; (0, 0) for a whole-canvas
     /// capture. Digests are only ever compared over an identical rect.
-    pub(crate) x: i64,
-    pub(crate) y: i64,
-    pub(crate) width: u64,
-    pub(crate) height: u64,
-    pub(crate) stride: u64,
-    pub(crate) sampled: u64,
+    pub x: i64,
+    pub y: i64,
+    pub width: u64,
+    pub height: u64,
+    pub stride: u64,
+    pub sampled: u64,
     /// Engine document revision the capture was taken at, when the host
     /// reports it: binds the evidence to a document state lineage.
-    pub(crate) revision: Option<u64>,
+    pub revision: Option<u64>,
 }
 
 /// Observed identity hint and history state of the active document, read through
@@ -281,6 +308,35 @@ impl ExecutionEngine {
             return Err(invalid());
         }
         Ok(Some(DigestMark { digest, x, y, width, height, stride, sampled, revision }))
+    }
+
+    /// The target-selection stage capture: selection content bounds from
+    /// inspection, a digest over that bounding region, the BEFORE digests of
+    /// the canvas-complement border rects (the protected regions), and
+    /// coverage-aware colour statistics of the selection itself. Bounded: one
+    /// stage per plan, at most six renders. None when the selection is empty
+    /// or unreadable at this point.
+    fn capture_selection_stage<S: LiveEditSession + ?Sized>(session: &mut S, step_index: usize) -> Option<SelectionCapture> {
+        let document = session.inspect_active().ok()??;
+        let revision = document.get("revision").and_then(Value::as_u64);
+        let (cw, ch) = (document.get("width").and_then(Value::as_i64)?, document.get("height").and_then(Value::as_i64)?);
+        let a = document.get("selectionBounds")?.as_array()?;
+        if a.len() != 4 { return None; }
+        let mut bounds = [0i64; 4];
+        for (i, v) in a.iter().enumerate() { bounds[i] = v.as_i64()?; }
+        if bounds[2] <= 0 || bounds[3] <= 0 { return None; }
+        let region = Self::capture_digest(session, Some(bounds)).ok().flatten();
+        let [tx, ty, tw, th] = bounds;
+        let mut protected = Vec::new();
+        for rect in [[0, 0, cw, ty], [0, ty + th, cw, ch - ty - th], [0, ty, tx, th], [tx + tw, ty, cw - tx - tw, th]] {
+            if rect[2] > 0 && rect[3] > 0 {
+                let mark = Self::capture_digest(session, Some(rect)).ok().flatten();
+                protected.push((rect, mark));
+            }
+        }
+        let color_stats = session.command_run("image.analysis.colorStats", json!({"maxPixels": EVIDENCE_MAX_PIXELS})).ok()
+            .filter(|v| v.get("domain").and_then(Value::as_str) == Some("selection"));
+        Some(SelectionCapture { step_index, bounds, revision, region, protected, color_stats })
     }
 
     /// Compare two captures. A dimension change is an observable change of
@@ -458,6 +514,13 @@ impl ExecutionEngine {
         // re-baselines instead of attributing an unobserved step's changes.
         let mut last_digest: Option<DigestMark> = None;
         let mut evidence_captures = 0usize;
+        // The target-selection stage: the plan's LAST selection- or
+        // mask-driving step. Its capture happens right after that step
+        // succeeds, before any following edit can consume the selection.
+        let last_selection_step = collect_evidence
+            .then(|| plan.steps.iter().rposition(|s| s.command.starts_with("select.") || s.command.contains("mask")))
+            .flatten();
+        let mut selection_capture: Option<SelectionCapture> = None;
 
         for (idx, step) in plan.steps.iter().enumerate() {
             // The leading file.new of a creation plan: the created document is
@@ -609,6 +672,9 @@ impl ExecutionEngine {
 
             match resolution.and_then(|params| session.command_run(&step.command, params)) {
                 Ok(output) => {
+                    if last_selection_step == Some(idx) {
+                        selection_capture = Self::capture_selection_stage(session, idx);
+                    }
                     // Only real creation steps produce referenceable ids; other
                     // commands echo their target id in the same "layer" output
                     // key (type.setStyle, layer.removeBackground, ...). The set
@@ -844,7 +910,7 @@ impl ExecutionEngine {
                 error: None,
                 undos_performed: 0,
             },
-            ExecutionEvidence { steps: evidence },
+            ExecutionEvidence { steps: evidence, selection_capture },
         ))
     }
 
