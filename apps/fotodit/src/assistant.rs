@@ -315,6 +315,19 @@ impl AssistantBackend for GuiAssistant {
                 {
                     let mut host = GuiSession { app: &mut *app, ctx };
                     for request in &requests {
+                        if request.command == "contract.describe" {
+                            // Schema discovery is not an engine operation:
+                            // answer it from the same catalog the contract was
+                            // built from. The plan parser already bounded the
+                            // ids to the admitted set, 12 at most.
+                            let catalog = fotodit_automation::ai::CommandCatalog::new();
+                            let schemas: Vec<_> = request.params.get("commands").and_then(|v| v.as_array()).into_iter().flatten()
+                                .filter_map(|id| id.as_str()).filter_map(|id| catalog.get(id))
+                                .map(|c| serde_json::json!({"command": c.id, "params": c.params_schema, "description": c.description}))
+                                .collect();
+                            results.push(fotodit_automation::ai::ObservationResult { command: request.command.clone(), result: serde_json::json!({"schemas": schemas}) });
+                            continue;
+                        }
                         match host.command_run(&request.command, request.params.clone()) {
                             Ok(result) => results.push(fotodit_automation::ai::ObservationResult { command: request.command.clone(), result }),
                             Err(error) => return Some(format!("The measurement {} failed: {error} No edits were applied.", request.command)),
@@ -710,7 +723,7 @@ mod tests {
             if call == 1 { assert!(body.contains("\"measurements\""), "the replanning request carries the measured results: {body}"); }
             self.bodies.lock().unwrap().push(body);
             let response = if call == 0 {
-                serde_json::json!({"observe":[{"command":"image.detectFaces","params":{"minScore":0.5}}],"steps":[]})
+                serde_json::json!({"observe":[{"command":"image.detectFaces","params":{"minScore":0.5}},{"command":"contract.describe","params":{"commands":["select.refineEdge"]}}],"steps":[]})
             } else {
                 serde_json::json!({"title":"Warmer","rationale":"fixture observation round","steps":[{"command":"layer.newAdjustmentLayer.brightnessContrast","params":{"brightness":10},"description":"warm it"}]})
             };
@@ -759,7 +772,14 @@ mod tests {
         let answer = await_plan(&mut app, &ctx);
         assert!(answer.contains("via Gemini"), "{answer}");
         assert_eq!(calls.load(Ordering::SeqCst), 2, "exactly one planning request plus one replan");
-        assert_eq!(bodies.lock().unwrap().len(), 2);
+        let bodies = bodies.lock().unwrap();
+        assert_eq!(bodies.len(), 2);
+        // The replan carries both measurement kinds: the menu-path detection
+        // result and the catalog-answered schema discovery result.
+        let replan = &bodies[1];
+        assert!(replan.contains("contract.describe"), "describe result rides the replan: {replan}");
+        assert!(replan.contains("schemas"), "catalog schemas ride the replan: {replan}");
+        assert!(replan.contains("select.refineEdge"), "the described command's schema rides the replan: {replan}");
     }
 
     #[test]
