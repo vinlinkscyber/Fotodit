@@ -1310,7 +1310,8 @@ impl AiProviderBridge {
                         let bad_name = name.is_some_and(|n| n.is_empty() || n.chars().count() > 64);
                         let bad_paging = paging && (map.get("offset").is_some_and(|v| v.as_u64().is_none())
                             || map.get("limit").is_none_or(|v| v.as_u64().is_none_or(|n| !(1..=32).contains(&n))));
-                        modes != 1 || bad_ids || bad_name || bad_paging
+                        let unknown_key = map.keys().any(|k| !matches!(k.as_str(), "ids" | "name" | "parent" | "offset" | "limit"));
+                        modes != 1 || bad_ids || bad_name || bad_paging || unknown_key
                     }
                     "gradient.fill.get" => map.iter().any(|(k, v)| !match k.as_str() {
                         // The current gradient stops/state of one Fill layer
@@ -1593,7 +1594,7 @@ const CORE_CONTRACT_COMMANDS: &[&str] = &["file.new", "type.create", "type.edit"
 /// contract.describe observation round away.
 fn contract_capabilities() -> (Value, Value) {
     let catalog = CommandCatalog::new();
-    let capabilities: Vec<_> = SELECTED_COMMANDS.iter().copied()
+    let mut capabilities: Vec<_> = SELECTED_COMMANDS.iter().copied()
         .filter(|id| CORE_CONTRACT_COMMANDS.contains(id))
         .filter_map(|id| catalog.get(id))
         .map(|c| json!({"command":c.id,"params":match c.id.as_str() {
@@ -1605,6 +1606,13 @@ fn contract_capabilities() -> (Value, Value) {
             "layer.removeBackground" => r#"{layer:existing visible pixel-layer id or {"$step":N} of a pixel duplicate, optional;sampleAllLayers:bool optional,refine:bool optional}"#,
             _ => c.params_schema.as_str(),
         },"description":c.description})).collect();
+    // edit.fill is a core command but has no CommandCatalog entry; without a
+    // schema here it would silently vanish from the disclosed tool set.
+    if !capabilities.iter().any(|c| c["command"] == "edit.fill") {
+        capabilities.push(json!({"command":"edit.fill",
+            "params":r##"{"contents":"color|foreground|background|white|black|gray|contentAware optional,"color":"#rrggbb optional (contents color),"opacity":percent optional,"mode":blend mode optional}"##,
+            "description":"Fill the active selection or active pixel layer with a color or content-aware fill"}));
+    }
     let mut index = serde_json::Map::new();
     for id in SELECTED_COMMANDS.iter().copied().filter(|id| !CORE_CONTRACT_COMMANDS.contains(id)) {
         let family = id.split('.').next().unwrap_or(id).to_string();
@@ -2325,7 +2333,7 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
         if matches!(step.command.as_str(), "type.create" | "type.edit")
             && !map.get("text").and_then(Value::as_str).is_some_and(|v| !v.trim().is_empty() && v.chars().count() <= 2000) { return Err(refuse()); }
         if step.command == "type.create" && (!number("x", 0.0, f64::from(width)) || !number("y", 0.0, f64::from(height))
-            || !number("size", 6.0, 512.0)) { return Err(refuse()); }
+            || (map.contains_key("size") && !number("size", 6.0, 512.0))) { return Err(refuse()); }
         if step.command == "layer.newAdjustmentLayer.photoFilter" && !map.contains_key("filter") { return Err(refuse()); }
         if step.command == "layer.newAdjustmentLayer.levels"
             && let (Some(b), Some(w)) = (map.get("inBlack").and_then(Value::as_f64), map.get("inWhite").and_then(Value::as_f64))
@@ -2336,6 +2344,9 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
             for (key, value) in map {
                 let valid = match key.as_str() {
                     "size" => number(key, 6.0, 512.0),
+                    // Commands with their own color vocabulary (group label names,
+                    // gradient stop swatches) validate it in their dedicated blocks.
+                    "color" if matches!(step.command.as_str(), "layer.new.group" | "layer.groupLayers" | "gradient.fill.stop") => true,
                     "color" => value.as_str().is_some_and(|v| (v.len() == 7 || v.len() == 9) && v.starts_with('#') && v.as_bytes()[1..].iter().all(u8::is_ascii_hexdigit))
                         || value.as_array().is_some_and(|a| (3..=4).contains(&a.len())
                             && a.iter().all(|c| c.as_f64().is_some_and(|x| x.is_finite() && (0.0..=1.0).contains(&x)))),
@@ -2969,8 +2980,12 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
             if w2 * h2 > 16777216.0 { return Err(refuse()); }
             width = w2.round() as u32; height = h2.round() as u32;
         }
-        for key in ["x", "y", "amount", "threshold"] {
-            if map.get(key).is_some_and(|v| v.as_i64().is_none()) { return Err(refuse()); }
+        // Engine filters were already checked against the engine rule table
+        // (which admits fractional amounts and thresholds, e.g. smartBlur).
+        if filter.is_none() {
+            for key in ["x", "y", "amount", "threshold"] {
+                if map.get(key).is_some_and(|v| v.as_i64().is_none()) { return Err(refuse()); }
+            }
         }
     }
     // A plan may not leave a piece floating: execution would hold the
