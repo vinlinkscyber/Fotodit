@@ -682,7 +682,7 @@ pub enum PlanResponse {
 /// Discovery is the contract prompt's observations_available list; anything
 /// outside this set is refused at parse, and execution stays on the admitted
 /// menu path. Filesystem, network and asset commands are never observations.
-pub const OBSERVATION_COMMANDS: &[&str] = &["image.detectFaces", "image.analysis.pixelDigest", "contract.describe"];
+pub const OBSERVATION_COMMANDS: &[&str] = &["image.detectFaces", "image.analysis.pixelDigest", "gradient.fill.get", "contract.describe"];
 
 /// Explicit request budget: at most this many observation rounds per user
 /// request, so the total provider traffic is 1 planning request + up to
@@ -1248,6 +1248,13 @@ impl AiProviderBridge {
                             || a.iter().any(|id| id.as_str().is_none_or(|id| !SELECTED_COMMANDS.contains(&id)
                                 && !fotodit_engine::filters::FILTER_FIELDS.iter().any(|(f, _)| *f == id))))
                     }
+                    "gradient.fill.get" => map.iter().any(|(k, v)| !match k.as_str() {
+                        // The current gradient stops/state of one Fill layer
+                        // (default: the active layer), so indexed stop edits
+                        // plan against live state instead of guessing.
+                        "layer" => v.as_u64().is_some(),
+                        _ => false,
+                    }),
                     _ => map.iter().any(|(k, v)| !match k.as_str() {
                         "maxPixels" => v.as_u64().is_some_and(|x| (1..=4_000_000).contains(&x)),
                         _ => false,
@@ -1364,6 +1371,7 @@ fn selected_contract_prompt(intent: &EditingIntent, scene: &VisualScene, image: 
     request_json["observations_available"] = json!([
         {"command":"image.detectFaces","params":"{minScore:number 0..1 optional, sampleAllLayers:bool optional}","returns":"face rectangles with scores and landmarks; detections carry detector uncertainty and are never identities"},
         {"command":"image.analysis.pixelDigest","params":"{maxPixels:integer 1..4000000 optional}","returns":"a bounded statistical digest of the composite pixels"},
+        {"command":"gradient.fill.get","params":"{layer:integer id optional, default the active layer}","returns":"the current gradient fill settings: style, angle, scale, stops, transparency, midpoints"},
         {"command":"contract.describe","params":"{commands:array of 1..12 ids from command_index}","returns":"the full engine parameter schemas for those commands"}
     ]);
     if !observations.is_empty() {
@@ -1568,6 +1576,9 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
     let mut active_changed = false;
     let mut width = scene.width;
     let mut height = scene.height;
+    // Document resolution, tracked across image.imageSize steps the way the
+    // engine applies it (stored f32): later pt units resolve against it.
+    let mut dpi = scene.resolution_dpi;
     // Ids a plan step has already hidden. The scene snapshot is pre-plan, so a
     // layer hidden by an earlier step must not satisfy a later step's checks.
     let mut hidden: Vec<u64> = Vec::new();
@@ -2101,12 +2112,9 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
                 }
             }
         }
-        // OPEN WIRING (recorded in docs/ai-coverage-inventory.md): gradient.fill.get
-        // is excluded readonly, but indexed stop edits need the current stop
-        // list to be correct. It must become a structured observation (stops/
-        // state in scene or an observation command) rather than stay
-        // inaccessible. Until that wiring lands, stop edits validate the
-        // target layer but cannot check the stop index against live state.
+        // Indexed stop edits validate the target layer; the current stops/
+        // state come from the gradient.fill.get observation (admitted for
+        // exactly this), never from a guess.
         if step.command == "gradient.fill.stop" {
             // Single-stop edits on a gradient fill, same target rule as set.
             let action = map.get("action").and_then(Value::as_str)
@@ -2748,15 +2756,15 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
         // steps check the canvas they will actually meet.
         if step.command == "image.imageSize" {
             if map.get("units").is_some_and(|v| !matches!(v.as_str(), Some("px" | "pt"))) { return Err(refuse()); }
-            // Points resolve against the document's resolution, which the
-            // scene does not carry: a pt size has no checkable pixel meaning.
-            // OPEN WIRING (recorded in docs/ai-coverage-inventory.md): add
-            // document resolution to the scene, then admit pt units and
-            // keepPrintSize instead of refusing supported units.
-            if map.get("units").and_then(Value::as_str) == Some("pt") { return Err(refuse()); }
-            // keepPrintSize resamples by the resolution ratio, which likewise
-            // needs the document's current resolution.
-            if map.get("keepPrintSize").and_then(Value::as_bool) == Some(true) { return Err(refuse()); }
+            if map.get("resample").is_some_and(|v| !matches!(v.as_str(), Some("automatic" | "preserveDetails" | "bicubicSmoother" | "bicubicSharper" | "bicubicAutomatic" | "bicubic" | "nearest" | "nearestNeighbor" | "bilinear" | "lanczos" | "none"))) { return Err(refuse()); }
+            let resample_none = map.get("resample").and_then(Value::as_str) == Some("none");
+            // The engine's own arithmetic, in the engine's order
+            // (image_cmds.rs image_size): points resolve against the tracked
+            // resolution at 1/72 inch (skipped under resample "none"), an
+            // explicit side wins over `percent`, then keepPrintSize resamples
+            // by the resolution ratio only when no side was given. A scene
+            // without a resolution (dpi <= 0) leaves pt and keepPrintSize
+            // uncheckable, so those stay refused there.
             let side = |k: &str| -> Result<Option<f64>, AiError> {
                 match map.get(k).filter(|v| !v.is_null()) {
                     None => Ok(None),
@@ -2764,17 +2772,31 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
                 }
             };
             let (mut nw, mut nh) = (side("width")?, side("height")?);
+            if map.get("units").and_then(Value::as_str) == Some("pt") && !resample_none {
+                if !(dpi > 0.0) { return Err(refuse()); }
+                let scale = dpi / 72.0;
+                nw = nw.map(|v| v * scale);
+                nh = nh.map(|v| v * scale);
+            }
             if let Some(pc) = map.get("percent") {
                 let pc = pc.as_f64().filter(|v| v.is_finite() && *v > 0.0).ok_or_else(refuse)?;
                 if nw.is_none() { nw = Some(f64::from(width) * pc / 100.0); }
                 if nh.is_none() { nh = Some(f64::from(height) * pc / 100.0); }
             }
-            if map.get("resolution").is_some_and(|v| !v.is_null() && !v.as_f64().is_some_and(|x| x.is_finite() && (1.0..=30000.0).contains(&x))) { return Err(refuse()); }
+            let new_dpi = match map.get("resolution").filter(|v| !v.is_null()) {
+                None => None,
+                Some(v) => Some(v.as_f64().filter(|x| x.is_finite() && ((1.0..=30000.0).contains(x) || *x == dpi)).ok_or_else(refuse)?),
+            };
             for key in ["keepPrintSize", "scaleStyles"] {
                 if map.get(key).is_some_and(|v| !v.is_boolean()) { return Err(refuse()); }
             }
-            if map.get("resample").is_some_and(|v| !matches!(v.as_str(), Some("automatic" | "preserveDetails" | "bicubicSmoother" | "bicubicSharper" | "bicubicAutomatic" | "bicubic" | "nearest" | "bilinear" | "lanczos" | "none"))) { return Err(refuse()); }
-            if nw.is_none() && nh.is_none() && map.get("percent").is_none() && map.get("resolution").is_none() { return Err(refuse()); }
+            if map.get("keepPrintSize").and_then(Value::as_bool) == Some(true) && nw.is_none() && nh.is_none()
+                && let Some(r) = new_dpi && r != dpi {
+                if !(dpi > 0.0) { return Err(refuse()); }
+                nw = Some(f64::from(width) * r / dpi.max(1.0));
+                nh = Some(f64::from(height) * r / dpi.max(1.0));
+            }
+            if nw.is_none() && nh.is_none() && map.get("percent").is_none() && new_dpi.is_none() { return Err(refuse()); }
             // The engine's own arithmetic: a missing side keeps the aspect
             // ratio, then round. Capped to the contract's new-document size.
             let (w2, h2) = match (nw, nh) {
@@ -2786,6 +2808,10 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
             let (w2, h2) = (w2.round(), h2.round());
             if w2 < 1.0 || h2 < 1.0 || w2 > 8192.0 || h2 > 8192.0 || w2 * h2 > 16777216.0 { return Err(refuse()); }
             width = w2 as u32; height = h2 as u32;
+            // A resolution change lands with the step; the engine stores f32,
+            // so later pt units and keepPrintSize resolve against the f32
+            // value, not the f64 the provider sent.
+            if let Some(r) = new_dpi { dpi = r as f32 as f64; }
         }
         if step.command == "image.canvasSize" {
             if map.get("units").is_some_and(|v| !matches!(v.as_str(), Some("px" | "percent"))) { return Err(refuse()); }
@@ -3044,7 +3070,7 @@ mod tests {
 
     fn contract_scene() -> VisualScene {
         use super::super::perception::VisualElement;
-        VisualScene { width: 400, height: 300, active_layer_id: Some(7), layers: vec![
+        VisualScene { width: 400, height: 300, resolution_dpi: 72.0, active_layer_id: Some(7), layers: vec![
             VisualElement { id: 7, kind: "Pixel".into(), name: "Photo".into(), is_visible: true, ..Default::default() },
             VisualElement { id: 9, kind: "Type".into(), name: "Heading".into(), text_content: Some("Original".into()), is_visible: true, ..Default::default() },
             VisualElement { id: 11, kind: "Group".into(), name: "Set".into(), is_visible: true, ..Default::default() },
@@ -3140,9 +3166,23 @@ mod tests {
         plan.steps.push(PlanStep { command: "select.magicWand".into(), params: json!({"x": 99, "y": 49}), description: "fixture".into() });
         assert!(validate_selected_plan(&plan, &contract_scene()).is_ok());
         assert!(validate_selected_plan(&contract_plan("image.crop", json!({"x": 0, "y": 0, "width": 100, "height": 50, "targetWidth": 200, "targetHeight": 100, "angle": 5, "contentAware": true})), &contract_scene()).is_ok());
+        // Points resolve against the scene's resolution (72 dpi: 1pt = 1px);
+        // a resolution step lands before a later pt step (144 dpi: 1pt = 2px).
+        assert!(validate_selected_plan(&contract_plan("image.imageSize", json!({"width": 100, "units": "pt"})), &contract_scene()).is_ok());
+        let mut plan = contract_plan("image.imageSize", json!({"resolution": 144, "keepPrintSize": true}));
+        plan.steps.push(PlanStep { command: "image.imageSize".into(), params: json!({"width": 400, "units": "pt"}), description: "fixture".into() });
+        plan.steps.push(PlanStep { command: "select.magicWand".into(), params: json!({"x": 799, "y": 599}), description: "fixture".into() });
+        assert!(validate_selected_plan(&plan, &contract_scene()).is_ok(), "keepPrintSize 2x then pt at the new dpi");
+        // resample "none" skips the pt scaling; the value stays in pixels.
+        assert!(validate_selected_plan(&contract_plan("image.imageSize", json!({"width": 100, "units": "pt", "resample": "none"})), &contract_scene()).is_ok());
+        // A scene without a resolution leaves pt and keepPrintSize uncheckable.
+        let no_dpi = VisualScene { resolution_dpi: 0.0, ..contract_scene() };
+        assert!(validate_selected_plan(&contract_plan("image.imageSize", json!({"width": 100, "units": "pt"})), &no_dpi).is_err());
+        assert!(validate_selected_plan(&contract_plan("image.imageSize", json!({"resolution": 144, "keepPrintSize": true})), &no_dpi).is_err());
+        // An explicit side wins: keepPrintSize is then ignored, as the engine does.
+        assert!(validate_selected_plan(&contract_plan("image.imageSize", json!({"width": 100, "keepPrintSize": true, "resolution": 144})), &contract_scene()).is_ok());
         for (name, command, params) in [
-            ("pt units need the resolution", "image.imageSize", json!({"width": 100, "units": "pt"})),
-            ("keepPrintSize needs the resolution", "image.imageSize", json!({"resolution": 144, "keepPrintSize": true})),
+            ("resolution below the range", "image.imageSize", json!({"resolution": 0.5})),
             ("imageSize over the cap", "image.imageSize", json!({"width": 9000, "height": 9000})),
             ("imageSize changes nothing", "image.imageSize", json!({"scaleStyles": false})),
             ("bad percent", "image.imageSize", json!({"percent": -50})),
@@ -3554,6 +3594,15 @@ mod tests {
             json!({"observe":[{"command":"image.analysis.pixelDigest","params":{"maxPixels":9000000}}],"steps":[]}),
             json!({"observe":[{"command":"image.detectFaces"}],"steps":[{"command":"select.all","params":{}}]}),
             json!({"observe":[{"command":"image.detectFaces"},{"command":"image.detectFaces"},{"command":"image.detectFaces"},{"command":"image.detectFaces"}],"steps":[]}),
+        ] { assert!(bridge.parse_plan_json(&bad.to_string(), &intent).is_err()); }
+        // gradient.fill.get: the layer id is the only parameter.
+        match bridge.parse_plan_json(&json!({"observe":[{"command":"gradient.fill.get","params":{"layer":15}}],"steps":[]}).to_string(), &intent).unwrap() {
+            PlanResponse::Observe(requests) => assert_eq!(requests[0].command, "gradient.fill.get"),
+            other => panic!("expected observation request, got {other:?}"),
+        }
+        for bad in [
+            json!({"observe":[{"command":"gradient.fill.get","params":{"layer":"Tint"}}],"steps":[]}),
+            json!({"observe":[{"command":"gradient.fill.get","params":{"stops":[]}}],"steps":[]}),
         ] { assert!(bridge.parse_plan_json(&bad.to_string(), &intent).is_err()); }
         // contract.describe: schema discovery bounded to admitted ids, 12 at
         // most, and to the one documented parameter key.
