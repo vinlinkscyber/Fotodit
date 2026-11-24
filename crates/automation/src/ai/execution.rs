@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::provider_bridge::is_layer_creating;
-use super::{AiError, EditingPlan, LiveEditSession};
+use super::{AiError, EditingPlan, LiveEditSession, PlanStep};
 use crate::headless::Headless;
 
 /// Observed-composite evidence class for one executed step. This records what a
@@ -92,10 +92,19 @@ pub struct SelectionCapture {
     /// The step the capture was taken IMMEDIATELY BEFORE: the operation
     /// whose effect is being evaluated.
     pub step_index: usize,
-    /// Document identity at capture (name + path); a post-plan measurement is
-    /// only comparable when the identity matches, never assumed.
+    /// Document identity at capture: name + path PLUS the engine's history
+    /// entry list (the actual transaction record, capped at 512 labels).
+    /// Name+path alone do not identify a document: a same-named swapped
+    /// document is caught by the history prefix at measurement time; a
+    /// rollback keeps the prefix and the pixel comparison honestly reports
+    /// no-change.
     pub document_name: String,
     pub document_path: Option<String>,
+    pub history_entries: Vec<String>,
+    /// Mutation steps before the captured segment (multi-segment plans):
+    /// their effects are measured only via the protected-complement
+    /// comparison, never attributed to this capture's target.
+    pub earlier_mutations: usize,
     /// Selection content bounds [x, y, width, height] at capture time.
     pub bounds: [i64; 4],
     pub revision: Option<u64>,
@@ -338,7 +347,7 @@ impl ExecutionEngine {
     /// (digests plus exact pixels), and coverage-aware colour statistics of
     /// the selection itself. None when the selection is empty or unreadable
     /// at this point; unavailable exact reads stay None (honest unknown).
-    fn capture_selection_stage<S: LiveEditSession + ?Sized>(session: &mut S, step_index: usize) -> Option<SelectionCapture> {
+    fn capture_selection_stage<S: LiveEditSession + ?Sized>(session: &mut S, step_index: usize, earlier_mutations: usize) -> Option<SelectionCapture> {
         let document = session.inspect_active().ok()??;
         let revision = document.get("revision").and_then(Value::as_u64);
         let name = document.get("name").and_then(Value::as_str)?.to_string();
@@ -347,6 +356,9 @@ impl ExecutionEngine {
             _ => None,
         };
         let (cw, ch) = (document.get("width").and_then(Value::as_i64)?, document.get("height").and_then(Value::as_i64)?);
+        let history_entries: Vec<String> = document.get("history").and_then(Value::as_array)
+            .map(|es| es.iter().filter_map(|e| e.as_str().map(str::to_string)).take(512).collect())
+            .unwrap_or_default();
         let a = document.get("selectionBounds")?.as_array()?;
         if a.len() != 4 { return None; }
         let mut bounds = [0i64; 4];
@@ -374,6 +386,8 @@ impl ExecutionEngine {
             step_index,
             document_name: name,
             document_path: path,
+            history_entries,
+            earlier_mutations,
             bounds,
             revision,
             coverage,
@@ -560,16 +574,27 @@ impl ExecutionEngine {
         // re-baselines instead of attributing an unobserved step's changes.
         let mut last_digest: Option<DigestMark> = None;
         let mut evidence_captures = 0usize;
-        // The target-selection stage: IMMEDIATELY BEFORE the first step
-        // following the plan's last selection/mask-driving step - the
-        // operation whose effect is being evaluated. Capturing after the last
-        // selection step would be wrong when that step IS the edit or when it
-        // consumes the selection; a trailing selection-only plan captures
-        // nothing.
-        let capture_before_step = collect_evidence
-            .then(|| plan.steps.iter().rposition(|s| s.command.starts_with("select.") || s.command.contains("mask")))
-            .flatten()
-            .and_then(|last| (last + 1 < plan.steps.len()).then_some(last + 1));
+        // The target-selection stage: IMMEDIATELY BEFORE the first mutation
+        // following the plan's last selection/mask step THAT PRECEDES A
+        // MUTATION. Sequences like "select, edit, deselect" must not anchor
+        // on the trailing deselect (no edit follows it), and the capture must
+        // never land after an edit it claims to precede. A plan that edits in
+        // several selection segments has its LAST segment's target measured;
+        // earlier segments are covered only by the protected-complement
+        // comparison, which the measurement report states explicitly.
+        let is_selection_step = |s: &PlanStep| s.command.starts_with("select.") || s.command.contains("mask");
+        let is_mutation = |s: &PlanStep| !NONVISUAL_COMMANDS.contains(&s.command.as_str())
+            && !is_selection_step(s);
+        let capture_before_step = collect_evidence.then(|| {
+            // Last selection step that has a mutation somewhere after it;
+            // capture immediately before that mutation.
+            plan.steps.iter().enumerate().rev()
+                .find(|(_, s)| is_selection_step(s))
+                .and_then(|(i, _)| plan.steps.iter().enumerate()
+                    .skip(i + 1)
+                    .find(|(_, s)| is_mutation(s))
+                    .map(|(j, _)| j))
+        }).flatten();
         let mut selection_capture: Option<SelectionCapture> = None;
 
         for (idx, step) in plan.steps.iter().enumerate() {
@@ -721,7 +746,14 @@ impl ExecutionEngine {
             })();
 
             if capture_before_step == Some(idx) && selection_capture.is_none() {
-                selection_capture = Self::capture_selection_stage(session, idx);
+                // Mutations before the last selection step preceding idx
+                // belong to earlier selection segments.
+                let last_sel = plan.steps[..idx].iter().rposition(|s|
+                    s.command.starts_with("select.") || s.command.contains("mask"));
+                let earlier_mutations = plan.steps[..last_sel.unwrap_or(0)].iter().filter(|s|
+                    !NONVISUAL_COMMANDS.contains(&s.command.as_str())
+                    && !s.command.starts_with("select.") && !s.command.contains("mask")).count();
+                selection_capture = Self::capture_selection_stage(session, idx, earlier_mutations);
             }
             match resolution.and_then(|params| session.command_run(&step.command, params)) {
                 Ok(output) => {

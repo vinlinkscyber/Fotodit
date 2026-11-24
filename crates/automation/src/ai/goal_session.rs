@@ -481,10 +481,11 @@ fn parse_coverage(value: &Value) -> Option<(i64, i64, u64, u64, Vec<f32>)> {
 }
 
 /// Exact covered/uncovered comparison: the selection's preserved per-pixel
-/// coverage splits the bounding region into the target (coverage >= 0.5) and
-/// the region's collateral (coverage < 0.5). Returns (covered_changed,
-/// covered_total, collateral_changed). The preserved coverage is what lets
-/// this survive the selection's consumption.
+/// coverage splits the bounding region into the target (ANY nonzero
+/// coverage, so feathered and low-opacity edges are never discarded) and
+/// the region's collateral (exactly zero coverage). Returns
+/// (covered_changed, covered_total, collateral_changed). The preserved
+/// coverage is what lets this survive the selection's consumption.
 fn compare_exact_coverage(before: &Value, after: &Value, coverage: &Value) -> Option<(u64, u64, u64)> {
     let (bx, by, bw, bh, bp) = parse_exact_region(before)?;
     let (ax, ay, aw, ah, ap) = parse_exact_region(after)?;
@@ -492,7 +493,7 @@ fn compare_exact_coverage(before: &Value, after: &Value, coverage: &Value) -> Op
     if (bx, by, bw, bh) != (ax, ay, aw, ah) || (bx, by, bw, bh) != (cx, cy, cw, ch) { return None; }
     let (mut covered_changed, mut covered_total, mut collateral_changed) = (0u64, 0u64, 0u64);
     for ((c, a), b) in cov.iter().zip(ap.chunks_exact(4)).zip(bp.chunks_exact(4)) {
-        if *c >= 0.5 {
+        if *c > 0.0 {
             covered_total += 1;
             if a != b { covered_changed += 1; }
         } else if a != b {
@@ -788,13 +789,29 @@ fn measure_from_selection_stage<S: LiveEditSession + ?Sized>(session: &mut S, ca
     // comparable when the document is still the one captured before the
     // evaluated step (same name + path, read back now). A document swapped
     // under the plan makes every capture stale; nothing is assumed.
+    // Name+path do not identify a document: the engine's history entry list
+    // (the actual transaction record) must still contain the capture-time
+    // entries as an exact prefix. Rollback keeps that prefix (the pixel
+    // comparison then honestly reports no-change); a swapped same-named
+    // document fails it. A prefix over the 512-label capture cap is not
+    // verified and fails closed.
     let identity_ok = session.inspect_active().ok().flatten()
-        .map(|doc| doc.get("name").and_then(Value::as_str) == Some(capture.document_name.as_str())
+        .map(|doc| {
+            doc.get("name").and_then(Value::as_str) == Some(capture.document_name.as_str())
             && match doc.get("path") {
                 Some(Value::String(p)) => capture.document_path.as_deref() == Some(p.as_str()),
                 Some(Value::Null) | None => capture.document_path.is_none(),
                 _ => false,
-            })
+            }
+            && match doc.get("history").and_then(Value::as_array) {
+                Some(entries) if capture.history_entries.len() < 512 => {
+                    let current: Vec<&str> = entries.iter().filter_map(Value::as_str).collect();
+                    current.len() >= capture.history_entries.len()
+                        && capture.history_entries.iter().zip(current.iter()).all(|(a, b)| a == b)
+                }
+                _ => false,
+            }
+        })
         .unwrap_or(false);
     if !identity_ok {
         let mut m = unavailable();
@@ -847,8 +864,12 @@ fn measure_from_selection_stage<S: LiveEditSession + ?Sized>(session: &mut S, ca
             None => failed("the protected region's before-execution capture failed or was refused"),
         }, false)));
     }
-    RegionMeasurement { target, protected, available: true, target_is_canvas: false,
-        target_source: "the plan's selection, captured immediately before the evaluated edit" }
+    let target_source: &'static str = if capture.earlier_mutations > 0 {
+        "the plan's final selection segment, captured immediately before its edit (earlier edit segments are measured only via the protected-complement comparison)"
+    } else {
+        "the plan's selection, captured immediately before the evaluated edit"
+    };
+    RegionMeasurement { target, protected, available: true, target_is_canvas: false, target_source }
 }
 
 fn measure_target_colour<S: LiveEditSession + ?Sized>(session: &mut S, intent: &EditingIntent, plan: &EditingPlan, final_scene: &VisualScene, capture: Option<&SelectionCapture>, evaluation: &mut EvaluationReport) -> ColourCriterion {
@@ -888,7 +909,7 @@ fn measure_target_colour<S: LiveEditSession + ?Sized>(session: &mut S, intent: &
                         let measured = format!("#{:02x}{:02x}{:02x}",
                             (mean[0] * 255.0).round() as u8, (mean[1] * 255.0).round() as u8, (mean[2] * 255.0).round() as u8);
                         evaluation.observations.push(format!(
-                            "Measured colour criterion: exact coverage-weighted mean colour of the target's covered pixels is {measured}."));
+                            "Measured colour criterion: exact coverage-weighted mean colour of the target's covered pixels is {measured}. A mean matches the requested colour on average only; it does not verify the colour's distribution across the target."));
                         return ColourCriterion::Checked(ColourCheck { requested, measured, within_tolerance });
                     }
                 }

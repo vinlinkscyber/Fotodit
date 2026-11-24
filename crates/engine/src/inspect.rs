@@ -117,7 +117,7 @@ fn layer_sel(
         [r.x0, r.y0, r.width() as i32, r.height() as i32]
     });
     // Bounding rect of the pixels the layer mask REVEALS over the canvas
-    // (effective value, density included, >= 0.5): the mask-derived target
+    // (effective value, density included, > 0.0): the mask-derived target
     // region the AI measurement layer needs. Bounded: skipped (null) when
     // the canvas is unknown (single-layer inspection) or over 16M px, where
     // the scan would allocate unbounded memory.
@@ -129,7 +129,7 @@ fn layer_sel(
             mask.values_into(Rect::from_xywh(0, 0, canvas.width, canvas.height), &mut values);
             let (mut x0, mut y0, mut x1, mut y1) = (w, h, -1, -1);
             for (i, v) in values.iter().enumerate() {
-                if *v >= 0.5 {
+                if *v > 0.0 {
                     let (x, y) = (i as i32 % w, i as i32 / w);
                     x0 = x0.min(x); y0 = y0.min(y); x1 = x1.max(x); y1 = y1.max(y);
                 }

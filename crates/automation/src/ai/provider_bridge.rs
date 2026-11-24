@@ -3017,7 +3017,19 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    #[test]
+        #[test]
+    fn exact_pixel_commands_never_reach_provider_payloads() {
+        // image.analysis.regionPixels / selectionCoverage return raw pixel
+        // data for LOCAL measurement only. They must stay out of every
+        // provider-facing admission list: a provider can neither request
+        // them as observations nor receive them through plan admission.
+        for cmd in ["image.analysis.regionPixels", "image.analysis.selectionCoverage"] {
+            assert!(!OBSERVATION_COMMANDS.contains(&cmd), "{cmd} must not be provider-observable");
+            assert!(!SELECTED_COMMANDS.contains(&cmd), "{cmd} must not be plan-admitted");
+        }
+    }
+
+#[test]
     fn provider_slots_match_the_settings_screen_list() {
         let ids = [ProviderId::Gemini, ProviderId::OpenRouter, ProviderId::Cohere, ProviderId::Pollinations, ProviderId::Lajiwa];
         let slots: Vec<&str> = ids.iter().map(|p| key_slot(*p)).collect();
