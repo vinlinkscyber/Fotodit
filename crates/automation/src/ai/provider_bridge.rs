@@ -1599,7 +1599,7 @@ fn contract_capabilities() -> (Value, Value) {
         .filter_map(|id| catalog.get(id))
         .map(|c| json!({"command":c.id,"params":match c.id.as_str() {
             "file.new" => r#"{width:integer 1..8192,height:integer 1..8192,background:transparent|white|black}"#,
-            "type.create" => r#"{x:integer px,y:integer px,text:string 1..2000chars,size:number 6..512,color:#rrggbb optional}"#,
+            "type.create" => r#"{x:integer px,y:integer px,text:string 1..2000chars,size:number 6..512 optional (engine default 12pt),color:#rrggbb or [r,g,b] 0..1 optional}"#,
             "type.edit" => r#"{layer:existing visible Type id or {"$step":N} of an earlier type.create step,text:string 1..2000chars}"#,
             "type.setStyle" => r#"{layer:existing visible Type id or {"$step":N} of an earlier type.create step,size:number 6..512 optional,color:#rrggbb optional; at least one style}"#,
             "edit.transform" => r#"{layer:existing visible layer id or {"$step":N},dx:px optional,dy:px optional,scaleX:percent optional,scaleY:percent optional,rotate:deg optional,reference:center|topLeft|top|topRight|left|right|bottomLeft|bottom|bottomRight optional,interpolation:bicubic|bilinear|nearest|bicubicSharper|bicubicSmoother|bicubicAutomatic optional; at least one of dx/dy/scaleX/scaleY/rotate}"#,
@@ -1610,7 +1610,7 @@ fn contract_capabilities() -> (Value, Value) {
     // schema here it would silently vanish from the disclosed tool set.
     if !capabilities.iter().any(|c| c["command"] == "edit.fill") {
         capabilities.push(json!({"command":"edit.fill",
-            "params":r##"{"contents":"color|foreground|background|white|black|gray|contentAware optional,"color":"#rrggbb optional (contents color),"opacity":percent optional,"mode":blend mode optional}"##,
+            "params":r##"{contents:color|foreground|background|white|black|gray|contentAware optional (default color; pattern/history not admitted),color:#rrggbb or [r,g,b] 0..1 optional (used when contents is color),opacity:percent 0..100 optional,mode:blend mode optional,preserveTransparency:bool optional,target:pixels|mask optional,colorAdaptation:bool optional (contentAware),scaleAdaptation:bool optional,mirror:bool optional,rotationAdaptation:bool optional,scale:1..1000 optional,angle:deg optional}"##,
             "description":"Fill the active selection or active pixel layer with a color or content-aware fill"}));
     }
     let mut index = serde_json::Map::new();
@@ -1850,6 +1850,8 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
                 // Luminosity selection is parameter-free, and the local
                 // subject/sky/focus pickers all have documented defaults.
                 | "select.loadLuminosity" | "select.subject" | "select.sky" | "select.focusArea"
+                // Drop and reselect take no parameters at all (empty key list).
+                | "select.drop" | "select.reselect"
                 | "image.autoTone" | "image.autoContrast" | "image.autoColor");
         if map.is_empty() && !paramless { return Err(refuse()); }
         if let Some(rules) = filter {
