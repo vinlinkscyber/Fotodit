@@ -76,9 +76,25 @@ pub struct ExecutionEvidence {
     /// following edit could consume the selection. A selection that existed
     /// before the plan is never mistaken for the plan's target. None when the
     /// plan drives no selection/mask step, the selection is empty at that
-    /// point, or the host lacks the capability.
+    /// point, or the host lacks the capability. For multi-segment plans this
+    /// is the FINAL segment's capture; every segment's capture is in
+    /// `selection_captures`.
     #[serde(default)]
     pub selection_capture: Option<SelectionCapture>,
+    /// One capture per selection segment: each select.* step that is followed
+    /// by a mutation opens a segment, captured immediately before the
+    /// segment's first mutation.
+    #[serde(default)]
+    pub selection_captures: Vec<SelectionCapture>,
+    /// Exact rendered canvas pixels captured before the plan's first step
+    /// (only for selection-driven plans whose canvas fits the aggregate
+    /// budget): the baseline that lets a multi-segment plan's protected
+    /// comparison cover every pixel no segment's coverage claims.
+    #[serde(default)]
+    pub canvas_before_pixels: Option<Vec<f32>>,
+    /// Canvas [width, height] at baseline capture time.
+    #[serde(default)]
+    pub canvas_size: Option<[i64; 2]>,
 }
 
 /// What was true at the plan's target-selection stage: the selection's
@@ -656,17 +672,47 @@ impl ExecutionEngine {
         let is_mutation = |s: &PlanStep| !is_selection_step(s)
             && fotodit_engine::command_specs().iter()
                 .find(|spec| spec.id == s.command).map_or(true, |spec| spec.journal);
-        let capture_before_step = collect_evidence.then(|| {
-            // Last selection step that has a mutation somewhere after it;
-            // capture immediately before that mutation.
-            plan.steps.iter().enumerate().rev()
-                .find(|(_, s)| is_selection_step(s))
-                .and_then(|(i, _)| plan.steps.iter().enumerate()
-                    .skip(i + 1)
-                    .find(|(_, s)| is_mutation(s))
-                    .map(|(j, _)| j))
-        }).flatten();
+        // Every selection segment gets its own capture: a select.* step
+        // followed by a mutation opens a segment, captured immediately
+        // before the segment's FIRST mutation. Trailing selection-only
+        // plans capture nothing; a capture never lands after an edit it
+        // claims to precede.
+        let mut first_mutation_of_segment = vec![false; plan.steps.len()];
+        {
+            let mut segment_open = false;
+            for (i, s) in plan.steps.iter().enumerate() {
+                if is_selection_step(s) {
+                    segment_open = true;
+                } else if is_mutation(s) {
+                    if segment_open { first_mutation_of_segment[i] = true; }
+                    segment_open = false;
+                }
+            }
+        }
+        let has_selection_plan = plan.steps.iter().any(|s| is_selection_step(s));
+        // Canvas baseline for selection-driven plans whose canvas fits the
+        // aggregate budget: multi-segment protected comparisons measure
+        // every pixel no segment's coverage claims, not border heuristics.
+        let (canvas_before_pixels, canvas_size) = if collect_evidence && has_selection_plan {
+            match session.inspect_active().ok().flatten() {
+                Some(doc) => {
+                    let size = doc.get("width").and_then(Value::as_i64)
+                        .zip(doc.get("height").and_then(Value::as_i64));
+                    match size {
+                        Some((w, h)) if w > 0 && h > 0 => {
+                            let px = Self::capture_tiled(session, "image.analysis.regionPixels", [0, 0, w, h], 4);
+                            (px, Some([w, h]))
+                        }
+                        _ => (None, None),
+                    }
+                }
+                None => (None, None),
+            }
+        } else {
+            (None, None)
+        };
         let mut selection_capture: Option<SelectionCapture> = None;
+        let mut selection_captures: Vec<SelectionCapture> = Vec::new();
 
         for (idx, step) in plan.steps.iter().enumerate() {
             // The leading file.new of a creation plan: the created document is
@@ -816,14 +862,17 @@ impl ExecutionEngine {
                 Ok(resolved_params)
             })();
 
-            if capture_before_step == Some(idx) && selection_capture.is_none() {
+            if collect_evidence && first_mutation_of_segment[idx] {
                 // Mutations (engine journal metadata) before the last
                 // selection step preceding idx belong to earlier selection
                 // segments.
-                let last_sel = plan.steps[..idx].iter().rposition(|s| s.command.starts_with("select."));
+                let last_sel = plan.steps[..idx].iter().rposition(|s| is_selection_step(s));
                 let earlier_mutations = plan.steps[..last_sel.unwrap_or(0)].iter()
                     .filter(|s| is_mutation(s)).count();
-                selection_capture = Self::capture_selection_stage(session, idx, earlier_mutations);
+                if let Some(c) = Self::capture_selection_stage(session, idx, earlier_mutations) {
+                    selection_capture = Some(c.clone());
+                    selection_captures.push(c);
+                }
             }
             match resolution.and_then(|params| session.command_run(&step.command, params)) {
                 Ok(output) => {
@@ -1063,7 +1112,8 @@ impl ExecutionEngine {
                 error: None,
                 undos_performed: 0,
             },
-            ExecutionEvidence { steps: evidence, selection_capture },
+            ExecutionEvidence { steps: evidence, selection_capture, selection_captures,
+                canvas_before_pixels, canvas_size },
         ))
     }
 

@@ -270,7 +270,16 @@ impl AiEngine {
                     let selection_capture = attempt.evidence.as_ref().and_then(|e| e.selection_capture.clone());
                     let measured = match &region_watch {
                         Some(watch) => watch.measure(&mut host, region_before),
-                        None => measure_from_selection_stage(&mut host, selection_capture.as_ref()),
+                        None => {
+                            let captures = attempt.evidence.as_ref().map(|e| e.selection_captures.as_slice()).unwrap_or(&[]);
+                            if captures.len() > 1 {
+                                measure_segments(&mut host, captures,
+                                    attempt.evidence.as_ref().and_then(|e| e.canvas_before_pixels.as_ref()),
+                                    attempt.evidence.as_ref().and_then(|e| e.canvas_size))
+                            } else {
+                                measure_from_selection_stage(&mut host, selection_capture.as_ref())
+                            }
+                        }
                     };
                     let mut evaluation = self.eval_engine.evaluate(&intent, &scene, &final_scene, &execution);
                     let grounding = measured.apply(intent.category, &mut evaluation);
@@ -773,17 +782,14 @@ fn parse_hex_rgb(hex: &str) -> Option<[u8; 3]> {
 /// target-selection stage capture plus after-execution captures over the
 /// identical regions. The pre-execution scene's selection is never used:
 /// when the plan first selects the shirt, the target IS the plan's selection.
-fn measure_from_selection_stage<S: LiveEditSession + ?Sized>(session: &mut S, capture: Option<&SelectionCapture>) -> RegionMeasurement {
-    let unavailable = || RegionMeasurement { target: None, protected: Vec::new(), available: false, target_is_canvas: false, target_source: "nothing measurable", uncovered: None };
-    let Some(capture) = capture else { return unavailable() };
-    let failed = |why: &str| VisualEvidence { class: VisualEvidenceClass::Unknown, detail: why.to_string() };
-    // Identity is the engine's unique live DocId, bound through the
-    // transaction by a monotonic revision (the after state must be at or
-    // past the capture's revision). Name+path corroborate but never
-    // identify: a same-named different document has a different DocId.
-    // Rollback keeps the same document and honestly measures no-change; a
-    // close/reopen or swap fails the id. A missing id fails closed.
-    let identity_ok = session.inspect_active().ok().flatten()
+/// Identity check shared by single- and multi-segment measurement: the
+/// engine's unique live DocId, bound through the transaction by a monotonic
+/// revision (the after state must be at or past the capture's revision).
+/// Name+path corroborate but never identify. Rollback keeps the same
+/// document and honestly measures no-change; a close/reopen or swap fails
+/// the id. A missing id fails closed.
+fn capture_identity_matches<S: LiveEditSession + ?Sized>(session: &mut S, capture: &SelectionCapture) -> bool {
+    session.inspect_active().ok().flatten()
         .map(|doc| {
             let id_ok = match (doc.get("id").and_then(Value::as_u64), capture.document_id) {
                 (Some(now), Some(then)) => now == then,
@@ -795,7 +801,97 @@ fn measure_from_selection_stage<S: LiveEditSession + ?Sized>(session: &mut S, ca
             };
             id_ok && revision_ok
         })
-        .unwrap_or(false);
+        .unwrap_or(false)
+}
+
+/// Multi-segment measurement: EVERY selection segment's target is measured
+/// exactly (its covered pixels must change), and the protected comparison is
+/// canvas-level against the pre-plan baseline: any pixel that changed while
+/// no segment's coverage claims it is a protected violation. Requires the
+/// pre-plan canvas baseline (canvas within the aggregate budget); without it
+/// the protected leg is honest Unknown, never skipped silently.
+fn measure_segments<S: LiveEditSession + ?Sized>(session: &mut S, captures: &[SelectionCapture], canvas_before: Option<&Vec<f32>>, canvas_size: Option<[i64; 2]>) -> RegionMeasurement {
+    let unavailable = || RegionMeasurement { target: None, protected: Vec::new(), available: false, target_is_canvas: false, target_source: "nothing measurable", uncovered: None };
+    let failed = |why: &str| VisualEvidence { class: VisualEvidenceClass::Unknown, detail: why.to_string() };
+    if captures.is_empty() { return unavailable(); }
+    // Target leg: every segment's covered pixels, compared exactly.
+    let mut segment_reports: Vec<String> = Vec::new();
+    let mut target_evidence: Option<(VisualEvidence, bool)> = None;
+    for (n, capture) in captures.iter().enumerate() {
+        let evidence = if !capture_identity_matches(session, capture) {
+            (failed("the document identity changed before this segment could be measured"), false)
+        } else {
+            match (&capture.before_pixels, &capture.coverage) {
+                (Some(before_px), Some(cov)) => match ExecutionEngine::capture_tiled(session, "image.analysis.regionPixels", capture.bounds, 4) {
+                    Some(after_px) => compare_exact_coverage(before_px, &after_px, cov)
+                        .map(|(covered_changed, covered_total, collateral)| {
+                            segment_reports.push(format!(
+                                "segment {}: {covered_changed} of {covered_total} covered pixels differ ({collateral} collateral in-bounds)", n + 1));
+                            let class = if covered_changed > 0 { VisualEvidenceClass::Changed } else { VisualEvidenceClass::NoChangeObserved };
+                            (VisualEvidence { class, detail: format!("segment {} of {}", n + 1, captures.len()) }, true)
+                        })
+                        .unwrap_or_else(|| (failed("a segment's buffers failed the shape check"), false)),
+                    None => (failed("a segment's after-execution exact capture failed, was refused, or exceeded the aggregate budget"), false),
+                },
+                _ => (failed("a segment's before-capture lacked exact pixels or coverage"), false),
+            }
+        };
+        // First failing segment decides the target leg; all are still measured.
+        let bad = !matches!(evidence.0.class, VisualEvidenceClass::Changed) || !evidence.1;
+        if target_evidence.is_none() || (bad && target_evidence.as_ref().is_some_and(|(e, x)| matches!(e.class, VisualEvidenceClass::Changed) && *x)) {
+            target_evidence = Some(evidence);
+        }
+    }
+    // Protected leg: canvas-level against the pre-plan baseline.
+    let mut protected = Vec::new();
+    match (canvas_before, canvas_size) {
+        (Some(before), Some([w, h])) => {
+            let after = ExecutionEngine::capture_tiled(session, "image.analysis.regionPixels", [0, 0, w, h], 4);
+            match after {
+                Some(after) if after.len() == before.len() => {
+                    let (mut violation, mut claimed) = (0u64, 0u64);
+                    let (wu, hu) = (w as u64, h as u64);
+                    for (i, (a, b)) in after.chunks_exact(4).zip(before.chunks_exact(4)).enumerate() {
+                        if a == b { continue; }
+                        let idx = i as u64;
+                        let (px, py) = ((idx % wu) as i64, (idx / wu) as i64);
+                        let claimed_by_segment = captures.iter().any(|c| {
+                            let [bx, by, bw, bh] = c.bounds;
+                            px >= bx && py >= by && px < bx + bw && py < by + bh
+                                && c.coverage.as_ref().is_some_and(|cov| {
+                                    let off = ((py - by) as u64 * bw as u64 + (px - bx) as u64) as usize;
+                                    cov.get(off).is_some_and(|v| *v > 0.0)
+                                })
+                        });
+                        if claimed_by_segment { claimed += 1; } else { violation += 1; }
+                    }
+                    let class = if violation > 0 { VisualEvidenceClass::Changed } else { VisualEvidenceClass::NoChangeObserved };
+                    protected.push((VisualEvidence { class, detail: format!(
+                        "exact canvas-level comparison over {} pixels: {violation} changed pixel(s) are claimed by no segment's coverage ({claimed} changed pixels are claimed)", wu * hu) }, true));
+                }
+                _ => protected.push((failed("the after-execution canvas capture failed, was refused, or changed shape"), false)),
+            }
+        }
+        _ => protected.push((failed("no pre-plan canvas baseline was captured (canvas over the aggregate budget); the multi-segment protected comparison is unavailable"), false)),
+    }
+    let mut detail = String::from("all segments measured: ");
+    detail.push_str(&segment_reports.join("; "));
+    if let Some((e, _)) = &mut target_evidence { e.detail = format!("{}; {}", e.detail, detail); }
+    RegionMeasurement { target: target_evidence, protected, available: true, target_is_canvas: false,
+        target_source: "every selection segment's preserved coverage plus the canvas-level baseline", uncovered: None }
+}
+
+fn measure_from_selection_stage<S: LiveEditSession + ?Sized>(session: &mut S, capture: Option<&SelectionCapture>) -> RegionMeasurement {
+    let unavailable = || RegionMeasurement { target: None, protected: Vec::new(), available: false, target_is_canvas: false, target_source: "nothing measurable", uncovered: None };
+    let Some(capture) = capture else { return unavailable() };
+    let failed = |why: &str| VisualEvidence { class: VisualEvidenceClass::Unknown, detail: why.to_string() };
+    // Identity is the engine's unique live DocId, bound through the
+    // transaction by a monotonic revision (the after state must be at or
+    // past the capture's revision). Name+path corroborate but never
+    // identify: a same-named different document has a different DocId.
+    // Rollback keeps the same document and honestly measures no-change; a
+    // close/reopen or swap fails the id. A missing id fails closed.
+    let identity_ok = capture_identity_matches(session, capture);
     if !identity_ok {
         let mut m = unavailable();
         m.available = true;
