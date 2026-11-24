@@ -268,10 +268,11 @@ unit test), and are read-only, non-journaled and allocation-bounded.
 A change counts as done only when its gate evidence exists. Gates run only with
 the owner's explicit approval of each CI run.
 
-- **G1 — Automated suites green in CI**, including the keystore unit suite and
-  new contract/validator tests, which must be added to the workflow (they are
-  not in it today). Evidence: ABSENT. Nothing in the private chain is compiled;
-  all new code is implemented-unverified.
+- **G1 — Automated suites green in CI**, including the keystore and engine
+  unit suites, now present as legs of `test-linux.yml` alongside the
+  automation suite, with text-log artifacts only. Evidence: ABSENT. The
+  workflow legs are added but no run has executed; nothing in the private
+  chain is compiled; all new code is implemented-unverified.
 - **G2 — Rendered UI proofs** for every UI-affecting change (the existing
   snapshot examples pattern), reviewed as images. Evidence: ABSENT.
 - **G3 — Windows activation proof**: on a real Windows build, save a key, see
