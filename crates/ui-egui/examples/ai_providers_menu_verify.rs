@@ -27,7 +27,7 @@ fn snap(harness: &mut Harness<'static, FotoditApp>, name: &str) {
 fn menu_harness(document: bool) -> Harness<'static, FotoditApp> {
     let mut ready = false;
     let mut harness = Harness::builder()
-        .with_size(egui::vec2(1200.0, 900.0))
+        .with_size(egui::vec2(1200.0, 2400.0))
         .wgpu()
         .build_ui_state(
             move |ui, app: &mut FotoditApp| {
@@ -66,11 +66,15 @@ fn main() {
         harness.get_by_label_contains("AI Providers").click();
         harness.run_steps(3);
 
-        // Rendered-tree proof, not a flag read: the window's title and its masked key
-        // field must be in the accessibility tree after the click.
+        // Rendered proof, not only a flag read: the settings window's content (a
+        // provider row and its masked key field) must be in the accessibility tree
+        // after the click. The window TITLE is not asserted: egui does not provably
+        // expose it as a queryable node (the r6 run failed exactly there, while the
+        // flag-based unit regression proved the click does open the window).
+        assert!(harness.state().ai_providers.open, "menu click did not open provider settings, document={document}");
         assert!(
-            harness.query_by_label_contains("AI providers").is_some(),
-            "settings window did not render after the menu click, document={document}"
+            harness.query_by_label_contains("Google Gemini").is_some(),
+            "settings window content did not render after the menu click, document={document}"
         );
         assert!(
             harness.query_all_by_role(egui::accesskit::Role::TextInput).next().is_some(),
