@@ -273,14 +273,24 @@ shirt. Passing means every link, not a plausible render:
    the criterion: the target region's colour moved to red AND a pixel digest
    of unrelated areas is unchanged. Command success or a good-looking render
    alone is not this proof.
-   Status: the unchanged-areas leg is implemented (unverified) — the goal
-   coordinator derives the target region (union of plan-targeted layer
-   bounds) and up to four protected border regions, captures exact
-   before/after region digests at stride 1 through the admitted digest hook,
-   and a measured protected-region change blocks completion in favour of
-   correction or an honest unmet outcome. The target-colour leg (did the
-   region become RED, not merely change) remains open: region digests prove
-   change/no-change, not the resulting colour.
+   Status (49bd380, all unverified): the coordinator measures the derived
+   target region (union of plan-targeted layer bounds; canvas only for plans
+   that address no layer) and up to four protected border regions before and
+   after execution. Labels are honest: a changed digest is a fact; an equal
+   digest is "no difference observed on the sampled 8-bit grid", never proof.
+   Preservation is a local-edit criterion only (geometry/global/design
+   requests legitimately alter the complement). Completion is gated:
+   satisfied evaluations without grounding (semantic checks for design, a
+   measured changed target plus observed-unchanged complement for local
+   edits) stop as FinalStateUnverified and route into the bounded correction
+   pass, never Completed on execution success alone. A measured no-change
+   target is unmet. The colour leg: when the request names a colour, the
+   final selection's colorStats mean must match within tolerance (mismatch
+   is unmet; unmeasurable is unverified). Remaining open: the target region
+   is derived from plan-targeted layer bounds, not actual selection/mask
+   geometry; the selection must still be active on the final state for the
+   colour criterion; exact pixel comparison (vs digest) for the strongest
+   proof claims.
 4. **Correction or honest outcome.** If the measured criterion fails, the one
    structured correction pass runs; if it is exhausted, the chat says the
    goal is unmet or ambiguous, what was left in the document, and that Undo
