@@ -47,6 +47,9 @@ fn document_with(d: &DocState, detail: bool) -> Value {
         "path": &d.path,
         "width": doc.size.width,
         "height": doc.size.height,
+        // The document's journal revision: identity checks bind a capture
+        // to this document through a monotonic revision, not just DocId.
+        "revision": d.revision,
         "mode": format!("{:?}", doc.mode),
         "depth": doc.depth.bits(),
         "resolution": doc.resolution_dpi,
