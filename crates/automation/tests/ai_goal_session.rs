@@ -272,6 +272,27 @@ fn inserted_creation_counts_against_budget_before_any_real_host_dispatch() {
     assert!(host.inspect_active().unwrap().is_none());
 }
 
+#[test]
+fn non_creation_request_with_no_document_never_fabricates_a_document() {
+    // A recolour/enhance-style request with no document open and a plan that
+    // never asked for creation must stop for input, not auto-create an
+    // unrelated document. (Audit of the removed keyword gate.)
+    let mut host = Headless::trusted_local();
+    let outcome = engine(duplicate()).process_goal_in(&mut host, &GoalRequest::new("make it brighter"), &mut AiContext::new(), &NoGoalRepair);
+    assert_eq!(outcome.stop, GoalStop::NeedsInput, "{}", outcome.detail);
+    assert!(host.inspect_active().unwrap().is_none(), "no document was fabricated");
+}
+
+#[test]
+fn planner_led_creation_without_design_keywords_is_allowed_with_no_document() {
+    // Creation is a capability, not a keyword whitelist: a non-design request
+    // whose plan leads with file.new still creates, whatever the category.
+    let mut host = Headless::trusted_local();
+    let outcome = engine(plan(vec![step("file.new", json!({"width": 8, "height": 8, "background": "white"}))]))
+        .process_goal_in(&mut host, &GoalRequest::new("make it brighter"), &mut AiContext::new(), &NoGoalRepair);
+    assert!(host.inspect_active().unwrap().is_some(), "planner-led creation proceeds: {}", outcome.detail);
+}
+
 struct StopRepair(bool);
 impl GoalRepairAdapter for StopRepair {
     fn plan_repair(&self, _input: GoalRepairInput<'_>) -> Result<GoalRepairDecision, AiError> {

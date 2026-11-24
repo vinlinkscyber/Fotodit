@@ -55,12 +55,16 @@ pub struct GuiAssistant {
     /// plans, replayed into intent parsing and planning, and what bare
     /// "do that again" requests resolve against. Session-only, never persisted.
     context: AiContext,
+    /// Document the context belongs to. A switch or close resets the context:
+    /// recorded turns reference another document's layer ids and must never
+    /// target the newly active one. Creation from no document keeps it.
+    context_document: Option<String>,
 }
 
 impl GuiAssistant {
     /// Offline at startup. Only the in-app, session-only consent can enable a provider.
     pub fn new() -> Self {
-        Self { planner_factory: Box::new(provider_planner), identity: provider_identity, pending: None, context: AiContext::new() }
+        Self { planner_factory: Box::new(provider_planner), identity: provider_identity, pending: None, context: AiContext::new(), context_document: None }
     }
 
 }
@@ -119,6 +123,16 @@ fn document_id(app: &FotoditApp) -> Option<String> {
     app.session.active().map(|d| format!("{:?}", d.doc.id))
 }
 
+/// Name of the layer a completed plan last targeted, for cross-turn target
+/// continuity. Ids are per-document state, so only the name crosses turns;
+/// the provider always re-resolves targets against the current scene.
+fn plan_target_name(plan: &EditingPlan, document: &Option<serde_json::Value>) -> Option<String> {
+    let id = plan.steps.iter().rev().find_map(|s| s.params.get("layer").and_then(|v| v.as_u64()))?;
+    document.as_ref()?.get("layers")?.as_array()?.iter()
+        .find(|l| l.get("id").and_then(|v| v.as_u64()) == Some(id))?
+        .get("name")?.as_str().map(|s| s.chars().take(64).collect())
+}
+
 struct FixedPlan(EditingPlan);
 impl fotodit_automation::ai::AiPlanner for FixedPlan {
     fn plan(&self, _intent: &fotodit_automation::ai::EditingIntent, _scene: &fotodit_automation::ai::VisualScene,
@@ -130,6 +144,17 @@ impl AssistantBackend for GuiAssistant {
         if self.pending.is_some() { return Err("A provider request is already pending. Wait or cancel it first.".into()); }
         let binding = app.ai_providers.editing_consent().binding();
         if let Some(slot) = binding.0 {
+            // Cross-turn context is per-document: switching to a different
+            // document or closing it drops the recorded turns, so a follow-up
+            // can never target another document's layers through stale ids.
+            // Appearing from none (this assistant just created it) keeps it.
+            let current_document = document_id(app);
+            if match (&self.context_document, &current_document) {
+                (Some(previous), Some(current)) => previous != current,
+                (Some(_), None) => true,
+                (None, _) => false,
+            } { self.context = AiContext::new(); }
+            self.context_document = current_document;
             // Each Send is one bounded request; session context resolves bare
             // replays locally instead of guessing what an earlier request meant.
             let lower = prompt.to_lowercase();
@@ -306,6 +331,12 @@ impl AssistantBackend for GuiAssistant {
             // the next round compares against the post-edit state, not the original.
             pending.document = app.session.active().map(fotodit_engine::inspect::document);
             pending.document_id = document_id(app);
+            // Cross-turn target continuity: remember the last targeted layer's
+            // name so the next turn's parsing can resolve "it"/"the heading".
+            if let Some(attempt) = outcome.attempts.iter().rev().find(|a| a.execution.as_ref().is_some_and(|e| e.is_success)) {
+                self.context.active_target = plan_target_name(&attempt.plan, &pending.document);
+            }
+            self.context_document = pending.document_id.clone();
         }
         let next_check = match phase { PendingPhase::Planning => 1, PendingPhase::Verifying { check } => check + 1 };
         // Requests actually sent for this goal so far; result checks only count once sent.
@@ -577,6 +608,24 @@ mod tests {
         assert!(replay.starts_with("Asking Gemini"), "{replay}");
         let _ = await_plan(&mut app, &ctx);
         assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn document_switch_resets_cross_turn_context() {
+        use std::sync::atomic::Ordering;
+        let (mut app, calls, _) = chat_fixture(false);
+        let ctx = egui::Context::default();
+        app.ai_providers.editing_consent_mut().request("gemini");
+        app.ai_providers.editing_consent_mut().confirm_identity([7; 32]);
+        let _ = fotodit_ui_egui::panels::assistant::submit(&mut app, &ctx, "create a poster called chndrax");
+        let _ = await_plan(&mut app, &ctx);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        // Switching to another document drops the recorded turns: a replay
+        // must never target the new document through the old one's context.
+        app.session.execute("file.new", serde_json::json!({"width":16,"height":16})).unwrap();
+        let reply = fotodit_ui_egui::panels::assistant::submit(&mut app, &ctx, "do that again");
+        assert!(reply.contains("nothing was sent"), "{reply}");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]

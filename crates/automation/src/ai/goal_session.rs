@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 use serde_json::{Value, json};
 
 use super::{AiContext, AiEngine, AiError, EditingIntent, EditingPlan, EvaluationReport,
-    ExecutionEngine, ExecutionEvidence, ExecutionResult, LiveEditSession,
+    ExecutionEngine, ExecutionEvidence, ExecutionResult, IntentCategory, LiveEditSession,
     PlanStep, VisualScene};
 use crate::AutomationError;
 
@@ -157,12 +157,13 @@ impl AiEngine {
             Err(error) => return outcome.stop(GoalStop::PlanningFailed, error.to_string()),
         };
         outcome.original_intent = Some(intent.clone());
-        // No per-category gate with no document open: the creation path below
-        // (a planner-led or auto-inserted file.new first step, with the
-        // transactional guard keyed on allow_creation) is what makes a plan
-        // legal on an empty session, whatever category the intent parsed to.
-        // The GUI provider contract enforces the same file.new-first shape
-        // before a plan ever reaches this point.
+        // No per-category gate with no document open: a planner may lead with
+        // file.new for ANY request below (creation is a capability, not a
+        // keyword whitelist), and the transactional guard is keyed on
+        // allow_creation. What is not allowed is the engine fabricating a
+        // document for a request that never asked for one - see the guarded
+        // auto-insert below. The GUI provider contract independently enforces
+        // file.new-first on empty scenes before a plan ever reaches this point.
         let mut host = GoalHost { inner: session, anchor: RefCell::new(anchor),
             poison: RefCell::new(None), calls: Vec::new(), allow_creation: document.is_none() };
         let mut fingerprints = BTreeSet::new();
@@ -188,6 +189,14 @@ impl AiEngine {
                 }
             };
             if attempt_index == 0 && current.is_none() && !plan.steps.iter().any(|step| step.command == "file.new") {
+                // Auto-create only when creation was requested (GraphicDesign)
+                // or the planner signalled it (target size / creates_document).
+                // A non-creation request must never fabricate an unrelated
+                // document: stop for input instead, with nothing dispatched.
+                if intent.category != IntentCategory::GraphicDesign
+                    && plan.target_size.is_none() && !plan.creates_document {
+                    return outcome.stop(GoalStop::NeedsInput, AiError::NoDocumentOpen.to_string());
+                }
                 let [width, height] = plan.target_size.unwrap_or([1200, 1600]);
                 plan.steps.insert(0, PlanStep { command: "file.new".into(),
                     params: json!({"width": width, "height": height, "background": "transparent"}),

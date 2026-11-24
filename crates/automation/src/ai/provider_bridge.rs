@@ -695,7 +695,7 @@ impl AiProviderBridge {
         }
         let mut request = intent.clone();
         if intent.raw_prompt.chars().count() > 4000 { return Err(AiError::PlanningError("Request exceeds the 4000-character provider limit; nothing sent".into())); }
-        request.raw_prompt = selected_contract_prompt(intent, scene, false);
+        request.raw_prompt = selected_contract_prompt(intent, scene, false, context);
         if request.raw_prompt.len() > 32768 { return Err(AiError::PlanningError("Planning context exceeds the 32KB limit; nothing sent".into())); }
         let mut plan = self.execute_provider_plan(provider, &request, scene, context,
             Duration::from_secs(self.balancer.config().client_timeout_secs.unwrap_or(25)))
@@ -726,7 +726,7 @@ impl AiProviderBridge {
         }
         let mut request = intent.clone();
         if intent.raw_prompt.chars().count() > 4000 { return Err(AiError::PlanningError("Request exceeds the 4000-character provider limit; nothing sent".into())); }
-        request.raw_prompt = selected_contract_prompt(intent, scene, true);
+        request.raw_prompt = selected_contract_prompt(intent, scene, true, context);
         if request.raw_prompt.len() > 32768 { return Err(AiError::PlanningError("Planning context exceeds the 32KB limit; nothing sent".into())); }
         let timeout = Duration::from_secs(self.balancer.config().client_timeout_secs.unwrap_or(25));
         let mut plan = self.call_gemini_plan(&request, scene, timeout, Some(png))
@@ -1212,7 +1212,7 @@ fn selected_scene_json(scene: &VisualScene) -> Value {
 /// Small, explicit provider contract. Scene strings are data, never planner instructions.
 /// `image` is true only when a consented PNG render rides with the request; the
 /// metadata-only output is unchanged.
-fn selected_contract_prompt(intent: &EditingIntent, scene: &VisualScene, image: bool) -> String {
+fn selected_contract_prompt(intent: &EditingIntent, scene: &VisualScene, image: bool, context: &AiContext) -> String {
     let catalog = CommandCatalog::new();
     let capabilities: Vec<_> = SELECTED_COMMANDS.iter().copied()
         .chain(fotodit_engine::filters::FILTER_FIELDS.iter().map(|(id, _)| *id))
@@ -1244,6 +1244,21 @@ fn selected_contract_prompt(intent: &EditingIntent, scene: &VisualScene, image: 
         "scene":selected_scene_json(scene),
         "evidence":evidence
     });
+    // Cross-turn continuity: a bounded digest of this session's completed
+    // turns (request text plus the command ids actually applied), so a
+    // follow-up like "make it warmer" or "a bit bigger" can build on the
+    // previous edit. Layer ids inside it are from when those turns ran, so
+    // the note tells the provider to resolve every target against the
+    // current scene. Bounded: last 4 turns, 200 chars per request.
+    if !context.prompt_history.is_empty() {
+        let turns: Vec<Value> = context.prompt_history.iter().zip(context.executed_plans.iter())
+            .rev().take(4).collect::<Vec<_>>().into_iter().rev()
+            .map(|(prompt, plan)| json!({
+                "request": prompt.chars().take(200).collect::<String>(),
+                "applied": plan.steps.iter().map(|s| s.command.as_str()).collect::<Vec<_>>(),
+            })).collect();
+        request_json["recent_turns"] = json!({"note":"Earlier completed turns this session, oldest first. Any layer ids they imply are stale: resolve every target against the current scene.","turns":turns});
+    }
     // Finished-design guidance for creation requests. Only commands admitted by
     // this contract are named, so following it can never produce a refused plan.
     if intent.category == IntentCategory::GraphicDesign {
@@ -1270,9 +1285,13 @@ fn selected_contract_prompt(intent: &EditingIntent, scene: &VisualScene, image: 
 ///   table (fotodit_engine::filters::FILTER_FIELDS) is admitted directly from
 ///   the engine's own rules, so engine additions arrive without a second
 ///   table to drift.
+/// - Groups and moves: layer.new.group (empty group above the active layer)
+///   and layer.translate bounded to an explicit layer and a whole-pixel
+///   offset - the engine's artboard nesting, linked-mask, selection-drag and
+///   pt-unit modes stay out, so a translate is always exactly reversible.
 /// Open coverage work, not accepted final cuts: mergeDown/mergeGroup/
-/// flattenImage/groupLayers and layer.new.group/translate (multi-layer and
-/// grouping semantics), gradient fill layers (stops schema plus the engine's
+/// flattenImage/groupLayers (multi-layer merge semantics), gradient fill
+/// layers (stops schema plus the engine's
 /// selection-to-mask default), geometry selections beyond rect/ellipse
 /// (lasso/wand/colorRange - tolerance semantics and engine detectors),
 /// shape.create/edit and path/vector-mask commands (path geometry),
@@ -1293,6 +1312,7 @@ const SELECTED_COMMANDS: &[&str] = &["file.new", "type.create", "type.edit", "ty
     "layer.arrange.bringForward", "layer.arrange.bringToFront",
     "layer.arrange.sendBackward", "layer.arrange.sendToBack",
     "layer.createClippingMask", "layer.releaseClippingMask",
+    "layer.new.group", "layer.translate",
     "layer.layerMask.revealAll", "layer.layerMask.hideAll",
     "layer.layerMask.revealSelection", "layer.layerMask.hideSelection",
     "layer.layerMask.fromTransparency", "layer.layerMask.delete", "layer.layerMask.apply",
@@ -1313,7 +1333,7 @@ pub(crate) fn is_layer_creating(command: &str) -> bool {
         | "layer.newAdjustmentLayer.exposure" | "layer.newAdjustmentLayer.invert"
         | "layer.newAdjustmentLayer.posterize" | "layer.newAdjustmentLayer.threshold"
         | "layer.newAdjustmentLayer.gradientMap" | "layer.newAdjustmentLayer.channelMixer"
-        | "layer.newAdjustmentLayer.selectiveColor")
+        | "layer.newAdjustmentLayer.selectiveColor" | "layer.new.group")
 }
 
 /// A plan step's reference to a layer: an existing scene layer id, or the
@@ -1422,6 +1442,8 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
                 | "layer.layerMask.revealAll" | "layer.layerMask.hideAll"
                 | "layer.layerMask.revealSelection" | "layer.layerMask.hideSelection"
                 | "layer.layerMask.fromTransparency" | "layer.layerMask.delete" | "layer.layerMask.apply" => vec!["layer"],
+                "layer.new.group" => vec!["name", "color", "mode", "opacity"],
+                "layer.translate" => vec!["layer", "dx", "dy"],
                 "select.all" | "select.deselect" | "select.inverse" => vec![],
                 "select.rect" => vec!["x", "y", "width", "height", "mode", "ellipse", "line", "antiAlias", "feather"],
                 "edit.transform" => vec!["layer", "dx", "dy", "scaleX", "scaleY", "rotate", "reference", "interpolation"],
@@ -1695,7 +1717,7 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
         // with mask state tracked through the plan.
         if matches!(step.command.as_str(), "layer.arrange.bringForward" | "layer.arrange.bringToFront"
             | "layer.arrange.sendBackward" | "layer.arrange.sendToBack"
-            | "layer.createClippingMask" | "layer.releaseClippingMask"
+            | "layer.createClippingMask" | "layer.releaseClippingMask" | "layer.translate"
             | "layer.layerMask.revealAll" | "layer.layerMask.hideAll"
             | "layer.layerMask.revealSelection" | "layer.layerMask.hideSelection"
             | "layer.layerMask.fromTransparency" | "layer.layerMask.delete" | "layer.layerMask.apply")
@@ -1751,6 +1773,16 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
             // The engine drops the selection once it becomes a mask (Photoshop).
             "layer.layerMask.revealSelection" | "layer.layerMask.hideSelection" => sel = false,
             _ => {}
+        }
+        // layer.translate: an explicit whole-pixel offset, both axes required.
+        if step.command == "layer.translate"
+            && (map.get("dx").and_then(Value::as_i64).is_none() || map.get("dy").and_then(Value::as_i64).is_none()) { return Err(refuse()); }
+        if step.command == "layer.new.group" {
+            if map.get("name").is_some_and(|v| !v.as_str().is_some_and(|s| !s.is_empty() && s.chars().count() <= 128)) { return Err(refuse()); }
+            if map.get("color").is_some_and(|v| !matches!(v.as_str(),
+                Some("none" | "red" | "orange" | "yellow" | "green" | "seafoam" | "blue" | "indigo" | "magenta" | "fuchsia" | "violet" | "gray"))) { return Err(refuse()); }
+            if map.get("mode").is_some_and(|v| !v.as_str().is_some_and(|s| !s.is_empty() && s.len() <= 32)) { return Err(refuse()); }
+            if map.get("opacity").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (0.0..=100.0).contains(&x))) { return Err(refuse()); }
         }
         if step.command == "select.rect" {
             if map.get("x").and_then(Value::as_i64).is_none() || map.get("y").and_then(Value::as_i64).is_none()
@@ -2041,8 +2073,9 @@ mod tests {
     fn selected_prompt_contains_command_contract_and_real_target_ids() {
         let scene = contract_scene();
         let intent = super::super::NaturalLanguageEngine::new().parse_intent("change heading text to hello", &scene, &AiContext::new()).unwrap();
-        let prompt: Value = serde_json::from_str(&selected_contract_prompt(&intent, &scene, false)).unwrap();
+        let prompt: Value = serde_json::from_str(&selected_contract_prompt(&intent, &scene, false, &AiContext::new())).unwrap();
         assert_eq!(prompt["user_request"], "change heading text to hello");
+        assert!(prompt.get("recent_turns").is_none(), "no history, no digest: {prompt}");
         assert_eq!(prompt["scene"]["active_layer_id"], 7);
         assert_eq!(prompt["scene"]["layers"][1]["id"], 9);
         assert_eq!(prompt["scene"]["layers"][1]["text"], "Original");
@@ -2052,12 +2085,26 @@ mod tests {
     }
 
     #[test]
+    fn selected_prompt_carries_bounded_recent_turns_digest() {
+        let scene = contract_scene();
+        let intent = super::super::NaturalLanguageEngine::new().parse_intent("make it warmer", &scene, &AiContext::new()).unwrap();
+        let mut context = AiContext::new();
+        for i in 0..6 { context.record_interaction(format!("turn {i}"), contract_plan("select.all", json!({}))); }
+        let prompt: Value = serde_json::from_str(&selected_contract_prompt(&intent, &scene, false, &context)).unwrap();
+        let turns = prompt["recent_turns"]["turns"].as_array().unwrap();
+        assert_eq!(turns.len(), 4, "bounded to the last four turns: {turns:?}");
+        assert_eq!(turns[0]["request"], "turn 2", "oldest of the kept four first");
+        assert_eq!(turns[3]["applied"], json!(["select.all"]));
+        assert!(prompt["recent_turns"]["note"].as_str().unwrap().contains("stale"));
+    }
+
+    #[test]
     fn selected_prompt_gives_creation_requests_finished_design_guidance() {
         let scene = VisualScene::default();
         let intent = super::super::NaturalLanguageEngine::new().parse_intent("create a poster called chndrax", &scene, &AiContext::new()).unwrap();
         assert_eq!(intent.category, IntentCategory::GraphicDesign);
         for image in [false, true] {
-            let prompt: Value = serde_json::from_str(&selected_contract_prompt(&intent, &scene, image)).unwrap();
+            let prompt: Value = serde_json::from_str(&selected_contract_prompt(&intent, &scene, image, &AiContext::new())).unwrap();
             let design = prompt["design"].as_str().unwrap_or_default();
             assert!(design.contains("layer.newFillLayer.solidColor"), "guidance names only admitted commands: {design}");
             assert!(design.contains("type hierarchy"), "{design}");
@@ -2864,5 +2911,31 @@ mod tests {
         plan.steps.extend(contract_plan("layer.layerMask.revealSelection", json!({"layer": 7})).steps);
         plan.steps.extend(contract_plan("layer.layerMask.hideSelection", json!({"layer": 7})).steps);
         assert!(validate_selected_plan(&plan, &scene).is_err());
+    }
+
+    #[test]
+    fn selected_plan_admits_group_and_bounded_translate() {
+        let mut plan = contract_plan("layer.new.group", json!({"name":"Cards","color":"blue"}));
+        plan.steps.extend(contract_plan("layer.translate", json!({"layer": 7, "dx": 12, "dy": -8})).steps);
+        plan.steps.extend(contract_plan("layer.translate", json!({"layer": {"$step": 1}, "dx": 0, "dy": 4})).steps);
+        assert!(validate_selected_plan(&plan, &contract_scene()).is_ok());
+    }
+
+    #[test]
+    fn selected_plan_refuses_out_of_contract_group_and_translate() {
+        let scene = contract_scene();
+        // translate needs both axes as integers, and its layer must exist.
+        assert!(validate_selected_plan(&contract_plan("layer.translate", json!({"layer": 7, "dx": 1})), &scene).is_err());
+        assert!(validate_selected_plan(&contract_plan("layer.translate", json!({"layer": 7, "dx": 1.5, "dy": 0})), &scene).is_err());
+        assert!(validate_selected_plan(&contract_plan("layer.translate", json!({"layer": 77, "dx": 1, "dy": 0})), &scene).is_err());
+        // The engine's richer modes (units, selection drag, nesting, mask
+        // target) are outside the admitted subset.
+        assert!(validate_selected_plan(&contract_plan("layer.translate", json!({"layer": 7, "dx": 1, "dy": 0, "units": "pt"})), &scene).is_err());
+        assert!(validate_selected_plan(&contract_plan("layer.translate", json!({"layer": 7, "dx": 1, "dy": 0, "nest": true})), &scene).is_err());
+        // group field checks.
+        assert!(validate_selected_plan(&contract_plan("layer.new.group", json!({"color": "teal"})), &scene).is_err());
+        assert!(validate_selected_plan(&contract_plan("layer.new.group", json!({"opacity": 140})), &scene).is_err());
+        assert!(validate_selected_plan(&contract_plan("layer.new.group", json!({"name": ""})), &scene).is_err());
+        assert!(validate_selected_plan(&contract_plan("layer.new.group", json!({"position": "below"})), &scene).is_err());
     }
 }

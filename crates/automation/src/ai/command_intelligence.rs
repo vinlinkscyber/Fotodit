@@ -395,6 +395,20 @@ impl CommandCatalog {
                 description: "Release a layer's clipping to the layer below".into(),
             },
             CommandCapability {
+                id: "layer.new.group".into(),
+                label: "New Group".into(),
+                category: "Layer".into(),
+                params_schema: r#"{"name": string 1..128chars?, "color": "none|red|orange|yellow|green|seafoam|blue|indigo|magenta|fuchsia|violet|gray"="none", "mode": blend-mode str="passThrough", "opacity": 0..100=100}"#.into(),
+                description: "Create an empty layer group above the active layer".into(),
+            },
+            CommandCapability {
+                id: "layer.translate".into(),
+                label: "Move Layer".into(),
+                category: "Layer".into(),
+                params_schema: r#"{"layer": id, "dx": i32 px, "dy": i32 px}"#.into(),
+                description: "Move a layer by a whole-pixel offset".into(),
+            },
+            CommandCapability {
                 id: "edit.undo".into(),
                 label: "Undo".into(),
                 category: "Edit".into(),
