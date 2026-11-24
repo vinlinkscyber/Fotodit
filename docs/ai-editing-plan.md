@@ -176,14 +176,20 @@ qual-candidate-r8); nothing is pushed or compiled.
   state, depth/parent, selection state, resolution_dpi); observation channel
   with five bounded commands: `image.detectFaces`, `image.analysis.pixelDigest`,
   `gradient.fill.get` (live gradient stops/state for indexed stop edits),
-  `scene.layers` (targeted read past the scene's 32-layer cut; a reduced
+  `scene.layers` (targeted read past the scene's 32-layer cut in four
+  bounded modes: full entries by id, substring name search, a group's
+  children, or a compact paged list, so grouped and off-page layers stay
+  discoverable without guessing; a reduced
   scene is never treated as complete), `contract.describe`. Bounded
   multi-round loop: MAX_OBSERVATION_ROUNDS=3 per goal, shared by the first
   plan and the correction pass; the provider is told to batch independent
   reads per round (49e62ed).
-- Open gap: no goal-relevance link between an observation and the region the
-  user's request names (the shirt's region is not a first-class measured
-  target yet).
+- Partially closed: the goal coordinator derives a first-class measured
+  target region from the plan-targeted layers' bounds and measures it plus
+  the protected complement exactly (91c6452). Still open: goal-relevance of
+  the SELECTION itself (the derived region is only as right as the plan's
+  target choice), and a target-colour criterion (change is measured, the
+  resulting colour is not).
 - Status: implemented (unverified).
 
 ### W4 — Engine-derived tool exposure (R4)
@@ -267,6 +273,14 @@ shirt. Passing means every link, not a plausible render:
    the criterion: the target region's colour moved to red AND a pixel digest
    of unrelated areas is unchanged. Command success or a good-looking render
    alone is not this proof.
+   Status: the unchanged-areas leg is implemented (unverified) — the goal
+   coordinator derives the target region (union of plan-targeted layer
+   bounds) and up to four protected border regions, captures exact
+   before/after region digests at stride 1 through the admitted digest hook,
+   and a measured protected-region change blocks completion in favour of
+   correction or an honest unmet outcome. The target-colour leg (did the
+   region become RED, not merely change) remains open: region digests prove
+   change/no-change, not the resulting colour.
 4. **Correction or honest outcome.** If the measured criterion fails, the one
    structured correction pass runs; if it is exhausted, the chat says the
    goal is unmet or ambiguous, what was left in the document, and that Undo
