@@ -449,6 +449,10 @@ struct RegionWatch {
     /// the active selection's bounding region when the plan works through a
     /// selection/mask, else the plan-targeted layers' bounds, else the canvas.
     target_source: &'static str,
+    /// When the whole target derives from exactly one masked layer: that
+    /// layer's id, so its mask coverage can split covered pixels from
+    /// collateral inside the bounding rect.
+    target_mask_layer: Option<u64>,
 }
 
 
@@ -505,6 +509,8 @@ struct CapturedRegion {
     target: bool,
     rect: [i64; 4],
     mark: Option<DigestMark>,
+    /// Mask coverage (row-major f32 over `rect`) for mask-derived targets.
+    coverage: Option<Vec<f32>>,
     /// Exact rendered pixels as a raw row-major RGBA f32 buffer, tiled under
     /// the engine's per-call cap with a 2M-pixel aggregate budget; preferred
     /// over the digest tier.
@@ -546,6 +552,7 @@ impl RegionWatch {
         let mut target: Option<[i64; 4]> = None;
         let mut addressed = false;
         let mut mask_derived = false;
+        let mut mask_layers: Vec<u64> = Vec::new();
         for step in &plan.steps {
             let Some(id) = step.params.get("layer").or_else(|| step.params.get("id")).and_then(Value::as_u64) else { continue };
             addressed = true;
@@ -554,7 +561,7 @@ impl RegionWatch {
             // layer bounds: any nonzero effective coverage counts, so
             // feathered edges stay inside the measured target.
             let [x, y, w, h] = layer.mask_bounds
-                .inspect(|_| mask_derived = true)
+                .inspect(|_| { mask_derived = true; mask_layers.push(id); })
                 .unwrap_or(layer.bounds);
             if w <= 0 || h <= 0 { continue; }
             let (r, b) = (i64::from(x) + i64::from(w), i64::from(y) + i64::from(h));
@@ -579,13 +586,15 @@ impl RegionWatch {
             .flatten()
             .filter(|b| fits(i64::from(b[2]), i64::from(b[3])))
             .map(|b| [i64::from(b[0]), i64::from(b[1]), i64::from(b[2]), i64::from(b[3])]);
+        let mut target_mask_layer = (mask_layers.len() == 1 && target.is_some()).then_some(mask_layers[0]);
         let mut target_source: &'static str = if mask_derived {
-            "the plan-targeted layers' mask bounds (per-pixel mask coverage split not yet wired)"
+            "the plan-targeted layer's mask bounds"
         } else {
             "the plan-targeted layers' bounds"
         };
         if let Some(region) = selection_region {
             target = Some(region);
+            target_mask_layer = None;
             target_source = "the active selection's bounding region";
         } else if target.is_none() && !addressed && !plan.steps.is_empty() && fits(cw, ch) {
             // A plan that never addresses a layer by id (a global filter or
@@ -593,9 +602,11 @@ impl RegionWatch {
             // a plan whose target ids are simply absent from the scene stays
             // unmeasured - an unknown target is Unknown, never the canvas.
             target = Some([0, 0, cw, ch]);
+            target_mask_layer = None;
             target_source = "the canvas";
         }
         let target = target.filter(|t| fits(t[2], t[3]));
+        if target.is_none() { target_mask_layer = None; }
         let target_is_canvas = target.is_some_and(|t| t[2] * t[3] * 20 >= cw * ch * 19);
         let mut protected = Vec::new();
         if let Some([tx, ty, tw, th]) = target {
@@ -605,7 +616,7 @@ impl RegionWatch {
                 }
             }
         }
-        Self { target, protected, target_is_canvas, target_source }
+        Self { target, protected, target_is_canvas, target_source, target_mask_layer }
     }
 
     /// One capture per region through the host's admitted digest hook.
@@ -615,14 +626,26 @@ impl RegionWatch {
         let mut out = Vec::new();
         for (is_target, rect) in self.target.iter().map(|r| (true, r)).chain(self.protected.iter().map(|r| (false, r))) {
             let pixels = ExecutionEngine::capture_tiled(session, "image.analysis.regionPixels", *rect, 4);
+            // Mask-derived single-layer target: the mask's exact coverage
+            // splits covered pixels from collateral inside the bounding rect.
+            let coverage = if is_target {
+                self.target_mask_layer.and_then(|layer| {
+                    session.command_run("image.analysis.layerMaskCoverage", json!({"layer": layer})).ok()
+                        .and_then(|v| ExecutionEngine::parse_coverage(&v))
+                        .filter(|(x, y, w, h, _)| [*x, *y, *w as i64, *h as i64] == *rect)
+                        .map(|(_, _, _, _, cov)| cov)
+                })
+            } else {
+                None
+            };
             match ExecutionEngine::capture_digest(session, Some(*rect)) {
-                Ok(Some(mark)) => out.push(CapturedRegion { target: is_target, rect: *rect, mark: Some(mark), pixels }),
+                Ok(Some(mark)) => out.push(CapturedRegion { target: is_target, rect: *rect, mark: Some(mark), pixels, coverage }),
                 // No digest capability is not the end when exact pixels were captured.
                 Ok(None) => {
                     if pixels.is_none() { return None; }
-                    out.push(CapturedRegion { target: is_target, rect: *rect, mark: None, pixels })
+                    out.push(CapturedRegion { target: is_target, rect: *rect, mark: None, pixels, coverage })
                 }
-                Err(_) => out.push(CapturedRegion { target: is_target, rect: *rect, mark: None, pixels }),
+                Err(_) => out.push(CapturedRegion { target: is_target, rect: *rect, mark: None, pixels, coverage }),
             }
         }
         Some(out)
@@ -637,13 +660,26 @@ impl RegionWatch {
         let Some(after) = self.capture(session) else { return unavailable() };
         let mut measurement = RegionMeasurement { target: None, protected: Vec::new(), available: true, target_is_canvas: self.target_is_canvas, target_source: self.target_source, uncovered: None };
         for (b, a) in before.iter().zip(after.iter()) {
+            // A mask-derived target compares under its mask's exact coverage:
+            // covered (any nonzero) pixels are the target; zero-coverage
+            // pixels inside the bounding rect are collateral whose change is
+            // a protected violation, never folded into the target's detail.
+            let mut collateral: Option<u64> = None;
             let exact = match (&b.pixels, &a.pixels) {
-                (Some(before_px), Some(after_px)) => compare_exact_raw(before_px, after_px).map(|changed| {
-                    let class = if changed > 0 { VisualEvidenceClass::Changed } else { VisualEvidenceClass::NoChangeObserved };
-                    (VisualEvidence { class, detail: format!(
-                        "exact per-pixel comparison over {} pixels of the region: {changed} pixels differ",
-                        b.rect[2] * b.rect[3]) }, true)
-                }),
+                (Some(before_px), Some(after_px)) => match (b.target, &b.coverage) {
+                    (true, Some(cov)) => compare_exact_coverage(before_px, after_px, cov).map(|(covered_changed, covered_total, collateral_changed)| {
+                        collateral = Some(collateral_changed);
+                        let class = if covered_changed > 0 { VisualEvidenceClass::Changed } else { VisualEvidenceClass::NoChangeObserved };
+                        (VisualEvidence { class, detail: format!(
+                            "exact per-pixel comparison under the mask's coverage: {covered_changed} of {covered_total} covered (target) pixels differ") }, true)
+                    }),
+                    _ => compare_exact_raw(before_px, after_px).map(|changed| {
+                        let class = if changed > 0 { VisualEvidenceClass::Changed } else { VisualEvidenceClass::NoChangeObserved };
+                        (VisualEvidence { class, detail: format!(
+                            "exact per-pixel comparison over {} pixels of the region: {changed} pixels differ",
+                            b.rect[2] * b.rect[3]) }, true)
+                    }),
+                },
                 _ => None,
             };
             let evidence = exact.unwrap_or_else(|| {
@@ -655,6 +691,10 @@ impl RegionWatch {
                 (evidence, false)
             });
             if b.target { measurement.target = Some(evidence); } else { measurement.protected.push(evidence); }
+            if let Some(c) = collateral.filter(|c| *c > 0) {
+                measurement.protected.push((VisualEvidence { class: VisualEvidenceClass::Changed, detail: format!(
+                    "exact per-pixel comparison: {c} collateral pixel(s) inside the mask's bounding rect but outside its coverage differ; the edit bled beyond the mask") }, true));
+            }
         }
         measurement
     }

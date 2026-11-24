@@ -989,6 +989,56 @@ fn selection_coverage(s: &mut Session, p: &Value) -> Result<Value> {
     }))
 }
 
+/// Exact per-pixel coverage of a layer's mask (f32, row-major over the
+/// mask's nonzero bounds): the mask-derived target's exact coverage, so a
+/// mask-only plan's measurement splits covered pixels from collateral
+/// inside the bounding rect, feathered edges included.
+fn layer_mask_coverage(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "image.analysis.layerMaskCoverage";
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let d = st.doc.clone();
+    let revision = st.revision;
+    let id = p.get("layer").and_then(Value::as_u64)
+        .ok_or_else(|| bad(CMD, "needs integer layer"))?;
+    let layer = d.layers.iter().find(|l| l.id.0 == id)
+        .ok_or_else(|| bad(CMD, format!("no layer {id}")))?;
+    let mask = layer.mask.as_ref().filter(|m| m.enabled)
+        .ok_or_else(|| bad(CMD, format!("layer {id} has no enabled mask")))?;
+    let (cw, ch) = (d.size.width, d.size.height);
+    let mut values = Vec::new();
+    mask.values_into(Rect::from_xywh(0, 0, cw, ch), &mut values);
+    let (w, h) = (cw as i32, ch as i32);
+    let (mut x0, mut y0, mut x1, mut y1) = (w, h, -1, -1);
+    for (i, v) in values.iter().enumerate() {
+        if *v > 0.0 {
+            let (x, y) = (i as i32 % w, i as i32 / w);
+            x0 = x0.min(x); y0 = y0.min(y); x1 = x1.max(x); y1 = y1.max(y);
+        }
+    }
+    if x1 < 0 {
+        return Err(bad(CMD, format!("layer {id}'s mask covers nothing")));
+    }
+    let r = Rect::from_xywh(x0, y0, (x1 - x0 + 1) as u32, (y1 - y0 + 1) as u32);
+    if u64::from(r.width()) * u64::from(r.height()) > MAX_EXACT_REGION_PIXELS {
+        return Err(bad(CMD, format!(
+            "the mask is too large for an exact coverage read ({}×{} px; max {} pixels)",
+            r.width(), r.height(), MAX_EXACT_REGION_PIXELS)));
+    }
+    let mut coverage = Vec::new();
+    mask.values_into(r, &mut coverage);
+    Ok(json!({
+        "domain": "layerMask",
+        "layer": id,
+        "x": r.x0,
+        "y": r.y0,
+        "width": r.width(),
+        "height": r.height(),
+        "format": "coverage-f32-rowmajor",
+        "coverage": coverage,
+        "revision": revision,
+    }))
+}
+
 // ------------------------------------------------------------------ ruler
 
 /// Ruler readout: X/Y (start), W/H, angle A and lengths L1/L2, as in the options bar.
@@ -1619,6 +1669,15 @@ pub fn specs() -> Vec<CommandSpec> {
             r##"{"x":int,"y":int,"width":int,"height":int (required; max 262144 px)} → read-only exact rendered RGBA f32 of every pixel in the region, for exact local before/after comparison"##,
             has_doc,
             region_pixels,
+            false
+        ),
+        spec!(
+            "image.analysis.layerMaskCoverage",
+            "Layer Mask Coverage",
+            ["Image", "Analysis"],
+            r##"{"layer":int} → read-only exact per-pixel coverage of the layer's enabled mask over its nonzero bounds (max 262144 px)"##,
+            has_doc,
+            layer_mask_coverage,
             false
         ),
         spec!(
