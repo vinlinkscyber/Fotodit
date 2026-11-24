@@ -38,7 +38,8 @@ pub use natural_language::{EditingIntent, IntentCategory, NaturalLanguageEngine}
 pub use perception::{DocumentStructure, FaceObservation, PerceptionEngine, SubjectBasis, SubjectCandidate, VisualElement, VisualScene};
 pub use planner::{AiPlanner, DeterministicRulePlanner, PlanStep};
 pub use provider_bridge::{
-    AiProviderBridge, ContextLoadBalancer, ContextProfile, HttpTransport, ProviderConfig,
+    AiProviderBridge, ContextLoadBalancer, ContextProfile, HttpTransport, OBSERVATION_COMMANDS,
+    ObservationRequest, ObservationResult, PlanResponse, ProviderConfig,
     ProviderId, SystemCurlTransport, VisualVerdict,
 };
 

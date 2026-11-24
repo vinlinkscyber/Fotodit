@@ -77,7 +77,7 @@ enum PendingPhase {
 }
 
 enum WorkerResult {
-    Plan(EditingPlan),
+    Plan(fotodit_automation::ai::PlanResponse),
     Verdict(Box<fotodit_automation::ai::VisualVerdict>),
 }
 
@@ -94,6 +94,11 @@ struct PendingGoal {
     document_id: Option<String>,
     binding: (Option<&'static str>, Option<[u8; 32]>, u64),
     visual: bool,
+    /// The scene the planning worker planned against; a replanning round
+    /// reuses it, bound to the same unchanged document snapshot.
+    scene: fotodit_automation::ai::VisualScene,
+    /// True once the provider used its one observation round for this goal.
+    observed: bool,
 }
 
 /// Downscaled straight-alpha PNG render of the document composite for the
@@ -128,9 +133,14 @@ fn document_id(app: &FotoditApp) -> Option<String> {
 /// the provider always re-resolves targets against the current scene.
 fn plan_target_name(plan: &EditingPlan, document: &Option<serde_json::Value>) -> Option<String> {
     let id = plan.steps.iter().rev().find_map(|s| s.params.get("layer").and_then(|v| v.as_u64()))?;
-    document.as_ref()?.get("layers")?.as_array()?.iter()
+    let layers = document.as_ref()?.get("layers")?.as_array()?;
+    let name = layers.iter()
         .find(|l| l.get("id").and_then(|v| v.as_u64()) == Some(id))?
-        .get("name")?.as_str().map(|s| s.chars().take(64).collect())
+        .get("name")?.as_str()?;
+    // A name shared by several layers is ambiguous: remember no target rather
+    // than let a later turn guess between them.
+    if layers.iter().filter(|l| l.get("name").and_then(serde_json::Value::as_str) == Some(name)).count() > 1 { return None; }
+    Some(name.chars().take(64).collect())
 }
 
 struct FixedPlan(EditingPlan);
@@ -223,14 +233,16 @@ impl AssistantBackend for GuiAssistant {
             // The worker gets a snapshot of the session context as of dispatch;
             // turns completing while it runs record into the panel's own copy.
             let worker_context = self.context.clone();
+            let worker_scene = scene.clone();
             std::thread::spawn(move || {
-                let result = planner.plan_visual(&worker_intent, &scene, &worker_context, image.as_deref())
+                let result = planner.plan_visual(&worker_intent, &worker_scene, &worker_context, image.as_deref(), &[])
                     .map(WorkerResult::Plan).map_err(|e| e.to_string());
                 let _ = sender.send(result);
                 repaint.request_repaint();
             });
             self.pending = Some(PendingGoal { phase: PendingPhase::Planning, receiver, prompt: prompt.into(),
-                intent, applied: Vec::new(), document, document_id: document_id(app), binding, visual });
+                intent, applied: Vec::new(), document, document_id: document_id(app), binding, visual,
+                scene, observed: false });
             Ok(if visual {
                 format!("Asking {} to plan the edit, with the document image attached. No edits applied yet.", provider_name(slot))
             } else {
@@ -287,7 +299,70 @@ impl AssistantBackend for GuiAssistant {
         let plan = match (phase, result) {
             (PendingPhase::Planning, Err(error)) => return Some(error),
             (PendingPhase::Verifying { .. }, Err(error)) => return Some(format!("The result review failed: {error} Changes made so far stay in the document - use Undo if needed.")),
-            (PendingPhase::Planning, Ok(WorkerResult::Plan(plan))) => plan,
+            (PendingPhase::Planning, Ok(WorkerResult::Plan(fotodit_automation::ai::PlanResponse::Refused(reason)))) => {
+                return Some(format!("{} can't do that edit: {reason} Nothing was applied.", provider_name(slot)));
+            }
+            (PendingPhase::Planning, Ok(WorkerResult::Plan(fotodit_automation::ai::PlanResponse::Observe(requests)))) => {
+                // Demand-driven observation: the provider asked for bounded
+                // local measurements before choosing targets/values. Measure
+                // on the UI thread through the admitted menu path, bound to
+                // the unchanged pre-plan snapshot (verified just above), then
+                // dispatch exactly one replanning request with the results.
+                if pending.observed {
+                    return Some(format!("{} asked for a second measurement round; only one is allowed per request. No edits were applied.", provider_name(slot)));
+                }
+                let mut results = Vec::new();
+                {
+                    let mut host = GuiSession { app: &mut *app, ctx };
+                    for request in &requests {
+                        match host.command_run(&request.command, request.params.clone()) {
+                            Ok(result) => results.push(fotodit_automation::ai::ObservationResult { command: request.command.clone(), result }),
+                            Err(error) => return Some(format!("The measurement {} failed: {error} No edits were applied.", request.command)),
+                        }
+                    }
+                }
+                // Same credential discipline as Send: re-resolve and re-check
+                // before dispatching the replanning request.
+                let current_identity = match (self.identity)(slot) {
+                    Ok(identity) => identity,
+                    Err(error) => { app.ai_providers.editing_consent_mut().disable(); return Some(error); }
+                };
+                if pending.binding.1 != Some(current_identity) {
+                    app.ai_providers.editing_consent_mut().disable();
+                    return Some("Provider credential or source changed. Enable editing again before sending.".into());
+                }
+                let (planner, loaded_identity) = match (self.planner_factory)(slot) {
+                    Ok(planner) => planner,
+                    Err(error) => { app.ai_providers.editing_consent_mut().disable(); return Some(error); }
+                };
+                if loaded_identity != current_identity {
+                    app.ai_providers.editing_consent_mut().disable();
+                    return Some("Provider credential changed. Enable editing again.".into());
+                }
+                let image = if pending.visual && app.ai_providers.editing_consent().visual_active() {
+                    match app.session.active().map(|d| render_document_png(&d.doc)) {
+                        Some(Ok(png)) => Some(png),
+                        Some(Err(error)) => return Some(error),
+                        None => None,
+                    }
+                } else { None };
+                let (sender, receiver) = std::sync::mpsc::channel();
+                let repaint = ctx.clone();
+                let worker_intent = pending.intent.clone();
+                let worker_scene = pending.scene.clone();
+                let worker_context = self.context.clone();
+                std::thread::spawn(move || {
+                    let result = planner.plan_visual(&worker_intent, &worker_scene, &worker_context, image.as_deref(), &results)
+                        .map(WorkerResult::Plan).map_err(|e| e.to_string());
+                    let _ = sender.send(result);
+                    repaint.request_repaint();
+                });
+                pending.observed = true;
+                pending.receiver = receiver;
+                self.pending = Some(pending);
+                return Some(format!("{} asked for local measurements to plan with; measuring and sending the results. No edits applied yet.", provider_name(slot)));
+            }
+            (PendingPhase::Planning, Ok(WorkerResult::Plan(fotodit_automation::ai::PlanResponse::Plan(plan)))) => plan,
             (PendingPhase::Verifying { check: _ }, Ok(WorkerResult::Verdict(verdict))) => {
                 let verdict = *verdict;
                 if verdict.satisfied {
@@ -411,14 +486,19 @@ struct SelectedPlanner {
 impl fotodit_automation::ai::AiPlanner for SelectedPlanner {
     fn plan(&self, intent: &fotodit_automation::ai::EditingIntent, scene: &fotodit_automation::ai::VisualScene,
         context: &AiContext) -> Result<EditingPlan, fotodit_automation::ai::AiError> {
-        self.bridge.plan_selected(self.provider, intent, scene, context)
+        match self.bridge.plan_selected(self.provider, intent, scene, context, &[])? {
+            fotodit_automation::ai::PlanResponse::Plan(plan) => Ok(plan),
+            fotodit_automation::ai::PlanResponse::Refused(reason) => Err(fotodit_automation::ai::AiError::PlanningError(format!("Provider refused: {reason}"))),
+            fotodit_automation::ai::PlanResponse::Observe(_) => Err(fotodit_automation::ai::AiError::PlanningError("Provider requested local measurements, which this planning route cannot supply".into())),
+        }
     }
 }
 
 impl SelectedPlanner {
     fn plan_visual(&self, intent: &EditingIntent, scene: &fotodit_automation::ai::VisualScene,
-        context: &AiContext, image: Option<&[u8]>) -> Result<EditingPlan, fotodit_automation::ai::AiError> {
-        self.bridge.plan_visual(self.provider, intent, scene, context, image)
+        context: &AiContext, image: Option<&[u8]>, observations: &[fotodit_automation::ai::ObservationResult])
+        -> Result<fotodit_automation::ai::PlanResponse, fotodit_automation::ai::AiError> {
+        self.bridge.plan_visual(self.provider, intent, scene, context, image, observations)
     }
     fn verify_visual(&self, prompt: &str, applied: &[String], intent: &EditingIntent,
         scene: &fotodit_automation::ai::VisualScene, image: &[u8])
@@ -608,6 +688,78 @@ mod tests {
         assert!(replay.starts_with("Asking Gemini"), "{replay}");
         let _ = await_plan(&mut app, &ctx);
         assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    // Labeled fixture: the first planning response requests a local
+    // measurement, the second returns a real plan. Bodies are captured so the
+    // test can prove the measured results ride with the replanning request.
+    struct ObserveTransport {
+        calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        bodies: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+    impl fotodit_automation::ai::HttpTransport for ObserveTransport {
+        fn execute_json(&self, method: &str, url: &str, headers: &[(&str, &str)], body: Option<&serde_json::Value>,
+            _timeout: std::time::Duration) -> Result<(u16, serde_json::Value), fotodit_automation::ai::AiError> {
+            use std::sync::atomic::Ordering;
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            assert_eq!(method, "POST");
+            assert!(url.starts_with("https://generativelanguage.googleapis.com/"));
+            assert_eq!(headers, [("x-goog-api-key", "fixture-not-a-real-key")]);
+            let body = body.unwrap().to_string();
+            assert!(body.contains("chndrax"), "original chat prompt reaches provider");
+            if call == 1 { assert!(body.contains("\"measurements\""), "the replanning request carries the measured results: {body}"); }
+            self.bodies.lock().unwrap().push(body);
+            let response = if call == 0 {
+                serde_json::json!({"observe":[{"command":"image.detectFaces","params":{"minScore":0.5}}],"steps":[]})
+            } else {
+                serde_json::json!({"title":"Warmer","rationale":"fixture observation round","steps":[{"command":"layer.newAdjustmentLayer.brightnessContrast","params":{"brightness":10},"description":"warm it"}]})
+            };
+            Ok((200, serde_json::json!({"candidates":[{"content":{"parts":[{"text":response.to_string()}]}}]})))
+        }
+        fn fetch_raw_bytes(&self, _url: &str, _headers: &[(&str, &str)], _timeout: std::time::Duration)
+            -> Result<(u16, Vec<u8>), fotodit_automation::ai::AiError> {
+            panic!("chat editing must not fetch images")
+        }
+    }
+
+    fn chat_fixture_observe() -> (FotoditApp, std::sync::Arc<std::sync::atomic::AtomicUsize>, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        use fotodit_automation::ai::{AiProviderBridge, ProviderConfig, ProviderId, CommandCatalog};
+        use std::sync::{Arc, Mutex, atomic::AtomicUsize};
+        let calls = Arc::new(AtomicUsize::new(0));
+        let bodies = Arc::new(Mutex::new(Vec::new()));
+        let transport_calls = calls.clone();
+        let transport_bodies = bodies.clone();
+        let mut assistant = GuiAssistant::new();
+        assistant.identity = |_| Ok([7; 32]);
+        assistant.planner_factory = Box::new(move |slot| {
+            assert_eq!(slot, "gemini");
+            let config = ProviderConfig { gemini_api_key: Some("fixture-not-a-real-key".into()), ..Default::default() };
+            let bridge = AiProviderBridge::with_transport(config, CommandCatalog::new(),
+                Box::new(ObserveTransport { calls: transport_calls.clone(), bodies: transport_bodies.clone() }));
+            Ok((SelectedPlanner { provider: ProviderId::Gemini, bridge }, [7; 32]))
+        });
+        let mut services = Services::default();
+        services.assistant_backend = Some(Box::new(assistant));
+        (FotoditApp::new(fotodit_engine::Session::new(), services), calls, bodies)
+    }
+
+    #[test]
+    fn provider_observation_round_measures_locally_and_replans() {
+        use std::sync::atomic::Ordering;
+        let (mut app, calls, bodies) = chat_fixture_observe();
+        let ctx = egui::Context::default();
+        app.session.execute("file.new", serde_json::json!({"width":32,"height":32,"background":"white"})).unwrap();
+        app.ai_providers.editing_consent_mut().request("gemini");
+        app.ai_providers.editing_consent_mut().confirm_identity([7; 32]);
+        let initial = fotodit_ui_egui::panels::assistant::submit(&mut app, &ctx, "make it warmer, chndrax");
+        assert!(initial.starts_with("Asking Gemini"), "{initial}");
+        // First completed poll runs the local measurement and replans.
+        let note = await_plan(&mut app, &ctx);
+        assert!(note.contains("local measurements"), "{note}");
+        let answer = await_plan(&mut app, &ctx);
+        assert!(answer.contains("via Gemini"), "{answer}");
+        assert_eq!(calls.load(Ordering::SeqCst), 2, "exactly one planning request plus one replan");
+        assert_eq!(bodies.lock().unwrap().len(), 2);
     }
 
     #[test]
