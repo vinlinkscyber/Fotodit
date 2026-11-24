@@ -1532,9 +1532,22 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
             Some(rules) => rules.iter().map(|(key, _)| *key).collect(),
             None => match step.command.as_str() {
                 "file.new" => vec!["width", "height", "background"],
-                "type.create" => vec!["x", "y", "text", "size", "color"],
+                "type.create" => vec!["x", "y", "text", "box", "name", "align", "orientation", "size", "color",
+                    "font", "fontStyle", "weight", "italic", "tracking", "leading", "baselineShift",
+                    "horizontalScale", "verticalScale", "underline", "strikethrough", "fauxBold", "fauxItalic",
+                    "kerning", "caps", "baseline", "ligatures", "discretionaryLigatures", "language"],
                 "type.edit" => vec!["layer", "text"],
-                "type.setStyle" => vec!["layer", "size", "color"],
+                // Single-layer styling only: the engine's layers[] multi-target
+                // mirrors the GUI's selected Type layers, which a plan has no
+                // equivalent of, and metricsAsShown involves transform-scale
+                // semantics the scene does not carry.
+                "type.setStyle" => vec!["layer", "range", "size", "color",
+                    "font", "fontStyle", "weight", "italic", "tracking", "leading", "baselineShift",
+                    "horizontalScale", "verticalScale", "underline", "strikethrough", "fauxBold", "fauxItalic",
+                    "kerning", "caps", "baseline", "ligatures", "discretionaryLigatures", "language",
+                    "leadingBy", "baselineShiftBy", "trackingBy",
+                    "align", "firstLineIndent", "startIndent", "endIndent", "spaceBefore", "spaceAfter",
+                    "autoLeading", "direction", "hyphenate"],
                 "layer.newFillLayer.solidColor" => vec!["color"],
                 // path is deliberately not a key: paths are not admitted yet,
                 // so a fill layer masked by a saved/work path is refused by
@@ -1659,7 +1672,58 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
             if map.get("background").is_some_and(|v| !matches!(v.as_str(), Some("white" | "black" | "transparent"))) { return Err(refuse()); }
             active_changed = true;
         } else if width == 0 || height == 0 { return Err(refuse()); }
-        if step.command == "type.setStyle" && !map.contains_key("size") && !map.contains_key("color") { return Err(refuse()); }
+        // A style step must change something, not just name a target.
+        if step.command == "type.setStyle" && !map.keys().any(|k| k != "layer" && k != "range") { return Err(refuse()); }
+        // Character keys shared by type.create and type.setStyle, with the
+        // engine's CHAR_PARAMS ranges.
+        if matches!(step.command.as_str(), "type.create" | "type.setStyle") {
+            for (key, value) in map {
+                let ok = match key.as_str() {
+                    "font" | "fontStyle" => value.as_str().is_some_and(|s| !s.is_empty() && s.chars().count() <= 128),
+                    "weight" => value.as_f64().is_some_and(|x| x.is_finite() && (100.0..=900.0).contains(&x)),
+                    "italic" | "underline" | "strikethrough" | "fauxBold" | "fauxItalic"
+                    | "ligatures" | "discretionaryLigatures" => value.is_boolean(),
+                    "tracking" => value.as_f64().is_some_and(|x| x.is_finite() && (-1000.0..=10000.0).contains(&x)),
+                    "leading" => value.as_str() == Some("auto")
+                        || value.as_f64().is_some_and(|x| x.is_finite() && (0.01..=5000.0).contains(&x)),
+                    "baselineShift" => value.as_f64().is_some_and(|x| x.is_finite() && (-5000.0..=5000.0).contains(&x)),
+                    "horizontalScale" | "verticalScale" => value.as_f64().is_some_and(|x| x.is_finite() && (1.0..=1000.0).contains(&x)),
+                    "kerning" => matches!(value.as_str(), Some("metrics" | "optical" | "off"))
+                        || value.as_f64().is_some_and(|x| x.is_finite() && x.abs() <= 1.0e6),
+                    "caps" => matches!(value.as_str(), Some("normal" | "small" | "all")),
+                    "baseline" => matches!(value.as_str(), Some("normal" | "superscript" | "subscript")),
+                    "language" => value.as_str().is_some_and(|s| !s.is_empty() && s.len() <= 64),
+                    _ => true,
+                };
+                if !ok { return Err(refuse()); }
+            }
+        }
+        if step.command == "type.setStyle" {
+            // Relative steps, bounded by the engine's STEP_KEYS absolutes.
+            if map.get("leadingBy").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && x.abs() <= 5000.0))
+                || map.get("baselineShiftBy").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && x.abs() <= 10_000.0))
+                || map.get("trackingBy").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && x.abs() <= 11_000.0)) { return Err(refuse()); }
+            if map.get("range").is_some_and(|v| !v.as_array().is_some_and(|a| a.len() == 2
+                && a.iter().all(|c| c.as_u64().is_some_and(|n| n <= 1_000_000))
+                && a[0].as_u64() < a[1].as_u64())) { return Err(refuse()); }
+            if map.get("align").is_some_and(|v| !matches!(v.as_str(),
+                Some("left" | "center" | "right" | "justify" | "justifyCenter" | "justifyRight" | "justifyAll"))) { return Err(refuse()); }
+            for key in ["firstLineIndent", "startIndent", "endIndent", "spaceBefore", "spaceAfter"] {
+                if map.get(key).is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && x.abs() <= 5000.0)) { return Err(refuse()); }
+            }
+            if map.get("autoLeading").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (0.0..=1000.0).contains(&x))) { return Err(refuse()); }
+            if map.get("direction").is_some_and(|v| !matches!(v.as_str(), Some("auto" | "ltr" | "rtl"))) { return Err(refuse()); }
+            if map.get("hyphenate").is_some_and(|v| !v.is_boolean()) { return Err(refuse()); }
+        }
+        if step.command == "type.create" {
+            if map.get("box").is_some_and(|v| !v.as_array().is_some_and(|a| a.len() == 4
+                && a.iter().all(|c| c.as_f64().is_some_and(|x| x.is_finite() && x.abs() <= 1.0e6))
+                && a[2].as_f64().is_some_and(|w| w >= 1.0) && a[3].as_f64().is_some_and(|h| h >= 1.0))) { return Err(refuse()); }
+            if map.get("name").is_some_and(|v| !v.as_str().is_some_and(|s| !s.is_empty() && s.chars().count() <= 128)) { return Err(refuse()); }
+            if map.get("orientation").is_some_and(|v| !matches!(v.as_str(), Some("horizontal" | "vertical"))) { return Err(refuse()); }
+            if map.get("align").is_some_and(|v| !matches!(v.as_str(),
+                Some("left" | "center" | "right" | "justify" | "justifyCenter" | "justifyRight" | "justifyAll"))) { return Err(refuse()); }
+        }
         let pos = index + 1;
         if matches!(step.command.as_str(), "type.edit" | "type.setStyle") {
             match layer_ref(map.get("layer")).ok_or_else(refuse)? {
@@ -1761,7 +1825,9 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
             for (key, value) in map {
                 let valid = match key.as_str() {
                     "size" => number(key, 6.0, 512.0),
-                    "color" => value.as_str().is_some_and(|v| v.len() == 7 && v.starts_with('#') && v.as_bytes()[1..].iter().all(u8::is_ascii_hexdigit)),
+                    "color" => value.as_str().is_some_and(|v| (v.len() == 7 || v.len() == 9) && v.starts_with('#') && v.as_bytes()[1..].iter().all(u8::is_ascii_hexdigit))
+                        || value.as_array().is_some_and(|a| (3..=4).contains(&a.len())
+                            && a.iter().all(|c| c.as_f64().is_some_and(|x| x.is_finite() && (0.0..=1.0).contains(&x)))),
                     "brightness" => number(key, -150.0, 150.0),
                     "contrast" => number(key, -50.0, 100.0),
                     "vibrance" | "saturation" => number(key, -100.0, 100.0),
@@ -2356,6 +2422,28 @@ mod tests {
             plan.steps.push(PlanStep { command: command.into(), params, description: "fixture".into() });
         }
         assert!(validate_selected_plan(&plan, &contract_scene()).is_ok());
+    }
+
+    #[test]
+    fn selected_plan_admits_full_type_styling_within_contract() {
+        assert!(validate_selected_plan(&contract_plan("type.setStyle", json!({"layer": 9, "font": "Inter", "weight": 650,
+            "tracking": 20, "leading": "auto", "caps": "small", "kerning": "optical", "ligatures": false})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("type.setStyle", json!({"layer": 9, "range": [0, 4], "align": "center",
+            "spaceBefore": 12, "hyphenate": true, "trackingBy": -30})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("type.create", json!({"x": 10, "y": 40, "text": "Title", "font": "Inter",
+            "fontStyle": "Bold", "box": [10, 40, 200, 80], "orientation": "horizontal", "color": [0.2, 0.2, 0.2]})), &contract_scene()).is_ok());
+    }
+
+    #[test]
+    fn selected_plan_refuses_type_styling_outside_contract() {
+        assert!(validate_selected_plan(&contract_plan("type.setStyle", json!({"layer": 9, "weight": 50})), &contract_scene()).is_err());
+        assert!(validate_selected_plan(&contract_plan("type.setStyle", json!({"layer": 9, "caps": "smallCaps"})), &contract_scene()).is_err());
+        assert!(validate_selected_plan(&contract_plan("type.setStyle", json!({"layer": 9, "range": [4, 4], "size": 18})), &contract_scene()).is_err());
+        // A style step that only names a target changes nothing.
+        assert!(validate_selected_plan(&contract_plan("type.setStyle", json!({"layer": 9})), &contract_scene()).is_err());
+        // The engine's multi-target layers[] mirrors GUI selection: not admitted.
+        assert!(validate_selected_plan(&contract_plan("type.setStyle", json!({"layers": [9], "size": 18})), &contract_scene()).is_err());
+        assert!(validate_selected_plan(&contract_plan("type.create", json!({"x": 10, "y": 40, "text": "T", "orientation": "sideways"})), &contract_scene()).is_err());
     }
 
     #[test]
