@@ -575,7 +575,7 @@ impl RegionWatch {
             // layer bounds: any nonzero effective coverage counts, so
             // feathered edges stay inside the measured target.
             let [x, y, w, h] = layer.mask_bounds
-                .inspect(|_| { mask_derived = true; mask_layers.push(id); })
+                .inspect(|_| { mask_derived = true; if !mask_layers.contains(&id) { mask_layers.push(id); } })
                 .unwrap_or(layer.bounds);
             if w <= 0 || h <= 0 { continue; }
             let (r, b) = (i64::from(x) + i64::from(w), i64::from(y) + i64::from(h));
@@ -600,7 +600,7 @@ impl RegionWatch {
             .flatten()
             .filter(|b| fits(i64::from(b[2]), i64::from(b[3])))
             .map(|b| [i64::from(b[0]), i64::from(b[1]), i64::from(b[2]), i64::from(b[3])]);
-        let mut target_mask_layer = (mask_layers.len() == 1 && target.is_some()).then_some(mask_layers[0]);
+        let mut target_mask_layer = (mask_layers.len() == 1 && target.is_some()).then(|| mask_layers[0]);
         let mut target_source: &'static str = if mask_derived {
             "the plan-targeted layer's mask bounds"
         } else {
