@@ -949,3 +949,50 @@ fn region_digest_and_color_stats_measure_exact_rects() {
     // All-or-none region params are refused, never partially applied.
     assert!(LiveEditSession::command_run(&mut headless, "image.analysis.colorStats", json!({"x": 0})).is_err());
 }
+
+/// REAL-ENGINE FIXTURE: a plan that edits in two selection segments gets a
+/// capture per segment, each taken immediately before that segment's first
+/// mutation, with the pre-plan canvas baseline for the canvas-level
+/// protected comparison.
+#[test]
+fn multi_segment_plan_captures_every_segment_before_its_edit() {
+    let mut headless = Headless::new();
+    LiveEditSession::command_run(&mut headless, "file.new", json!({"width": 16, "height": 16, "background": "white"})).unwrap();
+    let plan = EditingPlan {
+        title: "Invert two regions".into(),
+        rationale: "select, edit, select, edit".into(),
+        category: IntentCategory::ColorStyling,
+        steps: vec![
+            PlanStep { command: "select.rect".into(), params: json!({"x": 0, "y": 0, "width": 8, "height": 8}), description: "first target".into() },
+            PlanStep { command: "image.adjustments.invert".into(), params: json!({}), description: "first edit".into() },
+            PlanStep { command: "select.rect".into(), params: json!({"x": 8, "y": 8, "width": 8, "height": 8}), description: "second target".into() },
+            PlanStep { command: "image.adjustments.invert".into(), params: json!({}), description: "second edit".into() },
+        ],
+        creates_document: false,
+        target_size: None,
+    };
+    let (result, evidence) = ExecutionEngine::execute_plan_in_with_evidence(&mut headless, &plan).unwrap();
+    assert!(result.is_success);
+    assert_eq!(evidence.selection_captures.len(), 2, "every selection segment gets its own capture");
+    let first = &evidence.selection_captures[0];
+    assert_eq!(first.step_index, 1, "the first capture precedes the first segment's edit");
+    assert_eq!(first.bounds, [0, 0, 8, 8]);
+    assert_eq!(first.earlier_mutations, 0);
+    let second = &evidence.selection_captures[1];
+    assert_eq!(second.step_index, 3, "the second capture precedes the second segment's edit");
+    assert_eq!(second.bounds, [8, 8, 8, 8]);
+    assert_eq!(second.earlier_mutations, 1, "the first segment's invert is an earlier mutation of the second");
+    // The first segment's edit landed before the second capture: the second
+    // capture's before-pixels show the first region already inverted.
+    let second_before = second.before_pixels.as_ref().expect("exact before-pixels ride every segment capture");
+    assert_eq!(second_before.len(), 8 * 8 * 4);
+    let first_cov = first.coverage.as_ref().expect("exact coverage rides every segment capture");
+    assert_eq!(first_cov.len(), 8 * 8);
+    assert!(first_cov.iter().all(|c| *c > 0.0), "a rect selection covers its region fully");
+    let canvas = evidence.canvas_before_pixels.expect("the pre-plan canvas baseline is captured within budget");
+    assert_eq!(canvas.len(), 16 * 16 * 4);
+    assert_eq!(evidence.canvas_size, Some([16, 16]));
+    // The final segment is also the legacy single capture.
+    let legacy = evidence.selection_capture.expect("the final segment remains the single selection_capture");
+    assert_eq!(legacy.step_index, 3);
+}
