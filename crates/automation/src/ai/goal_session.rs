@@ -777,10 +777,6 @@ fn measure_from_selection_stage<S: LiveEditSession + ?Sized>(session: &mut S, ca
     let unavailable = || RegionMeasurement { target: None, protected: Vec::new(), available: false, target_is_canvas: false, target_source: "nothing measurable", uncovered: None };
     let Some(capture) = capture else { return unavailable() };
     let failed = |why: &str| VisualEvidence { class: VisualEvidenceClass::Unknown, detail: why.to_string() };
-    // Rollback/cancellation identity: the after-execution measurement is only
-    // comparable when the document is still the one captured before the
-    // evaluated step (same name + path, read back now). A document swapped
-    // under the plan makes every capture stale; nothing is assumed.
     // Identity is the engine's unique live DocId, bound through the
     // transaction by a monotonic revision (the after state must be at or
     // past the capture's revision). Name+path corroborate but never
@@ -810,10 +806,12 @@ fn measure_from_selection_stage<S: LiveEditSession + ?Sized>(session: &mut S, ca
     // the bounding region into the selection's own pixels and the region's
     // collateral, and the before/after rendered pixels compare exactly. This
     // survives the selection's consumption and needs no surviving selection.
+    let mut collateral_inside_bounds: Option<u64> = None;
     let target_exact = match (&capture.before_pixels, &capture.coverage) {
         (Some(before_px), Some(cov)) => {
             match ExecutionEngine::capture_tiled(session, "image.analysis.regionPixels", capture.bounds, 4) {
                 Some(after_px) => compare_exact_coverage(before_px, &after_px, cov).map(|(covered_changed, covered_total, collateral_changed)| {
+                    collateral_inside_bounds = Some(collateral_changed);
                     let class = if covered_changed > 0 { VisualEvidenceClass::Changed } else { VisualEvidenceClass::NoChangeObserved };
                     (VisualEvidence { class, detail: format!(
                         "exact per-pixel comparison under the selection's preserved coverage: {covered_changed} of {covered_total} covered (target) pixels differ; {collateral_changed} collateral pixel(s) inside the bounding region also differ") }, true)
@@ -828,6 +826,13 @@ fn measure_from_selection_stage<S: LiveEditSession + ?Sized>(session: &mut S, ca
         _ => failed("the after-execution region capture failed or was refused"),
     }, false)));
     let mut protected = Vec::new();
+    // Collateral change inside the target's bounding region (outside the
+    // selection's coverage) is a protected-region violation: the edit bled
+    // beyond its target. It must not vanish into the target's detail string.
+    if let Some(c) = collateral_inside_bounds.filter(|c| *c > 0) {
+        protected.push((VisualEvidence { class: VisualEvidenceClass::Changed, detail: format!(
+            "exact per-pixel comparison: {c} collateral pixel(s) inside the target's bounding region but outside the selection's coverage differ; the edit bled beyond its target") }, true));
+    }
     for ((rect, before), (_, before_px)) in capture.protected.iter().zip(capture.protected_pixels.iter()) {
         let exact = match before_px {
             Some(before_px) => match ExecutionEngine::capture_tiled(session, "image.analysis.regionPixels", *rect, 4) {

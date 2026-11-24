@@ -291,12 +291,19 @@ shirt. Passing means every link, not a plausible render:
    correction pass. A measured no-change target is unmet. The colour leg
    binds colour to object: NotApplicable without a named colour, Unavailable
    with the reason for multi-colour prompts or unbound/missing selections.
-   The target-selection capture is taken immediately before the operation
-   whose effect is evaluated and preserves the selection's exact per-pixel
-   coverage plus the region's exact rendered pixels locally (bounded at
-   262144 px, never leaving the process), with the document identity
-   recorded so rollback, cancellation or a document swap makes the
-   comparison Unknown instead of silently stale. Completion grounds only on
+   The target-selection capture is taken immediately before the first
+   mutation following the plan's last select.* step (mask commands are
+   mutations by the engine's journal metadata, never selection steps by
+   name), and preserves the selection's exact per-pixel coverage plus the
+   region's exact rendered pixels locally - 512x512 tiles under the
+   engine's 262144-px per-call cap, 2M-px aggregate per capture (32MB RGBA
+   f32 / 8MB coverage), checked arithmetic, never leaving the process.
+   Document identity is the engine's unique live DocId bound by a monotonic
+   revision; name/path corroborate only, so rollback honestly measures
+   no-change while a swap or close/reopen fails identity. Collateral change
+   inside the target's bounding region (outside its coverage) counts as a
+   protected-region violation, and earlier edit segments of a multi-segment
+   plan withhold completion until per-segment capture lands. Completion grounds only on
    the exact tier: covered (target) pixels compared per-pixel against the
    preserved coverage, collateral pixels inside the bounding region counted
    separately, protected regions compared exactly. Sampled-grid digests and

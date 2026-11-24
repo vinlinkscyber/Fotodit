@@ -385,12 +385,15 @@ impl ExecutionEngine {
                 let tw = TILE.min(w - tx);
                 let value = session.command_run(command,
                     json!({"x": x0 + tx as i64, "y": y0 + ty as i64, "width": tw, "height": th})).ok()?;
-                let (_, _, pw, ph, px) = if channels == 4 {
+                let (rx, ry, pw, ph, px) = if channels == 4 {
                     Self::parse_exact_region(&value)?
                 } else {
                     Self::parse_coverage(&value)?
                 };
-                if pw != tw || ph != th { return None; }
+                // The engine intersects with the canvas: accept only the
+                // exact tile requested, else the scatter offsets would be
+                // wrong - a shortfall is honest None, never misplaced data.
+                if pw != tw || ph != th || rx != x0 + tx as i64 || ry != y0 + ty as i64 { return None; }
                 for row in 0..ph {
                     let src = usize::try_from(row.checked_mul(tw.checked_mul(channels)?)?).ok()?;
                     let dst = usize::try_from(((ty + row).checked_mul(w)?.checked_add(tx)?).checked_mul(channels)?).ok()?;
