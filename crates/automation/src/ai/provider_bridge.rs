@@ -3023,7 +3023,7 @@ mod tests {
         // data for LOCAL measurement only. They must stay out of every
         // provider-facing admission list: a provider can neither request
         // them as observations nor receive them through plan admission.
-        for cmd in ["image.analysis.regionPixels", "image.analysis.selectionCoverage"] {
+        for cmd in ["image.analysis.regionPixels", "image.analysis.selectionCoverage", "image.analysis.layerMaskCoverage"] {
             assert!(!OBSERVATION_COMMANDS.contains(&cmd), "{cmd} must not be provider-observable");
             assert!(!SELECTED_COMMANDS.contains(&cmd), "{cmd} must not be plan-admitted");
         }

@@ -31,6 +31,16 @@ jobs:
         run: |
           set -o pipefail
           cargo test --locked -p fotodit-automation 2>&1 | tee test-output.txt
+      - name: Run engine tests
+        if: always()
+        run: |
+          set -o pipefail
+          cargo test --locked -p fotodit-engine 2>&1 | tee engine-test-output.txt
+      - name: Run keystore tests
+        if: always()
+        run: |
+          set -o pipefail
+          cargo test --locked -p fotodit-keystore 2>&1 | tee keystore-test-output.txt
       - name: Run executed pipeline example with printed output
         if: always()
         run: |
@@ -47,5 +57,7 @@ jobs:
           name: automation-test-output
           path: |
             test-output.txt
+            engine-test-output.txt
+            keystore-test-output.txt
             executed-example.txt
             parse-diagnostic.txt

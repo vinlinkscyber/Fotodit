@@ -1004,24 +1004,43 @@ fn layer_mask_coverage(s: &mut Session, p: &Value) -> Result<Value> {
         .ok_or_else(|| bad(CMD, format!("no layer {id}")))?;
     let mask = layer.mask.as_ref().filter(|m| m.enabled)
         .ok_or_else(|| bad(CMD, format!("layer {id} has no enabled mask")))?;
-    let (cw, ch) = (d.size.width, d.size.height);
-    let mut values = Vec::new();
-    mask.values_into(Rect::from_xywh(0, 0, cw, ch), &mut values);
-    let (w, h) = (cw as i32, ch as i32);
-    let (mut x0, mut y0, mut x1, mut y1) = (w, h, -1, -1);
-    for (i, v) in values.iter().enumerate() {
-        if *v > 0.0 {
-            let (x, y) = (i as i32 % w, i as i32 / w);
-            x0 = x0.min(x); y0 = y0.min(y); x1 = x1.max(x); y1 = y1.max(y);
+    let rect_param = ["x", "y", "width", "height"].iter().map(|k| p.get(*k).and_then(Value::as_i64)).collect::<Vec<_>>();
+    let r = if rect_param.iter().all(Option::is_some) {
+        // A requested rect reads exactly that region (clamped to the
+        // canvas): how tiled callers stay under the cap. Zero coverage is
+        // data here, not an error - only an off-canvas rect is empty.
+        let (x, y) = (rect_param[0].unwrap(), rect_param[1].unwrap());
+        let (rw, rh) = (rect_param[2].unwrap(), rect_param[3].unwrap());
+        if !(1..=i64::from(u32::MAX)).contains(&rw) || !(1..=i64::from(u32::MAX)).contains(&rh)
+            || x < i64::from(i32::MIN) || x > i64::from(i32::MAX) || y < i64::from(i32::MIN) || y > i64::from(i32::MAX) {
+            return Err(bad(CMD, "region needs integer x/y and width/height in 1..=u32::MAX"));
         }
+        d.bounds().intersect(&Rect::from_xywh(x as i32, y as i32, rw as u32, rh as u32))
+    } else if rect_param.iter().any(Option::is_some) {
+        return Err(bad(CMD, "x, y, width and height are all-or-none"));
+    } else {
+        let (cw, ch) = (d.size.width, d.size.height);
+        let mut values = Vec::new();
+        mask.values_into(Rect::from_xywh(0, 0, cw, ch), &mut values);
+        let (w, h) = (cw as i32, ch as i32);
+        let (mut x0, mut y0, mut x1, mut y1) = (w, h, -1, -1);
+        for (i, v) in values.iter().enumerate() {
+            if *v > 0.0 {
+                let (x, y) = (i as i32 % w, i as i32 / w);
+                x0 = x0.min(x); y0 = y0.min(y); x1 = x1.max(x); y1 = y1.max(y);
+            }
+        }
+        if x1 < 0 {
+            return Err(bad(CMD, format!("layer {id}'s mask covers nothing")));
+        }
+        Rect::from_xywh(x0, y0, (x1 - x0 + 1) as u32, (y1 - y0 + 1) as u32)
+    };
+    if r.is_empty() {
+        return Err(bad(CMD, "the requested region does not intersect the canvas"));
     }
-    if x1 < 0 {
-        return Err(bad(CMD, format!("layer {id}'s mask covers nothing")));
-    }
-    let r = Rect::from_xywh(x0, y0, (x1 - x0 + 1) as u32, (y1 - y0 + 1) as u32);
     if u64::from(r.width()) * u64::from(r.height()) > MAX_EXACT_REGION_PIXELS {
         return Err(bad(CMD, format!(
-            "the mask is too large for an exact coverage read ({}×{} px; max {} pixels)",
+            "the region is too large for an exact coverage read ({}×{} px; max {} pixels)",
             r.width(), r.height(), MAX_EXACT_REGION_PIXELS)));
     }
     let mut coverage = Vec::new();
@@ -1675,7 +1694,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.analysis.layerMaskCoverage",
             "Layer Mask Coverage",
             ["Image", "Analysis"],
-            r##"{"layer":int} → read-only exact per-pixel coverage of the layer's enabled mask over its nonzero bounds (max 262144 px)"##,
+            r##"{"layer":int,"x":int,"y":int,"width":int,"height":int (rect optional, all-or-none; default the mask's nonzero bounds; max 262144 px)} → read-only exact per-pixel coverage of the layer's enabled mask"##,
             has_doc,
             layer_mask_coverage,
             false

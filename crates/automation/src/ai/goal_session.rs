@@ -629,12 +629,8 @@ impl RegionWatch {
             // Mask-derived single-layer target: the mask's exact coverage
             // splits covered pixels from collateral inside the bounding rect.
             let coverage = if is_target {
-                self.target_mask_layer.and_then(|layer| {
-                    session.command_run("image.analysis.layerMaskCoverage", json!({"layer": layer})).ok()
-                        .and_then(|v| ExecutionEngine::parse_coverage(&v))
-                        .filter(|(x, y, w, h, _)| [*x, *y, *w as i64, *h as i64] == *rect)
-                        .map(|(_, _, _, _, cov)| cov)
-                })
+                self.target_mask_layer.and_then(|layer|
+                    ExecutionEngine::capture_tiled_with(session, "image.analysis.layerMaskCoverage", *rect, 1, &json!({"layer": layer})))
             } else {
                 None
             };

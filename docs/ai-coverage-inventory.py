@@ -60,6 +60,7 @@ APPCONTROL = "app"         # app/session/view/preference control, not a document
 MACRO = "macro"            # actions/variables/batch: a macro layer over commands the provider addresses directly
 MEDIA = "media"            # timeline/video/animation, outside still-image plans
 DEV = "dev"                # internal/dev plumbing, never a user edit
+LOCALMEASURE = "localmeasure" # exact local measurement substrate; never provider-admitted (pinned by test)
 PLANNED = "planned"        # named remaining work (paths/vector, styles, channels, type extras...)
 REVIEW = "review"          # not yet audited; pending, not an accepted cut
 
@@ -71,6 +72,7 @@ REASON = {
     MACRO: "macro/action layer over commands the contract already addresses directly",
     MEDIA: "timeline/video/animation, outside still-image editing plans",
     DEV: "internal/dev plumbing, never a user edit",
+    LOCALMEASURE: "exact local measurement substrate for the goal coordinator's criteria; carries raw pixels/coverage, so it is never provider-admitted (pinned by provider_bridge test)",
     PLANNED: "named remaining work, pending its own audited slice",
     REVIEW: "not yet audited; pending review, not an accepted final cut",
 }
@@ -78,6 +80,8 @@ REASON = {
 def classify(c):
     if c in ("test.panic", "index.json"):
         return DEV
+    if c in ("image.analysis.regionPixels", "image.analysis.selectionCoverage", "image.analysis.layerMaskCoverage"):
+        return LOCALMEASURE
     fam = c.split(".")[0]
     leaf = c.split(".")[-1].lower()
     if c.startswith("image.adjustments."):

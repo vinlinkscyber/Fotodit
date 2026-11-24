@@ -226,10 +226,15 @@ qual-candidate-r8); nothing is pushed or compiled.
 
 Generated accounting lives in `docs/ai-coverage-inventory.md` (script:
 `docs/ai-coverage-inventory.py`, run after every registry or contract change;
-review the diff). Current: 892 entries (890 engine registry + contract-level
-`contract.describe` and `scene.layers`), 125 admitted, 5 observation, 762
+review the diff). Current: 896 entries (894 engine registry + contract-level
+`contract.describe` and `scene.layers`), 125 admitted, 6 observation, 764
 excluded with named reason categories (readonly / external / destructive /
-app / macro / media / dev / planned / review).
+app / macro / media / dev / localmeasure / planned / review). The three
+`localmeasure` commands (`image.analysis.regionPixels`,
+`image.analysis.selectionCoverage`, `image.analysis.layerMaskCoverage`) are
+the goal coordinator's exact measurement substrate: they carry raw
+pixels/coverage, are never provider-admitted (pinned by a provider_bridge
+unit test), and are read-only, non-journaled and allocation-bounded.
 
 ## 7. Verification gates
 

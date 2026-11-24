@@ -383,6 +383,12 @@ impl ExecutionEngine {
     /// budget 2M px (32MB of RGBA f32 / 8MB of coverage at 16/4 bytes per
     /// pixel), checked arithmetic throughout. None on any shortfall.
     pub(crate) fn capture_tiled<S: LiveEditSession + ?Sized>(session: &mut S, command: &str, rect: [i64; 4], channels: u64) -> Option<Vec<f32>> {
+        Self::capture_tiled_with(session, command, rect, channels, &json!({}))
+    }
+
+    /// `capture_tiled` with extra command params (e.g. a layer id) merged
+    /// into every tile request.
+    pub(crate) fn capture_tiled_with<S: LiveEditSession + ?Sized>(session: &mut S, command: &str, rect: [i64; 4], channels: u64, extra: &Value) -> Option<Vec<f32>> {
         const TILE: u64 = 512;
         const MAX_AGGREGATE_PIXELS: u64 = 2_000_000;
         let (x0, y0) = (rect[0], rect[1]);
@@ -399,8 +405,11 @@ impl ExecutionEngine {
             let mut tx = 0u64;
             while tx < w {
                 let tw = TILE.min(w - tx);
-                let value = session.command_run(command,
-                    json!({"x": x0 + tx as i64, "y": y0 + ty as i64, "width": tw, "height": th})).ok()?;
+                let mut params = json!({"x": x0 + tx as i64, "y": y0 + ty as i64, "width": tw, "height": th});
+                if let (Some(map), Some(extra)) = (params.as_object_mut(), extra.as_object()) {
+                    for (k, v) in extra { map.insert(k.clone(), v.clone()); }
+                }
+                let value = session.command_run(command, params).ok()?;
                 let (rx, ry, pw, ph, px) = if channels == 4 {
                     Self::parse_exact_region(&value)?
                 } else {
