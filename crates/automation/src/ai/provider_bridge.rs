@@ -1413,7 +1413,7 @@ const SELECTED_COMMANDS: &[&str] = &["file.new", "type.create", "type.edit", "ty
     "type.orientation.horizontal", "type.orientation.vertical",
     "type.convertToParagraphText", "type.convertToPointText", "type.rasterize", "type.warpText",
     "shape.create", "shape.edit", "shape.rasterize",
-    "gradient.fill.create", "gradient.fill.set",
+    "gradient.fill.create", "gradient.fill.set", "gradient.fill.stop",
     "layer.newAdjustmentLayer.brightnessContrast",
     "layer.newAdjustmentLayer.vibrance", "layer.newAdjustmentLayer.hueSaturation",
     "layer.newAdjustmentLayer.levels", "layer.newAdjustmentLayer.colorBalance",
@@ -1626,6 +1626,7 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
                 // The preset-name gradient key is an asset reference: not admitted.
                 "gradient.fill.create" => vec!["from", "to", "style", "stops", "transparency", "reverse", "dither", "opacity", "mode"],
                 "gradient.fill.set" => vec!["layer", "from", "to", "style", "angle", "scale", "offset", "reverse", "dither", "align", "stops", "transparency", "midpoints"],
+                "gradient.fill.stop" => vec!["layer", "action", "kind", "index", "location", "color", "opacity"],
                 "type.setStyle" => vec!["layer", "range", "size", "color",
                     "font", "fontStyle", "weight", "italic", "tracking", "leading", "baselineShift",
                     "horizontalScale", "verticalScale", "underline", "strikethrough", "fauxBold", "fauxItalic",
@@ -2029,18 +2030,20 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
         }
         // Gradient fill edits: live drag-created layers and edits to an
         // existing gradient fill, sharing the engine's geometry/stop forms.
+        // A gradient stop color: hex (with optional alpha), an [r,g,b,(a)]
+        // 0..1 array, or the foreground/background swatch.
+        let stop_color = |v: &Value| {
+            if let Some(s) = v.as_str() {
+                if s == "foreground" || s == "background" { return true; }
+                let h = s.strip_prefix('#').unwrap_or(s);
+                return (h.len() == 6 || h.len() == 8) && h.as_bytes().iter().all(u8::is_ascii_hexdigit);
+            }
+            v.as_array().is_some_and(|a| (3..=4).contains(&a.len())
+                && a.iter().all(|c| c.as_f64().is_some_and(|x| x.is_finite() && (0.0..=1.0).contains(&x))))
+        };
         if matches!(step.command.as_str(), "gradient.fill.create" | "gradient.fill.set") {
             let pt = |v: &Value| v.as_array().is_some_and(|a| a.len() == 2
                 && a.iter().all(|c| c.as_f64().is_some_and(|x| x.is_finite() && x.abs() <= 1.0e7)));
-            let stop_color = |v: &Value| {
-                if let Some(s) = v.as_str() {
-                    if s == "foreground" || s == "background" { return true; }
-                    let h = s.strip_prefix('#').unwrap_or(s);
-                    return (h.len() == 6 || h.len() == 8) && h.as_bytes().iter().all(u8::is_ascii_hexdigit);
-                }
-                v.as_array().is_some_and(|a| (3..=4).contains(&a.len())
-                    && a.iter().all(|c| c.as_f64().is_some_and(|x| x.is_finite() && (0.0..=1.0).contains(&x))))
-            };
             for key in ["from", "to"] {
                 if map.get(key).is_some_and(|v| !pt(v)) { return Err(refuse()); }
             }
@@ -2082,6 +2085,40 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
                 LayerRef::Created(n) => {
                     if n >= pos || hidden_created.contains(&n)
                         || created_at(&created, n) != Some(CreatedKind::GradientFill) { return Err(refuse()); }
+                }
+            }
+        }
+        if step.command == "gradient.fill.stop" {
+            // Single-stop edits on a gradient fill, same target rule as set.
+            let action = map.get("action").and_then(Value::as_str)
+                .filter(|a| matches!(*a, "add" | "move" | "delete" | "color" | "opacity" | "midpoint"));
+            let action = action.ok_or_else(refuse)?;
+            if map.get("kind").is_some_and(|v| !matches!(v.as_str(), Some("color" | "opacity"))) { return Err(refuse()); }
+            if map.get("index").is_some_and(|v| !v.as_u64().is_some_and(|i| i <= 1024)) { return Err(refuse()); }
+            if map.get("location").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (0.0..=1.0).contains(&x))) { return Err(refuse()); }
+            if map.get("color").is_some_and(|v| !stop_color(v)) { return Err(refuse()); }
+            if map.get("opacity").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (0.0..=100.0).contains(&x))) { return Err(refuse()); }
+            // The keys each action needs (the engine errors on the same
+            // missing keys): stop actions address a stop, add/move/midpoint
+            // place it.
+            if matches!(action, "move" | "delete" | "color" | "opacity" | "midpoint") && !map.contains_key("index") { return Err(refuse()); }
+            if matches!(action, "add" | "move" | "midpoint") && !map.contains_key("location") { return Err(refuse()); }
+            match map.get("layer") {
+                None => {
+                    // The active layer is the target; the engine refuses a
+                    // non-gradient fill truthfully at execution.
+                    if active_changed || !scene.active_layer_id.is_some_and(|a| scene.layers.iter()
+                        .any(|l| l.id == a && l.kind == "Fill" && l.is_visible)) { return Err(refuse()); }
+                }
+                Some(value) => match layer_ref(Some(value)).ok_or_else(refuse)? {
+                    LayerRef::Existing(id) => {
+                        if hidden.contains(&id) || rasterized.contains(&id)
+                            || !scene.layers.iter().any(|l| l.id == id && l.kind == "Fill" && l.is_visible) { return Err(refuse()); }
+                    }
+                    LayerRef::Created(n) => {
+                        if n >= pos || hidden_created.contains(&n)
+                            || created_at(&created, n) != Some(CreatedKind::GradientFill) { return Err(refuse()); }
+                    }
                 }
             }
         }
@@ -3034,6 +3071,24 @@ mod tests {
         assert!(validate_selected_plan(&contract_plan("gradient.fill.create", json!({"from": [0, 0], "to": [400, 300],
             "stops": [[0.0, "#000000"], [1.0, "background"]], "opacity": 80, "mode": "multiply"})), &contract_scene()).is_ok());
         assert!(validate_selected_plan(&contract_plan("gradient.fill.set", json!({"layer": 15, "angle": 45, "scale": 150, "reverse": true})), &contract_scene()).is_ok());
+        // gradient.fill.stop: single-stop edits target a Fill layer like set,
+        // with the keys each action needs.
+        assert!(validate_selected_plan(&contract_plan("gradient.fill.stop", json!({"layer": 15, "action": "color", "index": 0, "color": "#336699"})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("gradient.fill.stop", json!({"layer": 15, "action": "add", "location": 0.5, "color": "foreground"})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("gradient.fill.stop", json!({"layer": 15, "action": "midpoint", "index": 0, "location": 0.25})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("gradient.fill.stop", json!({"layer": 15, "action": "opacity", "kind": "opacity", "index": 1, "opacity": 60})), &contract_scene()).is_ok());
+        for (name, params) in [
+            ("unknown action", json!({"layer": 15, "action": "invert", "index": 0})),
+            ("color without index", json!({"layer": 15, "action": "color", "color": "#336699"})),
+            ("add without location", json!({"layer": 15, "action": "add"})),
+            ("bad color", json!({"layer": 15, "action": "color", "index": 0, "color": "red"})),
+            ("opacity out of range", json!({"layer": 15, "action": "opacity", "index": 0, "opacity": 120})),
+            ("location out of range", json!({"layer": 15, "action": "move", "index": 0, "location": 1.5})),
+            ("not a fill layer", json!({"layer": 7, "action": "delete", "index": 0})),
+            ("no layer and the active layer is not a fill", json!({"action": "delete", "index": 0})),
+        ] {
+            assert!(validate_selected_plan(&contract_plan("gradient.fill.stop", params), &contract_scene()).is_err(), "{name}");
+        }
         // A plan-made gradient fill can be tuned by reference.
         let mut plan = contract_plan("layer.newFillLayer.gradient", json!({"from": "#000000", "to": "#ffffff"}));
         plan.steps.push(PlanStep { command: "gradient.fill.set".into(), params: json!({"layer": {"$step": 1}, "angle": 0}), description: "fixture".into() });
