@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use super::{AiContext, AiEngine, AiError, EditingIntent, EditingPlan, EvaluationReport,
     ExecutionEngine, ExecutionEvidence, ExecutionResult, IntentCategory, LiveEditSession,
-    PlanStep, VisualElement, VisualScene};
+    PlanStep, VisualScene};
 use super::execution::{DigestMark, SelectionCapture, EVIDENCE_MAX_PIXELS};
 use super::natural_language::NaturalLanguageEngine;
 use super::{VisualEvidence, VisualEvidenceClass};
@@ -1108,6 +1108,7 @@ fn measure_target_colour<S: LiveEditSession + ?Sized>(session: &mut S, intent: &
 #[cfg(test)]
 mod region_watch_tests {
     use super::*;
+    use super::super::VisualElement;
 
     fn scene(width: u32, height: u32, layers: &[(u64, [i32; 4])]) -> VisualScene {
         let layers = layers.iter().map(|(id, bounds)| {
