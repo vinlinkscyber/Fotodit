@@ -72,6 +72,8 @@ impl GuiAssistant {
 #[derive(Clone, Copy)]
 enum PendingPhase {
     Planning,
+    /// The one structured correction planning request is in flight.
+    Correcting,
     /// One result-check request is in flight; `check` is its 1-based number.
     Verifying { check: u32 },
 }
@@ -98,8 +100,14 @@ struct PendingGoal {
     /// reuses it, bound to the same unchanged document snapshot.
     scene: fotodit_automation::ai::VisualScene,
     /// Observation rounds this goal has used (bounded by
-    /// MAX_OBSERVATION_ROUNDS, the explicit request budget).
+    /// MAX_OBSERVATION_ROUNDS, the explicit request budget, shared by the
+    /// first plan and the one correction pass).
     observed: usize,
+    /// True once the one structured correction pass for this goal ran.
+    corrected: bool,
+    /// The local evaluator's verdict carried into the correction pass, so an
+    /// observation replan of it keeps the context.
+    correction_detail: Option<String>,
 }
 
 /// Downscaled straight-alpha PNG render of the document composite for the
@@ -243,7 +251,7 @@ impl AssistantBackend for GuiAssistant {
             });
             self.pending = Some(PendingGoal { phase: PendingPhase::Planning, receiver, prompt: prompt.into(),
                 intent, applied: Vec::new(), document, document_id: document_id(app), binding, visual,
-                scene, observed: 0 });
+                scene, observed: 0, corrected: false, correction_detail: None });
             Ok(if visual {
                 format!("Asking {} to plan the edit, with the document image attached. No edits applied yet.", provider_name(slot))
             } else {
@@ -303,7 +311,13 @@ impl AssistantBackend for GuiAssistant {
             (PendingPhase::Planning, Ok(WorkerResult::Plan(fotodit_automation::ai::PlanResponse::Refused(reason)))) => {
                 return Some(format!("{} can't do that edit: {reason} Nothing was applied.", provider_name(slot)));
             }
-            (PendingPhase::Planning, Ok(WorkerResult::Plan(fotodit_automation::ai::PlanResponse::Observe(requests)))) => {
+            (PendingPhase::Correcting, Err(error)) => {
+                return Some(format!("The correction pass failed: {error} Changes made so far stay in the document - use Undo if needed."));
+            }
+            (PendingPhase::Correcting, Ok(WorkerResult::Plan(fotodit_automation::ai::PlanResponse::Refused(reason)))) => {
+                return Some(format!("{} couldn't find a correction: {reason} The changes made so far stay in the document - use Undo if needed.", provider_name(slot)));
+            }
+            (PendingPhase::Planning | PendingPhase::Correcting, Ok(WorkerResult::Plan(fotodit_automation::ai::PlanResponse::Observe(requests)))) => {
                 // Demand-driven observation: the provider asked for bounded
                 // local measurements before choosing targets/values. Measure
                 // on the UI thread through the admitted menu path, bound to
@@ -372,7 +386,7 @@ impl AssistantBackend for GuiAssistant {
                     app.ai_providers.editing_consent_mut().disable();
                     return Some("Provider credential changed. Enable editing again.".into());
                 }
-                let image = if pending.visual && app.ai_providers.editing_consent().visual_active() {
+                let image = if !matches!(pending.phase, PendingPhase::Correcting) && pending.visual && app.ai_providers.editing_consent().visual_active() {
                     match app.session.active().map(|d| render_document_png(&d.doc)) {
                         Some(Ok(png)) => Some(png),
                         Some(Err(error)) => return Some(error),
@@ -384,9 +398,18 @@ impl AssistantBackend for GuiAssistant {
                 let worker_intent = pending.intent.clone();
                 let worker_scene = pending.scene.clone();
                 let worker_context = self.context.clone();
+                // A correction pass keeps its context across an observation
+                // round: the replan carries the applied ledger and the local
+                // evaluation again, never degrades into a bare re-plan.
+                let correcting = matches!(pending.phase, PendingPhase::Correcting);
+                let worker_applied = pending.applied.clone();
+                let worker_detail = pending.correction_detail.clone().unwrap_or_default();
                 std::thread::spawn(move || {
-                    let result = planner.plan_visual(&worker_intent, &worker_scene, &worker_context, image.as_deref(), &results)
-                        .map(WorkerResult::Plan).map_err(|e| e.to_string());
+                    let result = if correcting {
+                        planner.plan_correction(&worker_intent, &worker_scene, &worker_context, &worker_applied, &worker_detail, &results)
+                    } else {
+                        planner.plan_visual(&worker_intent, &worker_scene, &worker_context, image.as_deref(), &results)
+                    }.map(WorkerResult::Plan).map_err(|e| e.to_string());
                     let _ = sender.send(result);
                     repaint.request_repaint();
                 });
@@ -395,17 +418,22 @@ impl AssistantBackend for GuiAssistant {
                 self.pending = Some(pending);
                 return Some(format!("{} asked for local measurements to plan with; measuring and sending the results. No edits applied yet.", provider_name(slot)));
             }
-            (PendingPhase::Planning, Ok(WorkerResult::Plan(fotodit_automation::ai::PlanResponse::Plan(plan)))) => plan,
+            (PendingPhase::Planning | PendingPhase::Correcting, Ok(WorkerResult::Plan(fotodit_automation::ai::PlanResponse::Plan(plan)))) => plan,
             (PendingPhase::Verifying { check: _ }, Ok(WorkerResult::Verdict(verdict))) => {
                 let verdict = *verdict;
                 if verdict.satisfied {
                     return Some(format!("Gemini reviewed the result and says it matches your request."));
                 }
-                // Language/math-only doctrine: an image review is a report,
-                // never the correction mechanism. A corrective suggestion is
-                // surfaced, not applied; the user decides in words, and the
-                // next request re-plans with structured observations.
+                // Language/math-only doctrine: an image review never drives
+                // edits directly. An unsatisfied review routes its critique
+                // (text, not pixels) into the one structured correction pass,
+                // which re-plans from the current scene; a corrective plan
+                // attached to the verdict itself is never executed.
                 let note = if verdict.critique.is_empty() { String::new() } else { format!(": {}", verdict.critique) };
+                if !pending.corrected {
+                    let detail = format!("The image review does not think the result matches the request{note}.");
+                    return self.dispatch_correction(pending, app, ctx, slot, detail);
+                }
                 if !verdict.corrective.steps.is_empty() {
                     return Some(format!("Gemini reviewed the result and doesn't think it matches{note}. It suggested more edits, which I haven't applied - tell me in words what to change. The changes made so far stay in the document - use Undo if needed."));
                 }
@@ -450,9 +478,19 @@ impl AssistantBackend for GuiAssistant {
             }
             self.context_document = pending.document_id.clone();
         }
-        let next_check = match phase { PendingPhase::Planning => 1, PendingPhase::Verifying { check } => check + 1 };
+        // A completed-but-unconfirmed first pass gets one structured
+        // correction: the provider re-plans from the current scene with the
+        // applied ledger and the local evaluation, language/math-only.
+        // Stops that mean the goal needs the user or hit a hard budget are
+        // reported as-is instead.
+        if executed && !completed && !pending.corrected
+            && matches!(outcome.stop, GoalStop::Unmet | GoalStop::FinalStateUnverified | GoalStop::RepeatedPlan)
+        {
+            return self.dispatch_correction(pending, app, ctx, slot, outcome.detail.clone());
+        }
+        let next_check = match phase { PendingPhase::Planning | PendingPhase::Correcting => 1, PendingPhase::Verifying { check } => check + 1 };
         // Requests actually sent for this goal so far; result checks only count once sent.
-        let requests_made = match phase { PendingPhase::Planning => 1, PendingPhase::Verifying { check } => 1 + check };
+        let requests_made = match phase { PendingPhase::Planning | PendingPhase::Correcting => 1, PendingPhase::Verifying { check } => 1 + check };
         let can_check = pending.visual && executed
             && next_check <= fotodit_ui_egui::ai_providers_ui::VISUAL_MAX_CHECKS
             && app.ai_providers.editing_consent().visual_active();
@@ -515,6 +553,54 @@ impl AssistantBackend for GuiAssistant {
     }
 }
 
+impl GuiAssistant {
+    /// Dispatch the one structured correction pass for a goal: the provider
+    /// re-plans from the CURRENT post-edit scene with the applied ledger and
+    /// the local evaluation, language/math-only (no image rides). Same
+    /// credential discipline as Send: identity is re-resolved and re-checked
+    /// before the request leaves.
+    fn dispatch_correction(&mut self, mut pending: PendingGoal, app: &mut FotoditApp, ctx: &egui::Context, slot: &str, detail: String) -> Option<String> {
+        pending.corrected = true;
+        pending.phase = PendingPhase::Correcting;
+        pending.correction_detail = Some(detail.clone());
+        // The correction plans against the post-edit document, never the
+        // pre-edit snapshot.
+        pending.scene = pending.document.as_ref().map(|doc| fotodit_automation::ai::PerceptionEngine::new().perceive(doc)).unwrap_or_default();
+        let current_identity = match (self.identity)(slot) {
+            Ok(identity) => identity,
+            Err(error) => { app.ai_providers.editing_consent_mut().disable(); return Some(error); }
+        };
+        if pending.binding.1 != Some(current_identity) {
+            app.ai_providers.editing_consent_mut().disable();
+            return Some("Provider credential or source changed. Enable editing again before sending.".into());
+        }
+        let (planner, loaded_identity) = match (self.planner_factory)(slot) {
+            Ok(pair) => pair,
+            Err(error) => { app.ai_providers.editing_consent_mut().disable(); return Some(error); }
+        };
+        if loaded_identity != current_identity {
+            app.ai_providers.editing_consent_mut().disable();
+            return Some("Provider credential changed. Enable editing again.".into());
+        }
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let repaint = ctx.clone();
+        let worker_intent = pending.intent.clone();
+        let worker_scene = pending.scene.clone();
+        let worker_context = self.context.clone();
+        let worker_applied = pending.applied.clone();
+        std::thread::spawn(move || {
+            let result = planner.plan_correction(&worker_intent, &worker_scene, &worker_context, &worker_applied, &detail, &[])
+                .map(WorkerResult::Plan).map_err(|e| e.to_string());
+            let _ = sender.send(result);
+            repaint.request_repaint();
+        });
+        pending.receiver = receiver;
+        let detail_msg = pending.correction_detail.clone().unwrap_or_default();
+        self.pending = Some(pending);
+        Some(format!("The result isn't confirmed against your request ({detail_msg}); asking {} for one structured correction from the current document state. No further edits applied yet.", provider_name(slot)))
+    }
+}
+
 struct SelectedPlanner {
     provider: fotodit_automation::ai::ProviderId,
     bridge: fotodit_automation::ai::AiProviderBridge,
@@ -536,6 +622,11 @@ impl SelectedPlanner {
         context: &AiContext, image: Option<&[u8]>, observations: &[fotodit_automation::ai::ObservationResult])
         -> Result<fotodit_automation::ai::PlanResponse, fotodit_automation::ai::AiError> {
         self.bridge.plan_visual(self.provider, intent, scene, context, image, observations)
+    }
+    fn plan_correction(&self, intent: &EditingIntent, scene: &fotodit_automation::ai::VisualScene,
+        context: &AiContext, applied: &[String], evaluation_detail: &str, observations: &[fotodit_automation::ai::ObservationResult])
+        -> Result<fotodit_automation::ai::PlanResponse, fotodit_automation::ai::AiError> {
+        self.bridge.plan_correction(self.provider, intent, scene, context, applied, evaluation_detail, observations)
     }
     fn verify_visual(&self, prompt: &str, applied: &[String], intent: &EditingIntent,
         scene: &fotodit_automation::ai::VisualScene, image: &[u8])
@@ -717,14 +808,16 @@ mod tests {
         app.ai_providers.editing_consent_mut().confirm_identity([7; 32]);
         let initial = fotodit_ui_egui::panels::assistant::submit(&mut app, &ctx, "create a poster called chndrax");
         assert!(initial.starts_with("Asking Gemini"), "{initial}");
-        let _ = await_plan(&mut app, &ctx);
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let _ = await_plan(&mut app, &ctx); // plan applied, unmet: correction dispatched
+        let _ = await_plan(&mut app, &ctx); // the correction pass's outcome
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
         // A bare replay resolves to the last completed prompt and reaches the
         // provider again with that wording (the fixture asserts it verbatim).
         let replay = fotodit_ui_egui::panels::assistant::submit(&mut app, &ctx, "do that again");
         assert!(replay.starts_with("Asking Gemini"), "{replay}");
         let _ = await_plan(&mut app, &ctx);
-        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        let _ = await_plan(&mut app, &ctx); // the replay goal's correction pass
+        assert_eq!(calls.load(Ordering::SeqCst), 4);
     }
 
     // Labeled fixture: the first planning response requests a local
@@ -861,25 +954,31 @@ mod tests {
         assert_eq!(loads.load(Ordering::SeqCst), 0, "fixture enable does not build a provider planner");
         let initial = fotodit_ui_egui::panels::assistant::submit(&mut app, &ctx, "create a poster called chndrax");
         assert!(initial.starts_with("Asking Gemini"), "{initial}");
-        let answer = await_plan(&mut app, &ctx);
+        let correction = await_plan(&mut app, &ctx);
         // The fixture plan creates an empty document: execution succeeds but the
         // design goal (no type layers at all) is not verified, and the local
         // repair adapter stops because overwriting user text is unsafe. The chat
-        // must report the unverified truth, never "complete" (D4).
-        assert!(answer.starts_with("Edits applied via Gemini"), "{answer}");
-        assert!(answer.contains("isn't verified"), "{answer}");
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-        assert_eq!(loads.load(Ordering::SeqCst), 1);
+        // never reports "complete" (D4): it dispatches the one structured
+        // correction pass instead.
+        assert!(correction.contains("one structured correction"), "{correction}");
+        let answer = await_plan(&mut app, &ctx);
+        // The fixture answers the correction with the same file.new plan, which
+        // the contract refuses on an open document: the correction failure is
+        // reported honestly, with the partial state left in the document.
+        assert!(answer.contains("correction pass failed"), "{answer}");
+        assert_eq!(calls.load(Ordering::SeqCst), 2, "first plan plus the one correction pass");
+        assert_eq!(loads.load(Ordering::SeqCst), 2, "each dispatch reloads selected credentials");
         let doc = fotodit_engine::inspect::document(app.session.active().unwrap());
         assert_eq!(doc["width"], 240, "the provider's planned dimensions, not a local template default");
         assert_eq!(doc["height"], 320);
         let _ = fotodit_ui_egui::panels::assistant::submit(&mut app, &ctx, "create a poster called chndrax");
         let _ = await_plan(&mut app, &ctx);
-        assert_eq!(loads.load(Ordering::SeqCst), 2, "every Send reloads selected credentials");
-        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        let _ = await_plan(&mut app, &ctx); // the second goal's correction pass
+        assert_eq!(loads.load(Ordering::SeqCst), 4, "every Send and every correction reloads selected credentials");
+        assert_eq!(calls.load(Ordering::SeqCst), 4);
         app.ai_providers.editing_consent_mut().disable();
         let _ = fotodit_ui_egui::panels::assistant::submit(&mut app, &ctx, "create a poster called chndrax");
-        assert_eq!(calls.load(Ordering::SeqCst), 2, "disable prevents remote requests");
+        assert_eq!(calls.load(Ordering::SeqCst), 4, "disable prevents remote requests");
     }
 
     /// The open-document side of the creation boundary: when the user already has a
@@ -1133,19 +1232,26 @@ mod tests {
     }
 
     #[test]
-    fn visual_loop_budget_exhaustion_stops_at_three_requests() {
+    fn visual_loop_unsatisfied_review_routes_to_one_structured_correction() {
         use std::sync::atomic::Ordering;
-        let corrective = serde_json::json!({"satisfied": false, "critique": "still flat", "corrective_steps": [
+        let unsatisfied = serde_json::json!({"satisfied": false, "critique": "still flat", "corrective_steps": [
             {"command":"layer.newAdjustmentLayer.vibrance","params":{"vibrance":12,"saturation":6},"description":"more color"}]});
-        let (mut app, calls, _) = visual_fixture(vec![corrective.clone(), corrective]);
+        let (mut app, calls, bodies) = visual_fixture(vec![unsatisfied.clone(), unsatisfied]);
         let ctx = egui::Context::default();
         submit_visual(&mut app, &ctx);
         let _ = await_plan(&mut app, &ctx); // plan applied, result check 1 dispatched
-        let _ = await_plan(&mut app, &ctx); // verdict 1: corrective applied, result check 2 dispatched
-        let final_msg = await_plan(&mut app, &ctx); // verdict 2: corrective applied, budget spent
-        assert!(final_msg.contains("used the result reviews"), "{final_msg}");
-        assert_eq!(calls.load(Ordering::SeqCst), 3);
-        assert!(poll_plan(&mut app, &ctx).is_none(), "no fourth provider request");
+        let correction = await_plan(&mut app, &ctx); // verdict 1 unsatisfied: one structured correction dispatched, the verdict's own corrective steps never executed
+        assert!(correction.contains("one structured correction"), "{correction}");
+        let review2 = await_plan(&mut app, &ctx); // correction applied, result check 2 dispatched
+        assert!(review2.contains("Asking Gemini to review the result"), "{review2}");
+        let final_msg = await_plan(&mut app, &ctx); // verdict 2 unsatisfied, correction already used: report only
+        assert!(final_msg.contains("doesn't think it matches"), "{final_msg}");
+        assert!(final_msg.contains("which I haven't applied"), "{final_msg}");
+        assert_eq!(calls.load(Ordering::SeqCst), 4, "plan + review + correction + review");
+        assert!(poll_plan(&mut app, &ctx).is_none(), "no fifth provider request");
+        let bodies = bodies.lock().unwrap();
+        assert!(bodies[2].to_string().contains("applied_steps"), "the correction request carries the applied ledger");
+        assert!(!bodies[2].to_string().contains("inline_data"), "the correction pass is language/math-only: no image rides");
     }
 
     #[test]

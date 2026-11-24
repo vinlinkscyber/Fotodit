@@ -280,6 +280,16 @@ impl EvaluationEngine {
             }
         }
 
+        // ACCURACY AUDIT (recorded, open work): this score is decorative.
+        // intent_satisfied above seeds from execution.is_success and 6 of 9
+        // categories add no semantic check at all, so any successful
+        // execution scores >= 0.9; contrast_check_passed is never set false.
+        // The category checks that exist are presence heuristics (any mask
+        // anywhere, a layer named like a background), not goal-relevant
+        // criteria (the recoloured shirt's region changed colour AND
+        // unrelated pixels did not). GoalStop::Completed inherits this
+        // weakness; its own doc comment says it is not independent proof.
+        // Measured region/selection/render criteria belong here next.
         // Calculate overall confidence score
         let mut score = 0.80f32;
         if intent_satisfied {

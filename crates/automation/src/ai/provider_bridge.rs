@@ -684,13 +684,16 @@ pub enum PlanResponse {
 /// menu path. Filesystem, network and asset commands are never observations.
 pub const OBSERVATION_COMMANDS: &[&str] = &["image.detectFaces", "image.analysis.pixelDigest", "gradient.fill.get", "scene.layers", "contract.describe"];
 
-/// Explicit request budget: at most this many observation rounds per user
-/// request, so the total provider traffic is 1 planning request + up to
-/// MAX_OBSERVATION_ROUNDS replanning requests, each under the 32768-char
-/// cap and (when visual) one PNG under MAX_PNG_BYTES. Rounds are bounded
-/// and counted locally; the instruction tells the provider to batch
-/// independent reads (for example contract.describe with a measurement)
-/// into one round instead of spending rounds serially.
+/// Explicit request budget: at most this many observation rounds per goal,
+/// shared by the first plan and the one structured correction. Total
+/// provider traffic per goal is 1 planning request + up to
+/// MAX_OBSERVATION_ROUNDS replanning requests + 1 correction planning
+/// request, each under the 32768-char cap and (when visual) one PNG under
+/// MAX_PNG_BYTES, plus the consent-gated visual reviews
+/// (VISUAL_MAX_CHECKS). Rounds are bounded and counted locally; the
+/// instruction tells the provider to batch independent reads (for example
+/// contract.describe with a measurement) into one round instead of
+/// spending rounds serially.
 pub const MAX_OBSERVATION_ROUNDS: usize = 3;
 
 /// What the provider reports after reviewing a render of the edited document.
@@ -785,6 +788,43 @@ impl AiProviderBridge {
         if request.raw_prompt.len() > 32768 { return Err(AiError::PlanningError("The replanning context exceeds the 32KB request limit, so nothing was sent or edited. Ask for fewer measurements at once, or simplify the open document and try again.".into())); }
         let timeout = Duration::from_secs(self.balancer.config().client_timeout_secs.unwrap_or(25));
         let response = self.call_gemini_plan(&request, scene, timeout, Some(png))
+            .map_err(|_| AiError::PlanningError("Selected provider failed, refused, or returned an invalid plan. No offline or other-provider fallback was used.".into()))?;
+        match response {
+            PlanResponse::Plan(mut plan) => {
+                validate_selected_plan(&plan, scene)?;
+                plan.category = intent.category;
+                Ok(PlanResponse::Plan(plan))
+            }
+            other => Ok(other),
+        }
+    }
+
+    /// One structured correction planning request, language/math-only: the
+    /// original request verbatim, the CURRENT post-edit scene, the steps
+    /// already applied and the local evaluator's verdict. No image rides:
+    /// the provider corrects from structured state and may answer with a
+    /// plan, an observation round, or a refusal. The reply passes the same
+    /// contract validation as a first plan before anything is applied.
+    pub fn plan_correction(
+        &self, provider: ProviderId, intent: &EditingIntent, scene: &VisualScene, context: &AiContext,
+        applied: &[String], evaluation_detail: &str, observations: &[ObservationResult],
+    ) -> Result<PlanResponse, AiError> {
+        if !self.balancer.config().has_key(provider) {
+            return Err(AiError::PlanningError("Selected provider has no available key; no request sent".into()));
+        }
+        let mut request = intent.clone();
+        if intent.raw_prompt.chars().count() > 4000 { return Err(AiError::PlanningError("Request exceeds the 4000-character provider limit; nothing sent".into())); }
+        let base = selected_contract_prompt(intent, scene, false, context, observations);
+        let mut prompt: Value = serde_json::from_str(&base).map_err(|e| AiError::PlanningError(format!("contract prompt build failed: {e}")))?;
+        prompt["correction"] = json!({
+            "applied_steps": applied,
+            "local_evaluation": evaluation_detail.chars().take(500).collect::<String>(),
+            "note": "The first plan already ran: applied_steps are in the document and the local evaluator did not confirm the original request is met. Reply with corrected steps that finish the original user_request against the CURRENT scene above, or an observation round, or empty steps to refuse. Never repeat a step that already had its effect, never recreate a layer that already exists, and never create a new document."
+        });
+        request.raw_prompt = prompt.to_string();
+        if request.raw_prompt.len() > 32768 { return Err(AiError::PlanningError("The correction context exceeds the 32KB request limit, so nothing was sent or edited.".into())); }
+        let response = self.execute_provider_plan(provider, &request, scene, context,
+            Duration::from_secs(self.balancer.config().client_timeout_secs.unwrap_or(25)))
             .map_err(|_| AiError::PlanningError("Selected provider failed, refused, or returned an invalid plan. No offline or other-provider fallback was used.".into()))?;
         match response {
             PlanResponse::Plan(mut plan) => {
