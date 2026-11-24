@@ -1318,3 +1318,117 @@ mod region_watch_tests {
     }
 }
 
+
+#[cfg(test)]
+mod measurement_host_tests {
+    use super::*;
+
+    /// A scripted host: one fixed document identity and a raw canvas the
+    /// test edits directly. Only image.analysis.regionPixels is served,
+    /// sliced from the canvas with the engine's exact format.
+    struct ScriptHost {
+        document: Value,
+        width: i64,
+        height: i64,
+        pixels: Vec<f32>,
+    }
+
+    impl ScriptHost {
+        fn new(id: u64, revision: u64, width: i64, height: i64) -> Self {
+            let n = (width * height * 4) as usize;
+            ScriptHost {
+                document: json!({"id": id, "revision": revision, "name": "d", "width": width, "height": height}),
+                width, height, pixels: vec![1.0; n],
+            }
+        }
+        fn set_pixel(&mut self, x: i64, y: i64, px: [f32; 4]) {
+            let off = ((y * self.width + x) * 4) as usize;
+            self.pixels[off..off + 4].copy_from_slice(&px);
+        }
+    }
+
+    impl LiveEditSession for ScriptHost {
+        fn inspect_active(&self) -> Result<Option<Value>, AutomationError> {
+            Ok(Some(self.document.clone()))
+        }
+        fn command_run(&mut self, command: &str, params: Value) -> Result<Value, AutomationError> {
+            if command != "image.analysis.regionPixels" {
+                return Err(AutomationError::BadRequest(format!("unexpected command {command}")));
+            }
+            let (x, y) = (params["x"].as_i64().unwrap(), params["y"].as_i64().unwrap());
+            let (w, h) = (params["width"].as_i64().unwrap(), params["height"].as_i64().unwrap());
+            let mut out = Vec::with_capacity((w * h * 4) as usize);
+            for row in y..y + h {
+                let off = ((row * self.width + x) * 4) as usize;
+                out.extend_from_slice(&self.pixels[off..off + (w * 4) as usize]);
+            }
+            Ok(json!({"x": x, "y": y, "width": w, "height": h,
+                "format": "rgba-f32-rowmajor", "pixels": out}))
+        }
+    }
+
+    fn capture(step: usize, bounds: [i64; 4], earlier: usize, canvas_px: &[f32], canvas_w: i64) -> SelectionCapture {
+        let [x, y, w, h] = bounds;
+        let mut before = Vec::with_capacity((w * h * 4) as usize);
+        for row in y..y + h {
+            let off = ((row * canvas_w + x) * 4) as usize;
+            before.extend_from_slice(&canvas_px[off..off + (w * 4) as usize]);
+        }
+        SelectionCapture {
+            step_index: step, document_id: Some(7), document_name: "d".into(), document_path: None,
+            earlier_mutations: earlier, bounds, revision: Some(4),
+            coverage: Some(vec![1.0; (w * h) as usize]),
+            before_pixels: Some(before),
+            region: None, protected: Vec::new(), protected_pixels: Vec::new(), color_stats: None,
+        }
+    }
+
+    #[test]
+    fn selection_stage_measurement_exact_change_and_identity_binding() {
+        let before_canvas = vec![1.0f32; 4 * 4 * 4];
+        let cap = capture(1, [0, 0, 2, 2], 0, &before_canvas, 4);
+        let mut host = ScriptHost::new(7, 5, 4, 4);
+        host.set_pixel(0, 0, [0.0, 0.0, 0.0, 1.0]);
+        let m = measure_from_selection_stage(&mut host, Some(&cap));
+        assert!(m.available);
+        let (target, exact) = m.target.expect("a target leg");
+        assert_eq!(target.class, VisualEvidenceClass::Changed);
+        assert!(exact, "raw-buffer comparison is exact evidence");
+        // A different live DocId fails identity: no measurement is trusted.
+        let mut swapped = ScriptHost::new(8, 5, 4, 4);
+        let m2 = measure_from_selection_stage(&mut swapped, Some(&cap));
+        let (target2, exact2) = m2.target.expect("identity failure still reports a target leg");
+        assert_eq!(target2.class, VisualEvidenceClass::Unknown);
+        assert!(!exact2);
+    }
+
+    #[test]
+    fn segments_claim_their_pixels_and_unclaimed_change_is_a_violation() {
+        let before_canvas = vec![1.0f32; 4 * 4 * 4];
+        let caps = vec![
+            capture(1, [0, 0, 2, 2], 0, &before_canvas, 4),
+            capture(3, [2, 2, 2, 2], 1, &before_canvas, 4),
+        ];
+        // Both segments' covered pixels changed, plus one pixel no segment claims.
+        let mut host = ScriptHost::new(7, 6, 4, 4);
+        host.set_pixel(0, 0, [0.0, 0.0, 0.0, 1.0]);
+        host.set_pixel(3, 3, [0.0, 0.0, 0.0, 1.0]);
+        host.set_pixel(0, 3, [0.0, 0.0, 0.0, 1.0]);
+        let m = measure_segments(&mut host, &caps, Some(&before_canvas), Some([4, 4]));
+        let (target, exact) = m.target.expect("every segment's target measured");
+        assert_eq!(target.class, VisualEvidenceClass::Changed);
+        assert!(exact);
+        assert_eq!(m.protected.len(), 1);
+        let (protected, pexact) = &m.protected[0];
+        assert_eq!(protected.class, VisualEvidenceClass::Changed,
+            "the changed pixel no segment claims is a canvas-level protected violation");
+        assert!(pexact);
+        // Without the unclaimed pixel, the protected leg is exactly unchanged.
+        let mut clean = ScriptHost::new(7, 6, 4, 4);
+        clean.set_pixel(0, 0, [0.0, 0.0, 0.0, 1.0]);
+        clean.set_pixel(3, 3, [0.0, 0.0, 0.0, 1.0]);
+        let m2 = measure_segments(&mut clean, &caps, Some(&before_canvas), Some([4, 4]));
+        let (protected2, _) = &m2.protected[0];
+        assert_eq!(protected2.class, VisualEvidenceClass::NoChangeObserved);
+    }
+}
