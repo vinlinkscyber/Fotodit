@@ -114,7 +114,7 @@ const IDENTITY_CHANGING: &[&str] = &["file.new", "file.open", "file.close", "fil
 /// composite buffer only (16 bytes per rendered pixel, at most 64,000,000
 /// bytes here); renderer-internal intermediates and wall-clock time are
 /// governed by the renderer itself.
-const EVIDENCE_MAX_PIXELS: u64 = 4_000_000;
+pub(crate) const EVIDENCE_MAX_PIXELS: u64 = 4_000_000;
 
 /// Total digest captures allowed per plan execution. Captures are synchronous
 /// composite renders on the host's live path; the aggregate per run is bounded
@@ -168,19 +168,19 @@ enum EvidenceKind {
 /// must be present, well-formed and self-consistent before the capture is
 /// trusted.
 #[derive(Clone, Debug, PartialEq)]
-struct DigestMark {
+pub(crate) struct DigestMark {
     /// The digest as a NUMBER (parsed from the host's hex), so textually
     /// different but numerically identical digests (e.g. case differences)
     /// can never register as a change.
-    digest: u64,
+    pub(crate) digest: u64,
     /// Canvas origin of the captured region; (0, 0) for a whole-canvas
     /// capture. Digests are only ever compared over an identical rect.
-    x: i64,
-    y: i64,
-    width: u64,
-    height: u64,
-    stride: u64,
-    sampled: u64,
+    pub(crate) x: i64,
+    pub(crate) y: i64,
+    pub(crate) width: u64,
+    pub(crate) height: u64,
+    pub(crate) stride: u64,
+    pub(crate) sampled: u64,
 }
 
 /// Observed identity hint and history state of the active document, read through
@@ -238,7 +238,7 @@ impl ExecutionEngine {
     /// failed the fixed-schema validation below. Never fails the step it
     /// observes. The hook contract forbids mutation and requires the active
     /// document to be preserved (see `LiveEditSession::visual_digest`).
-    fn capture_digest<S: LiveEditSession + ?Sized>(session: &mut S, region: Option<[i64; 4]>) -> Result<Option<DigestMark>, String> {
+    pub(crate) fn capture_digest<S: LiveEditSession + ?Sized>(session: &mut S, region: Option<[i64; 4]>) -> Result<Option<DigestMark>, String> {
         let Some(result) = session.visual_digest(EVIDENCE_MAX_PIXELS, region) else {
             return Ok(None);
         };
@@ -284,7 +284,7 @@ impl ExecutionEngine {
     /// change at identical dimensions is NOT a pixel change: the grids
     /// differ, so the digests are incomparable and the honest class is
     /// Unknown. Digests are only compared over an identical grid.
-    fn compare_digests(before: &DigestMark, after: &DigestMark) -> VisualEvidence {
+    pub(crate) fn compare_digests(before: &DigestMark, after: &DigestMark) -> VisualEvidence {
         if (before.x, before.y) != (after.x, after.y) {
             return VisualEvidence {
                 class: VisualEvidenceClass::Unknown,

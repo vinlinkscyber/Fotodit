@@ -13,6 +13,8 @@ use serde_json::{Value, json};
 use super::{AiContext, AiEngine, AiError, EditingIntent, EditingPlan, EvaluationReport,
     ExecutionEngine, ExecutionEvidence, ExecutionResult, IntentCategory, LiveEditSession,
     PlanStep, VisualScene};
+use super::execution::{DigestMark, EVIDENCE_MAX_PIXELS};
+use super::{VisualEvidence, VisualEvidenceClass};
 use crate::AutomationError;
 
 /// Limits bound planned edit steps, not renderer work, time, money or provider calls.
@@ -230,6 +232,8 @@ impl AiEngine {
                 }
             }
             outcome.planned_commands += plan.steps.len();
+            let region_watch = RegionWatch::new(&scene, &plan);
+            let region_before = region_watch.capture(&mut host);
             let start = host.calls.len();
             let mut attempt = GoalAttempt { plan: plan.clone(), execution: None, evaluation: None,
                 evidence: None, commands: Vec::new(), error: None };
@@ -258,7 +262,9 @@ impl AiEngine {
                         }
                     };
                     let final_scene = self.perception_engine.perceive(&final_document);
-                    let evaluation = self.eval_engine.evaluate(&intent, &scene, &final_scene, &execution);
+                    let measured = region_watch.measure(&mut host, region_before);
+                    let mut evaluation = self.eval_engine.evaluate(&intent, &scene, &final_scene, &execution);
+                    measured.apply(&mut evaluation);
                     let satisfied = evaluation.intent_satisfied;
                     attempt.evaluation = Some(evaluation);
                     outcome.attempts.push(attempt);
@@ -374,5 +380,169 @@ impl<S: LiveEditSession + ?Sized> LiveEditSession for GoalHost<'_, S> {
         }
         if let Err(error) = self.inspect_active() { return Some(Err(error.to_string())); }
         result
+    }
+}
+
+/// Measured before/after region evidence for one attempt. A sampled global
+/// digest cannot prove region colour or unchanged-pixel claims, so the target
+/// region (the union of the plan-targeted layers' bounds) and up to four
+/// protected border regions (the canvas complement) get their own exact
+/// digests at the evidence budget's stride - regions within 1M px sample every
+/// pixel, making equal digests an exact unchanged-pixel proof there.
+struct RegionWatch {
+    target: Option<[i64; 4]>,
+    protected: Vec<[i64; 4]>,
+}
+
+struct CapturedRegion {
+    target: bool,
+    mark: Option<DigestMark>,
+}
+
+/// Local measured evidence; `available` is false when the host offers no
+/// digest capability, in which case nothing about the evaluation changes
+/// (honest absence, never assumed change or no-change).
+struct RegionMeasurement {
+    target: Option<VisualEvidence>,
+    protected: Vec<VisualEvidence>,
+    available: bool,
+}
+
+impl RegionWatch {
+    /// Target = union of the bounds of layers the plan addresses by `layer`/`id`
+    /// param; protected = the canvas complement as up to four border rects.
+    /// Regions over the evidence pixel budget are skipped (honest unknown,
+    /// never a pretend measurement).
+    fn new(scene: &VisualScene, plan: &EditingPlan) -> Self {
+        let mut target: Option<[i64; 4]> = None;
+        for step in &plan.steps {
+            let Some(id) = step.params.get("layer").or_else(|| step.params.get("id")).and_then(Value::as_u64) else { continue };
+            let Some(layer) = scene.layers.iter().find(|l| l.id == id) else { continue };
+            let [x, y, w, h] = layer.bounds;
+            if w <= 0 || h <= 0 { continue; }
+            let (r, b) = (i64::from(x) + i64::from(w), i64::from(y) + i64::from(h));
+            target = Some(match target {
+                None => [i64::from(x), i64::from(y), i64::from(w), i64::from(h)],
+                Some(t) => {
+                    let x0 = t[0].min(i64::from(x));
+                    let y0 = t[1].min(i64::from(y));
+                    [x0, y0, (t[0] + t[2]).max(r) - x0, (t[1] + t[3]).max(b) - y0]
+                }
+            });
+        }
+        let fits = |w: i64, h: i64| w > 0 && h > 0 && (w as u64).checked_mul(h as u64).is_some_and(|a| a <= EVIDENCE_MAX_PIXELS);
+        let target = target.filter(|t| fits(t[2], t[3]));
+        let mut protected = Vec::new();
+        if let Some([tx, ty, tw, th]) = target {
+            let (cw, ch) = (i64::from(scene.width), i64::from(scene.height));
+            for rect in [[0, 0, cw, ty], [0, ty + th, cw, ch - ty - th], [0, ty, tx, th], [tx + tw, ty, cw - tx - tw, th]] {
+                if fits(rect[2], rect[3]) { protected.push(rect); }
+            }
+        }
+        Self { target, protected }
+    }
+
+    /// One capture per region through the host's admitted digest hook.
+    /// `None` when there is nothing to measure or the host has no capability.
+    fn capture<S: LiveEditSession + ?Sized>(&self, session: &mut S) -> Option<Vec<CapturedRegion>> {
+        if self.target.is_none() && self.protected.is_empty() { return None; }
+        let mut out = Vec::new();
+        for (is_target, rect) in self.target.iter().map(|r| (true, r)).chain(self.protected.iter().map(|r| (false, r))) {
+            match ExecutionEngine::capture_digest(session, Some(*rect)) {
+                Ok(Some(mark)) => out.push(CapturedRegion { target: is_target, mark: Some(mark) }),
+                Ok(None) => return None,
+                Err(_) => out.push(CapturedRegion { target: is_target, mark: None }),
+            }
+        }
+        Some(out)
+    }
+
+    /// After-execution captures over the identical rects, compared on an
+    /// identical grid only (the comparison itself classifies anything else
+    /// as Unknown).
+    fn measure<S: LiveEditSession + ?Sized>(&self, session: &mut S, before: Option<Vec<CapturedRegion>>) -> RegionMeasurement {
+        let unavailable = || RegionMeasurement { target: None, protected: Vec::new(), available: false };
+        let Some(before) = before else { return unavailable() };
+        let Some(after) = self.capture(session) else { return unavailable() };
+        let mut measurement = RegionMeasurement { target: None, protected: Vec::new(), available: true };
+        for (b, a) in before.iter().zip(after.iter()) {
+            let evidence = match (&b.mark, &a.mark) {
+                (Some(b), Some(a)) => ExecutionEngine::compare_digests(b, a),
+                _ => VisualEvidence { class: VisualEvidenceClass::Unknown,
+                    detail: "a region capture failed or was refused; no evidence of change or of no-change".into() },
+            };
+            if b.target { measurement.target = Some(evidence); } else { measurement.protected.push(evidence); }
+        }
+        measurement
+    }
+}
+
+impl RegionMeasurement {
+    /// Apply measured criteria to the heuristic evaluation. A measured pixel
+    /// change in a protected region blocks completion (correction or an honest
+    /// unmet outcome follows); measured no-change in protected regions and
+    /// change in the target are recorded as observations. No measurement
+    /// upgrades a weak heuristic score into a completed goal on its own.
+    fn apply(self, evaluation: &mut EvaluationReport) {
+        if !self.available { return; }
+        let changed = self.protected.iter().filter(|e| e.class == VisualEvidenceClass::Changed).count();
+        if changed > 0 {
+            evaluation.intent_satisfied = false;
+            evaluation.observations.push(format!(
+                "Measured pixel evidence: {changed} protected region(s) outside the target changed at the data level; unrelated content may have been affected."));
+        } else if !self.protected.is_empty() && self.protected.iter().all(|e| e.class == VisualEvidenceClass::NoChangeObserved) {
+            evaluation.observations.push(
+                "Measured pixel evidence: no change observed in the protected regions outside the target.".into());
+        }
+        if let Some(target) = &self.target {
+            match target.class {
+                VisualEvidenceClass::Changed => evaluation.observations.push(
+                    "Measured pixel evidence: the target region changed.".into()),
+                VisualEvidenceClass::NoChangeObserved => evaluation.observations.push(
+                    "Measured pixel evidence: no change observed in the target region; the edit may not have reached it.".into()),
+                _ => {}
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod region_watch_tests {
+    use super::*;
+
+    fn scene(width: u32, height: u32, layers: &[(u64, [i32; 4])]) -> VisualScene {
+        let layers = layers.iter().map(|(id, bounds)| {
+            let mut layer = VisualElement { ..Default::default() };
+            layer.id = *id;
+            layer.bounds = *bounds;
+            layer
+        }).collect();
+        VisualScene { width, height, layers, ..Default::default() }
+    }
+
+    fn plan(steps: &[(&str, u64)]) -> EditingPlan {
+        EditingPlan { title: "t".into(), rationale: "r".into(), category: IntentCategory::ColorStyling, steps: steps.iter()
+            .map(|(command, layer)| PlanStep { command: command.to_string(),
+                params: json!({"layer": layer}), description: String::new() }).collect() }
+    }
+
+    #[test]
+    fn region_watch_unions_target_bounds_and_measures_the_complement() {
+        let scene = scene(1000, 800, &[(2, [100, 100, 300, 200]), (3, [150, 250, 100, 100])]);
+        let watch = RegionWatch::new(&scene, &plan(&[("layer.fill.set", 2), ("layer.opacity.set", 3)]));
+        assert_eq!(watch.target, Some([100, 100, 350, 250]));
+        assert_eq!(watch.protected, vec![
+            [0, 0, 1000, 100], [0, 350, 1000, 450], [0, 100, 100, 250], [450, 100, 550, 250]]);
+    }
+
+    #[test]
+    fn region_watch_skips_oversized_and_unknown_targets() {
+        let scene = scene(100, 100, &[(2, [10, 10, 20, 20])]);
+        // A plan whose layer is not in the scene has no known target region.
+        assert!(RegionWatch::new(&scene, &plan(&[("layer.fill.set", 99)])).target.is_none());
+        // A region over the evidence pixel budget is skipped, never sampled into a false proof.
+        let huge = scene(9000, 9000, &[(2, [0, 0, 5000, 5000])]);
+        let watch = RegionWatch::new(&huge, &plan(&[("layer.fill.set", 2)]));
+        assert!(watch.target.is_none() && watch.protected.is_empty());
     }
 }
