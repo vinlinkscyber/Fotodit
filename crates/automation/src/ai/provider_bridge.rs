@@ -1414,6 +1414,7 @@ const SELECTED_COMMANDS: &[&str] = &["file.new", "type.create", "type.edit", "ty
     "layer.newFillLayer.solidColor", "layer.newFillLayer.gradient",
     "type.orientation.horizontal", "type.orientation.vertical",
     "type.convertToParagraphText", "type.convertToPointText", "type.rasterize", "type.warpText",
+    "shape.create", "shape.edit", "shape.rasterize",
     "layer.newAdjustmentLayer.brightnessContrast",
     "layer.newAdjustmentLayer.vibrance", "layer.newAdjustmentLayer.hueSaturation",
     "layer.newAdjustmentLayer.levels", "layer.newAdjustmentLayer.colorBalance",
@@ -1453,7 +1454,7 @@ pub(crate) fn is_layer_creating(command: &str) -> bool {
         | "layer.newAdjustmentLayer.exposure" | "layer.newAdjustmentLayer.invert"
         | "layer.newAdjustmentLayer.posterize" | "layer.newAdjustmentLayer.threshold"
         | "layer.newAdjustmentLayer.gradientMap" | "layer.newAdjustmentLayer.channelMixer"
-        | "layer.newAdjustmentLayer.selectiveColor" | "layer.new.group" | "layer.newFillLayer.gradient")
+        | "layer.newAdjustmentLayer.selectiveColor" | "layer.new.group" | "layer.newFillLayer.gradient" | "shape.create")
 }
 
 /// A plan step's reference to a layer: an existing scene layer id, or the
@@ -1550,6 +1551,14 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
                 "type.orientation.horizontal" | "type.orientation.vertical"
                 | "type.convertToParagraphText" | "type.convertToPointText" | "type.rasterize" => vec!["layer"],
                 "type.warpText" => vec!["layer", "style", "orientation", "bend", "horizontalDistortion", "verticalDistortion"],
+                // Geometric shapes only: inline path data, work-path state,
+                // pattern presets and appending to an existing shape layer
+                // (addTo/op) are not admitted, so the key filter refuses them.
+                "shape.create" => vec!["kind", "rect", "radii", "sides", "starRatio", "cornerRadius", "from", "to", "weight",
+                    "arrowStart", "arrowEnd", "arrowWidth", "arrowLength", "arrowConcavity", "fill", "stroke", "name"],
+                "shape.edit" => vec!["layer", "kind", "rect", "radii", "sides", "starRatio", "cornerRadius", "from", "to", "weight",
+                    "arrowStart", "arrowEnd", "arrowWidth", "arrowLength", "arrowConcavity", "move", "transform", "fillRule", "fill", "stroke", "name"],
+                "shape.rasterize" => vec!["layer"],
                 "type.setStyle" => vec!["layer", "range", "size", "color",
                     "font", "fontStyle", "weight", "italic", "tracking", "leading", "baselineShift",
                     "horizontalScale", "verticalScale", "underline", "strikethrough", "fauxBold", "fauxItalic",
@@ -1683,6 +1692,7 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
         } else if width == 0 || height == 0 { return Err(refuse()); }
         // A style step must change something, not just name a target.
         if step.command == "type.setStyle" && !map.keys().any(|k| k != "layer" && k != "range") { return Err(refuse()); }
+        if step.command == "shape.edit" && !map.keys().any(|k| k != "layer") { return Err(refuse()); }
         // Character keys shared by type.create and type.setStyle, with the
         // engine's CHAR_PARAMS ranges.
         if matches!(step.command.as_str(), "type.create" | "type.setStyle") {
@@ -1825,6 +1835,109 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
                 LayerRef::Existing(id) => {
                     if hidden.contains(&id) || rasterized.contains(&id)
                         || !scene.layers.iter().any(|l| l.id == id && l.kind == "Type" && l.is_visible) { return Err(refuse()); }
+                    rasterized.push(id);
+                }
+                LayerRef::Created(_) => return Err(refuse()),
+            }
+        }
+        // Geometric shape layers, with the engine's fill/stroke forms.
+        if matches!(step.command.as_str(), "shape.create" | "shape.edit") {
+            let hex_or_channels = |v: &Value| {
+                if let Some(s) = v.as_str() {
+                    let h = s.strip_prefix('#').unwrap_or(s);
+                    return (h.len() == 6 || h.len() == 8) && h.as_bytes().iter().all(u8::is_ascii_hexdigit);
+                }
+                v.as_array().is_some_and(|a| (3..=4).contains(&a.len())
+                    && a.iter().all(|c| c.as_f64().is_some_and(|x| x.is_finite() && (0.0..=1.0).contains(&x))))
+            };
+            let fill_ok = |v: &Value| {
+                if v.is_null() || hex_or_channels(v) { return true; }
+                // Gradient fill object; pattern presets are assets and are
+                // refused by falling through.
+                let Some(go) = v.as_object().and_then(|o| o.get("gradient")).and_then(Value::as_object) else { return false };
+                if !go.get("stops").is_some_and(|s| s.as_array().is_some_and(|a| (2..=1024).contains(&a.len())
+                    && a.iter().all(|p| p.as_array().is_some_and(|pair| pair.len() == 2
+                        && pair[0].as_f64().is_some_and(|x| x.is_finite() && (0.0..=1.0).contains(&x))
+                        && hex_or_channels(&pair[1]))))) { return false; }
+                if go.get("angle").is_some_and(|v| !v.as_f64().is_some_and(f64::is_finite)) { return false; }
+                if go.get("scale").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (1.0..=1000.0).contains(&x))) { return false; }
+                if go.get("style").is_some_and(|v| !matches!(v.as_str(), Some("linear" | "radial" | "angle" | "reflected" | "diamond"))) { return false; }
+                for key in ["reverse", "dither", "align"] {
+                    if go.get(key).is_some_and(|v| !v.is_boolean()) { return false; }
+                }
+                if go.get("opacityStops").is_some_and(|v| !v.as_array().is_some_and(|a| a.len() <= 1024
+                    && a.iter().all(|p| p.as_array().is_some_and(|pair| pair.len() == 2
+                        && pair.iter().all(|c| c.as_f64().is_some_and(|x| x.is_finite() && (0.0..=1.0).contains(&x))))))) { return false; }
+                if go.get("midpoints").is_some_and(|v| !v.as_array().is_some_and(|a| a.len() <= 1024
+                    && a.iter().all(|m| m.as_f64().is_some_and(|x| x.is_finite() && (0.0..=1.0).contains(&x))))) { return false; }
+                if go.get("offset").is_some_and(|v| !v.as_array().is_some_and(|a| a.len() == 2
+                    && a.iter().all(|c| c.as_f64().is_some_and(f64::is_finite)))) { return false; }
+                true
+            };
+            let stroke_ok = |v: &Value| {
+                if v.is_null() { return true; }
+                let Some(o) = v.as_object() else { return false };
+                if o.get("width").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (0.0..=5000.0).contains(&x))) { return false; }
+                if o.get("color").is_some_and(|c| !hex_or_channels(c)) { return false; }
+                if o.get("opacity").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (0.0..=100.0).contains(&x))) { return false; }
+                if o.get("align").is_some_and(|v| !matches!(v.as_str(), Some("inside" | "center" | "outside"))) { return false; }
+                if o.get("cap").is_some_and(|v| !matches!(v.as_str(), Some("butt" | "round" | "square"))) { return false; }
+                if o.get("join").is_some_and(|v| !matches!(v.as_str(), Some("miter" | "round" | "bevel"))) { return false; }
+                if o.get("miterLimit").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && x > 0.0)) { return false; }
+                if o.get("dashes").is_some_and(|v| !v.as_array().is_some_and(|a| a.len() <= 64
+                    && a.iter().all(|d| d.as_f64().is_some_and(|x| x.is_finite() && x >= 0.0)))) { return false; }
+                if o.get("dashOffset").is_some_and(|v| !v.as_f64().is_some_and(f64::is_finite)) { return false; }
+                true
+            };
+            let px_pair = |v: &Value| v.as_array().is_some_and(|a| a.len() == 2
+                && a.iter().all(|c| c.as_f64().is_some_and(|x| x.is_finite() && x.abs() <= 1.0e6)));
+            if map.get("kind").is_some_and(|v| !matches!(v.as_str(), Some("rect" | "roundedRect" | "ellipse" | "polygon" | "star" | "line"))) { return Err(refuse()); }
+            if map.get("rect").is_some_and(|v| !v.as_array().is_some_and(|a| a.len() == 4
+                && a.iter().all(|c| c.as_f64().is_some_and(|x| x.is_finite() && x.abs() <= 1.0e6))
+                && a[2].as_f64().is_some_and(|w| w.abs() >= 0.01) && a[3].as_f64().is_some_and(|h| h.abs() >= 0.01))) { return Err(refuse()); }
+            if map.get("radii").is_some_and(|v| !(v.as_f64().is_some_and(|x| x.is_finite() && x >= 0.0)
+                || v.as_array().is_some_and(|a| a.len() == 4 && a.iter().all(|c| c.as_f64().is_some_and(|x| x.is_finite() && x >= 0.0))))) { return Err(refuse()); }
+            if map.get("sides").is_some_and(|v| !v.as_u64().is_some_and(|n| (3..=100).contains(&n))) { return Err(refuse()); }
+            if map.get("starRatio").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (0.0..=1.0).contains(&x))) { return Err(refuse()); }
+            if map.get("cornerRadius").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (0.0..=1.0e6).contains(&x))) { return Err(refuse()); }
+            for key in ["from", "to", "move"] {
+                if map.get(key).is_some_and(|v| !px_pair(v)) { return Err(refuse()); }
+            }
+            if map.get("weight").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (0.01..=5000.0).contains(&x))) { return Err(refuse()); }
+            for key in ["arrowStart", "arrowEnd"] {
+                if map.get(key).is_some_and(|v| !v.is_boolean()) { return Err(refuse()); }
+            }
+            for key in ["arrowWidth", "arrowLength"] {
+                if map.get(key).is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (0.0..=1.0e6).contains(&x))) { return Err(refuse()); }
+            }
+            if map.get("arrowConcavity").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (0.0..=100.0).contains(&x))) { return Err(refuse()); }
+            if map.get("name").is_some_and(|v| !v.as_str().is_some_and(|s| !s.is_empty() && s.chars().count() <= 128)) { return Err(refuse()); }
+            if map.get("fill").is_some_and(|v| !fill_ok(v)) { return Err(refuse()); }
+            if map.get("stroke").is_some_and(|v| !stroke_ok(v)) { return Err(refuse()); }
+            if map.get("transform").is_some_and(|v| !v.as_array().is_some_and(|a| a.len() == 6
+                && a.iter().all(|c| c.as_f64().is_some_and(|x| x.is_finite() && x.abs() <= 1.0e6)))) { return Err(refuse()); }
+            if map.get("fillRule").is_some_and(|v| !matches!(v.as_str(), Some("nonzero" | "evenodd"))) { return Err(refuse()); }
+        }
+        if step.command == "shape.create" {
+            // Each geometric kind needs its anchor geometry.
+            let kind = map.get("kind").and_then(Value::as_str).unwrap_or("rect");
+            if matches!(kind, "rect" | "roundedRect" | "ellipse" | "polygon" | "star") && !map.contains_key("rect") { return Err(refuse()); }
+            if kind == "line" && !(map.contains_key("from") && map.contains_key("to")) { return Err(refuse()); }
+        }
+        if step.command == "shape.edit" {
+            match layer_ref(map.get("layer")).ok_or_else(refuse)? {
+                LayerRef::Existing(id) => {
+                    if hidden.contains(&id) || rasterized.contains(&id)
+                        || !scene.layers.iter().any(|l| l.id == id && l.kind == "Shape" && l.is_visible) { return Err(refuse()); }
+                }
+                LayerRef::Created(_) => return Err(refuse()),
+            }
+        }
+        if step.command == "shape.rasterize" {
+            match layer_ref(map.get("layer")).ok_or_else(refuse)? {
+                LayerRef::Existing(id) => {
+                    if hidden.contains(&id) || rasterized.contains(&id)
+                        || !scene.layers.iter().any(|l| l.id == id && l.kind == "Shape" && l.is_visible) { return Err(refuse()); }
                     rasterized.push(id);
                 }
                 LayerRef::Created(_) => return Err(refuse()),
@@ -2448,6 +2561,7 @@ mod tests {
             VisualElement { id: 7, kind: "Pixel".into(), name: "Photo".into(), is_visible: true, ..Default::default() },
             VisualElement { id: 9, kind: "Type".into(), name: "Heading".into(), text_content: Some("Original".into()), is_visible: true, ..Default::default() },
             VisualElement { id: 11, kind: "Group".into(), name: "Set".into(), is_visible: true, ..Default::default() },
+            VisualElement { id: 13, kind: "Shape".into(), name: "Badge".into(), is_visible: true, ..Default::default() },
         ], ..Default::default() }
     }
 
@@ -2472,6 +2586,38 @@ mod tests {
             plan.steps.push(PlanStep { command: command.into(), params, description: "fixture".into() });
         }
         assert!(validate_selected_plan(&plan, &contract_scene()).is_ok());
+    }
+
+    #[test]
+    fn selected_plan_admits_geometric_shapes_within_contract() {
+        assert!(validate_selected_plan(&contract_plan("shape.create", json!({"kind": "roundedRect", "rect": [10, 10, 120, 60],
+            "radii": [8, 8, 8, 8], "fill": "#3366ff", "stroke": {"width": 2, "color": "#000000", "align": "inside"}})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("shape.create", json!({"kind": "star", "rect": [0, 0, 50, 50], "sides": 5, "starRatio": 0.4})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("shape.create", json!({"kind": "line", "from": [0, 0], "to": [100, 60], "weight": 2, "arrowEnd": true})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("shape.create", json!({"rect": [5, 5, 40, 40],
+            "fill": {"gradient": {"stops": [[0.0, "#000000"], [1.0, "#ffffff"]], "angle": 90, "style": "linear"}}})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("shape.edit", json!({"layer": 13, "move": [4, -2], "fillRule": "evenodd"})), &contract_scene()).is_ok());
+        // Rasterized shape is pixel content for what follows.
+        let mut plan = contract_plan("shape.rasterize", json!({"layer": 13}));
+        plan.steps.push(PlanStep { command: "layer.removeBackground".into(), params: json!({"layer": 13}), description: "fixture".into() });
+        assert!(validate_selected_plan(&plan, &contract_scene()).is_ok());
+    }
+
+    #[test]
+    fn selected_plan_refuses_shapes_outside_contract() {
+        // Inline path data, work-path state, pattern presets and addTo are not admitted.
+        assert!(validate_selected_plan(&contract_plan("shape.create", json!({"kind": "path", "path": {"subpaths": []}})), &contract_scene()).is_err());
+        assert!(validate_selected_plan(&contract_plan("shape.create", json!({"rect": [0, 0, 10, 10], "addTo": 13, "op": "combine"})), &contract_scene()).is_err());
+        assert!(validate_selected_plan(&contract_plan("shape.create", json!({"rect": [0, 0, 10, 10], "fill": {"pattern": "Dots"}})), &contract_scene()).is_err());
+        // Each geometric kind needs its anchor geometry.
+        assert!(validate_selected_plan(&contract_plan("shape.create", json!({"kind": "polygon", "sides": 6})), &contract_scene()).is_err());
+        assert!(validate_selected_plan(&contract_plan("shape.create", json!({"kind": "line", "from": [0, 0]})), &contract_scene()).is_err());
+        assert!(validate_selected_plan(&contract_plan("shape.edit", json!({"layer": 7, "fill": "#ff0000"})), &contract_scene()).is_err(), "pixel layer is not a shape");
+        assert!(validate_selected_plan(&contract_plan("shape.edit", json!({"layer": 13})), &contract_scene()).is_err(), "an edit that changes nothing");
+        // Shape-only steps fail after the layer was rasterized.
+        let mut plan = contract_plan("shape.rasterize", json!({"layer": 13}));
+        plan.steps.push(PlanStep { command: "shape.edit".into(), params: json!({"layer": 13, "fill": "#00ff00"}), description: "fixture".into() });
+        assert!(validate_selected_plan(&plan, &contract_scene()).is_err());
     }
 
     #[test]
