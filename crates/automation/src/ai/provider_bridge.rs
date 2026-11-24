@@ -1440,7 +1440,8 @@ const SELECTED_COMMANDS: &[&str] = &["file.new", "type.create", "type.edit", "ty
     "select.grow", "select.similar",
     "select.subject", "select.object", "select.sky", "select.focusArea", "select.loadLuminosity",
     "select.transformSelection", "select.refineEdge",
-    "edit.transform", "layer.removeBackground"];
+    "edit.transform", "layer.removeBackground",
+    "edit.fill", "edit.stroke", "image.autoTone", "image.autoContrast", "image.autoColor"];
 
 /// Layer-creating commands whose output a later step of the same plan can
 /// reference with `{"$step": N}` (1-based plan position; see `LayerRef`).
@@ -1629,6 +1630,12 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
                 // layer). newLayer/newDocument outputs are refused.
                 "select.refineEdge" => vec!["radius", "smartRadius", "smooth", "feather", "contrast", "shiftEdge", "decontaminate", "amount", "output", "sampleAllLayers", "refineStrokes", "edits"],
                 "edit.transform" => vec!["layer", "dx", "dy", "scaleX", "scaleY", "rotate", "reference", "interpolation"],
+                // Pattern and history fills need preset/history state the
+                // scene does not carry, so their companion keys are refused.
+                "edit.fill" => vec!["contents", "color", "scale", "angle", "colorAdaptation", "scaleAdaptation",
+                    "mirror", "rotationAdaptation", "mode", "opacity", "preserveTransparency", "target"],
+                "edit.stroke" => vec!["width", "color", "location", "mode", "opacity", "preserveTransparency"],
+                "image.autoTone" | "image.autoContrast" | "image.autoColor" => vec![],
                 "layer.removeBackground" => vec!["layer", "sampleAllLayers", "refine"],
                 _ => return Err(refuse()),
             },
@@ -1644,7 +1651,8 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
                 | "layer.groupLayers"
                 // Luminosity selection is parameter-free, and the local
                 // subject/sky/focus pickers all have documented defaults.
-                | "select.loadLuminosity" | "select.subject" | "select.sky" | "select.focusArea");
+                | "select.loadLuminosity" | "select.subject" | "select.sky" | "select.focusArea"
+                | "image.autoTone" | "image.autoContrast" | "image.autoColor");
         if map.is_empty() && !paramless { return Err(refuse()); }
         if let Some(rules) = filter {
             for (key, value) in map {
@@ -2044,6 +2052,47 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
         }
         if step.command == "layer.setProps"
             && !["opacity", "fill", "blend", "visible"].iter().any(|k| map.contains_key(*k)) { return Err(refuse()); }
+        // Opacity units are per-command: setProps takes fractions, the
+        // percent commands are checked in their own blocks.
+        if step.command == "layer.setProps" {
+            for key in ["opacity", "fill"] {
+                if map.get(key).is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (0.0..=1.0).contains(&x))) { return Err(refuse()); }
+            }
+        }
+        if matches!(step.command.as_str(), "edit.fill" | "edit.stroke") {
+            for key in ["opacity"] {
+                if map.get(key).is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (0.0..=100.0).contains(&x))) { return Err(refuse()); }
+            }
+            if map.get("mode").is_some_and(|v| !v.as_str().is_some_and(|m| SELECTED_BLEND_MODES.contains(&m))) { return Err(refuse()); }
+            if map.get("preserveTransparency").is_some_and(|v| !v.is_boolean()) { return Err(refuse()); }
+        }
+        if step.command == "edit.fill" {
+            if map.get("contents").is_some_and(|v| !matches!(v.as_str(),
+                Some("foreground" | "background" | "color" | "contentAware" | "black" | "gray" | "white"))) { return Err(refuse()); }
+            if map.get("scale").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (1.0..=1000.0).contains(&x))) { return Err(refuse()); }
+            if map.get("angle").is_some_and(|v| !v.as_f64().is_some_and(f64::is_finite)) { return Err(refuse()); }
+            for key in ["colorAdaptation", "scaleAdaptation", "mirror", "rotationAdaptation"] {
+                if map.get(key).is_some_and(|v| !v.is_boolean()) { return Err(refuse()); }
+            }
+            // quickMask/filterMask/channel targets are GUI state the scene
+            // does not carry; a mask target needs the active layer masked.
+            if map.get("target").is_some_and(|v| !matches!(v.as_str(), Some("pixels" | "mask"))) { return Err(refuse()); }
+            if map.get("target").and_then(Value::as_str) == Some("mask")
+                && !scene.active_layer_id.is_some_and(|a| masked.contains(&a)) { return Err(refuse()); }
+        }
+        if step.command == "edit.stroke" {
+            if map.get("width").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (1.0..=250.0).contains(&x))) { return Err(refuse()); }
+            if map.get("location").is_some_and(|v| !matches!(v.as_str(), Some("inside" | "center" | "outside"))) { return Err(refuse()); }
+        }
+        // Fill, stroke and the auto adjustments edit the live active pixel
+        // layer; after any creation step retargets it the pre-plan scene
+        // cannot prove that, so they are refused (same rule as the filters).
+        if matches!(step.command.as_str(), "edit.fill" | "edit.stroke" | "image.autoTone" | "image.autoContrast" | "image.autoColor")
+            && (active_changed
+                || scene.active_layer_id.is_some_and(|a| hidden.contains(&a))
+                || !(scene.active_layer_id.is_some_and(|a| rasterized.contains(&a))
+                    || scene.layers.iter().any(|l| Some(l.id) == scene.active_layer_id
+                        && matches!(l.kind.as_str(), "Pixel" | "Raster") && l.is_visible))) { return Err(refuse()); }
         if matches!(step.command.as_str(), "type.create" | "type.edit")
             && !map.get("text").and_then(Value::as_str).is_some_and(|v| !v.trim().is_empty() && v.chars().count() <= 2000) { return Err(refuse()); }
         if step.command == "type.create" && (!number("x", 0.0, f64::from(width)) || !number("y", 0.0, f64::from(height))
@@ -2074,7 +2123,6 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
                     "shadows" | "midtones" | "highlights" => value.as_array().is_some_and(|a| a.len() == 3
                         && a.iter().all(|v| v.as_f64().is_some_and(|x| x.is_finite() && (-100.0..=100.0).contains(&x)))),
                     "reds" | "yellows" | "greens" | "cyans" | "blues" | "magentas" => number(key, -200.0, 300.0),
-                    "opacity" | "fill" => number(key, 0.0, 1.0),
                     "blend" => value.as_str().is_some_and(|v| SELECTED_BLEND_MODES.contains(&v)),
                     "visible" => value.is_boolean(),
                     "position" => value.as_str().is_some_and(|v| matches!(v, "above" | "below")),
@@ -2748,6 +2796,35 @@ mod tests {
             plan.steps.push(PlanStep { command: command.into(), params, description: "fixture".into() });
         }
         assert!(validate_selected_plan(&plan, &contract_scene()).is_ok());
+    }
+
+    #[test]
+    fn selected_plan_admits_fill_stroke_and_auto_adjustments_within_contract() {
+        assert!(validate_selected_plan(&contract_plan("edit.fill", json!({"contents": "contentAware", "colorAdaptation": true})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("edit.fill", json!({"contents": "color", "color": "#336699", "opacity": 50})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("edit.stroke", json!({"width": 4, "location": "inside", "opacity": 80})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("image.autoTone", json!({})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("image.autoColor", json!({})), &contract_scene()).is_ok());
+        // Percent opacities are admitted for the percent commands
+        // (regression: the shared opacity rule once forced 0..1 everywhere).
+        assert!(validate_selected_plan(&contract_plan("layer.new.group", json!({"name": "G", "opacity": 50})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("gradient.fill.create", json!({"from": [0, 0], "to": [10, 10], "opacity": 60})), &contract_scene()).is_ok());
+        // ...while setProps keeps its fraction form.
+        assert!(validate_selected_plan(&contract_plan("layer.setProps", json!({"layer": 7, "opacity": 0.5})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("layer.setProps", json!({"layer": 7, "opacity": 50})), &contract_scene()).is_err());
+    }
+
+    #[test]
+    fn selected_plan_refuses_fill_stroke_and_auto_adjustments_outside_contract() {
+        // Pattern and history fills reference preset/history state: refused.
+        assert!(validate_selected_plan(&contract_plan("edit.fill", json!({"contents": "pattern"})), &contract_scene()).is_err());
+        assert!(validate_selected_plan(&contract_plan("edit.fill", json!({"contents": "history"})), &contract_scene()).is_err());
+        assert!(validate_selected_plan(&contract_plan("edit.fill", json!({"contents": "color", "target": "quickMask"})), &contract_scene()).is_err());
+        // The live active pixel layer is unprovable after a creation step.
+        let mut plan = contract_plan("layer.duplicate", json!({"layer": 7}));
+        plan.steps.push(PlanStep { command: "image.autoTone".into(), params: json!({}), description: "fixture".into() });
+        assert!(validate_selected_plan(&plan, &contract_scene()).is_err());
+        assert!(validate_selected_plan(&contract_plan("edit.stroke", json!({"width": 500})), &contract_scene()).is_err());
     }
 
     #[test]
