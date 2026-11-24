@@ -786,10 +786,11 @@ fn pixel_digest(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // Optional exact region, all four fields or none: the measured AI criteria
     // compare digests over a known target region and over known protected
-    // regions, and a sampled whole-canvas digest cannot prove either. The
-    // region is clamped to the canvas; small regions (up to 1M px) sample
-    // every pixel at stride 1, which makes equal digests an exact
-    // unchanged-pixel proof for that region.
+    // regions, which a sampled whole-canvas digest cannot support. The region
+    // is clamped to the canvas. Honesty: a DIFFERENT digest proves the sampled
+    // data differed; an EQUAL digest is only "no difference observed on the
+    // sampled, 8-bit-quantized grid" (stride sampling, quantization and
+    // 64-bit non-cryptographic collisions), never proof of unchanged pixels.
     let region_fields = ["x", "y", "width", "height"].iter().map(|k| p.get(*k).and_then(Value::as_i64)).collect::<Vec<_>>();
     let r = if region_fields.iter().all(Option::is_some) {
         let (x, y) = (region_fields[0].unwrap(), region_fields[1].unwrap());
@@ -1493,7 +1494,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.analysis.pixelDigest",
             "Pixel Digest",
             ["Image", "Analysis"],
-            r##"{"maxPixels":int=16000000 (1..=16000000),"x":int,"y":int,"width":int,"height":int (all four for an exact region, clamped to the canvas)} → read-only position-sensitive digest of the rendered composite; a region of up to 1M px is sampled at every pixel, so equal region digests prove unchanged pixels there"##,
+            r##"{"maxPixels":int=16000000 (1..=16000000),"x":int,"y":int,"width":int,"height":int (all four for an exact region, clamped to the canvas)} → read-only position-sensitive digest of the rendered composite; a region of up to 1M px is sampled at every pixel; equal digests mean no difference observed on the quantized grid, never proof of unchanged pixels"##,
             has_doc,
             pixel_digest,
             false

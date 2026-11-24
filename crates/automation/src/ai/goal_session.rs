@@ -264,14 +264,44 @@ impl AiEngine {
                     let final_scene = self.perception_engine.perceive(&final_document);
                     let measured = region_watch.measure(&mut host, region_before);
                     let mut evaluation = self.eval_engine.evaluate(&intent, &scene, &final_scene, &execution);
-                    measured.apply(&mut evaluation);
+                    let grounding = measured.apply(intent.category, &mut evaluation);
+                    // The target-colour criterion: when the request named a
+                    // colour, the final selection's measured colour must match
+                    // it (mismatch = unmet) and must be measurable at all for
+                    // completion (unavailable = unverified, never completed).
+                    let colour = measure_target_colour(&mut host, &intent, &final_scene);
+                    let mut unverified: Vec<String> = match grounding {
+                        CompletionGrounding::Grounded => Vec::new(),
+                        CompletionGrounding::Unverified(reason) => vec![reason],
+                    };
+                    match &colour {
+                        Some(check) if !check.within_tolerance => {
+                            evaluation.intent_satisfied = false;
+                            evaluation.observations.push(format!(
+                                "Measured colour criterion: the selection's mean colour {} does not match the requested {}.",
+                                check.measured, check.requested));
+                        }
+                        Some(check) => evaluation.observations.push(format!(
+                            "Measured colour criterion: the selection's mean colour {} matches the requested {} within tolerance.",
+                            check.measured, check.requested)),
+                        None => {
+                            if intent.extracted_color.is_some() {
+                                unverified.push("the requested colour could not be measured (no active selection or no colour statistics on the final state)".into());
+                            }
+                        }
+                    }
                     let satisfied = evaluation.intent_satisfied;
                     attempt.evaluation = Some(evaluation);
                     outcome.attempts.push(attempt);
                     // Record only completed executions, with the real original goal.
                     context.record_interaction(request.original_prompt.clone(), plan);
                     if satisfied {
-                        return outcome.stop(GoalStop::Completed, "All edit steps completed.");
+                        if unverified.is_empty() {
+                            return outcome.stop(GoalStop::Completed, "All edit steps completed.");
+                        }
+                        return outcome.stop(GoalStop::FinalStateUnverified, format!(
+                            "the edit finished, but goal satisfaction is unverified: {}.",
+                            unverified.join("; ")));
                     }
                 }
             }
@@ -384,14 +414,21 @@ impl<S: LiveEditSession + ?Sized> LiveEditSession for GoalHost<'_, S> {
 }
 
 /// Measured before/after region evidence for one attempt. A sampled global
-/// digest cannot prove region colour or unchanged-pixel claims, so the target
-/// region (the union of the plan-targeted layers' bounds) and up to four
-/// protected border regions (the canvas complement) get their own exact
-/// digests at the evidence budget's stride - regions within 1M px sample every
-/// pixel, making equal digests an exact unchanged-pixel proof there.
+/// digest cannot support region colour or unchanged-pixel claims, so the
+/// target region (the union of the plan-targeted layers' bounds) and up to
+/// four protected border regions (the canvas complement) get their own region
+/// digests. Labels stay honest: a DIFFERENT digest proves the sampled data
+/// differed (change is a fact); an EQUAL digest is only "no difference
+/// observed on the sampled, 8-bit-quantized grid" - stride sampling skips
+/// pixels, HDR and sub-8-bit differences quantize away, and a 64-bit
+/// non-cryptographic hash can collide. It is never proof of unchanged pixels.
 struct RegionWatch {
     target: Option<[i64; 4]>,
     protected: Vec<[i64; 4]>,
+    /// The derived target spans (nearly) the whole canvas: the complement is
+    /// empty or sliver-sized, so there is no protected region to measure and
+    /// no LOCAL preservation claim can rest on this attempt.
+    target_is_canvas: bool,
 }
 
 struct CapturedRegion {
@@ -406,6 +443,15 @@ struct RegionMeasurement {
     target: Option<VisualEvidence>,
     protected: Vec<VisualEvidence>,
     available: bool,
+    target_is_canvas: bool,
+}
+
+/// Whether a satisfied evaluation may stop as Completed. Unknown goal
+/// satisfaction stays unverified; it never completes on execution success
+/// alone.
+enum CompletionGrounding {
+    Grounded,
+    Unverified(String),
 }
 
 impl RegionWatch {
@@ -415,8 +461,10 @@ impl RegionWatch {
     /// never a pretend measurement).
     fn new(scene: &VisualScene, plan: &EditingPlan) -> Self {
         let mut target: Option<[i64; 4]> = None;
+        let mut addressed = false;
         for step in &plan.steps {
             let Some(id) = step.params.get("layer").or_else(|| step.params.get("id")).and_then(Value::as_u64) else { continue };
+            addressed = true;
             let Some(layer) = scene.layers.iter().find(|l| l.id == id) else { continue };
             let [x, y, w, h] = layer.bounds;
             if w <= 0 || h <= 0 { continue; }
@@ -431,15 +479,25 @@ impl RegionWatch {
             });
         }
         let fits = |w: i64, h: i64| w > 0 && h > 0 && (w as u64).checked_mul(h as u64).is_some_and(|a| a <= EVIDENCE_MAX_PIXELS);
+        let (cw, ch) = (i64::from(scene.width), i64::from(scene.height));
+        // A plan that never addresses a layer by id (a global filter or
+        // adjustment on the active layer) is measured against the canvas; a
+        // plan whose target ids are simply absent from the scene stays
+        // unmeasured - an unknown target is Unknown, never the canvas.
+        if target.is_none() && !addressed && !plan.steps.is_empty() && fits(cw, ch) {
+            target = Some([0, 0, cw, ch]);
+        }
         let target = target.filter(|t| fits(t[2], t[3]));
+        let target_is_canvas = target.is_some_and(|t| t[2] * t[3] * 20 >= cw * ch * 19);
         let mut protected = Vec::new();
         if let Some([tx, ty, tw, th]) = target {
-            let (cw, ch) = (i64::from(scene.width), i64::from(scene.height));
-            for rect in [[0, 0, cw, ty], [0, ty + th, cw, ch - ty - th], [0, ty, tx, th], [tx + tw, ty, cw - tx - tw, th]] {
-                if fits(rect[2], rect[3]) { protected.push(rect); }
+            if !target_is_canvas {
+                for rect in [[0, 0, cw, ty], [0, ty + th, cw, ch - ty - th], [0, ty, tx, th], [tx + tw, ty, cw - tx - tw, th]] {
+                    if fits(rect[2], rect[3]) { protected.push(rect); }
+                }
             }
         }
-        Self { target, protected }
+        Self { target, protected, target_is_canvas }
     }
 
     /// One capture per region through the host's admitted digest hook.
@@ -461,10 +519,10 @@ impl RegionWatch {
     /// identical grid only (the comparison itself classifies anything else
     /// as Unknown).
     fn measure<S: LiveEditSession + ?Sized>(&self, session: &mut S, before: Option<Vec<CapturedRegion>>) -> RegionMeasurement {
-        let unavailable = || RegionMeasurement { target: None, protected: Vec::new(), available: false };
+        let unavailable = || RegionMeasurement { target: None, protected: Vec::new(), available: false, target_is_canvas: false };
         let Some(before) = before else { return unavailable() };
         let Some(after) = self.capture(session) else { return unavailable() };
-        let mut measurement = RegionMeasurement { target: None, protected: Vec::new(), available: true };
+        let mut measurement = RegionMeasurement { target: None, protected: Vec::new(), available: true, target_is_canvas: self.target_is_canvas };
         for (b, a) in before.iter().zip(after.iter()) {
             let evidence = match (&b.mark, &a.mark) {
                 (Some(b), Some(a)) => ExecutionEngine::compare_digests(b, a),
@@ -478,32 +536,105 @@ impl RegionWatch {
 }
 
 impl RegionMeasurement {
-    /// Apply measured criteria to the heuristic evaluation. A measured pixel
-    /// change in a protected region blocks completion (correction or an honest
-    /// unmet outcome follows); measured no-change in protected regions and
-    /// change in the target are recorded as observations. No measurement
-    /// upgrades a weak heuristic score into a completed goal on its own.
-    fn apply(self, evaluation: &mut EvaluationReport) {
-        if !self.available { return; }
+    /// Apply measured criteria to the heuristic evaluation and say whether a
+    /// satisfied evaluation may stop as Completed. Goal relevance first:
+    /// preservation of the complement is a LOCAL-edit criterion only - a
+    /// geometry, global or design request legitimately alters it. A measured
+    /// change in a protected region of a local edit blocks completion; a
+    /// measured no-change target blocks it too (the edit may not have reached
+    /// the target; "unchanged wrong result" is unmet, not success). What is
+    /// never measured stays Unverified, never completed on execution success.
+    fn apply(self, category: IntentCategory, evaluation: &mut EvaluationReport) -> CompletionGrounding {
+        if !self.available {
+            if matches!(category, IntentCategory::GraphicDesign) {
+                // Completion rests on the category's own semantic checks
+                // (required text on the canvas, geometry, overlap, legibility).
+                return CompletionGrounding::Grounded;
+            }
+            return CompletionGrounding::Unverified(
+                "no pixel measurement was available for this attempt".into());
+        }
+        let local = matches!(category, IntentCategory::ColorStyling | IntentCategory::SubjectIsolation
+            | IntentCategory::BackgroundReplacement | IntentCategory::TypographyRefinement);
         let changed = self.protected.iter().filter(|e| e.class == VisualEvidenceClass::Changed).count();
         if changed > 0 {
-            evaluation.intent_satisfied = false;
-            evaluation.observations.push(format!(
-                "Measured pixel evidence: {changed} protected region(s) outside the target changed at the data level; unrelated content may have been affected."));
+            if local {
+                evaluation.intent_satisfied = false;
+                evaluation.observations.push(format!(
+                    "Measured pixel evidence: {changed} protected region(s) outside the target changed at the data level; unrelated content may have been affected."));
+            } else {
+                evaluation.observations.push(format!(
+                    "Measured pixel evidence: {changed} region(s) outside the derived target changed; this request's intent is not a local-edit preservation criterion, so this is recorded, not failed."));
+            }
         } else if !self.protected.is_empty() && self.protected.iter().all(|e| e.class == VisualEvidenceClass::NoChangeObserved) {
             evaluation.observations.push(
-                "Measured pixel evidence: no change observed in the protected regions outside the target.".into());
+                "Measured pixel evidence: no difference observed in the protected regions outside the target (sampled 8-bit grid; not proof of unchanged pixels).".into());
         }
-        if let Some(target) = &self.target {
-            match target.class {
-                VisualEvidenceClass::Changed => evaluation.observations.push(
-                    "Measured pixel evidence: the target region changed.".into()),
-                VisualEvidenceClass::NoChangeObserved => evaluation.observations.push(
-                    "Measured pixel evidence: no change observed in the target region; the edit may not have reached it.".into()),
-                _ => {}
-            }
+        match &self.target {
+            Some(target) => match target.class {
+                VisualEvidenceClass::Changed => {
+                    evaluation.observations.push("Measured pixel evidence: the target region changed.".into());
+                    if matches!(category, IntentCategory::GraphicDesign) {
+                        // Completion rests on the category's own semantic checks.
+                        CompletionGrounding::Grounded
+                    } else if local && self.target_is_canvas {
+                        CompletionGrounding::Unverified(
+                            "the derived target spans the canvas; the requested local target was not measured".into())
+                    } else if local && (self.protected.is_empty()
+                        || !self.protected.iter().all(|e| e.class == VisualEvidenceClass::NoChangeObserved)) {
+                        CompletionGrounding::Unverified(
+                            "the areas outside the target were not all measured unchanged".into())
+                    } else {
+                        CompletionGrounding::Grounded
+                    }
+                }
+                VisualEvidenceClass::NoChangeObserved => {
+                    evaluation.intent_satisfied = false;
+                    evaluation.observations.push(
+                        "Measured pixel evidence: no difference observed in the target region; the edit may not have reached it.".into());
+                    CompletionGrounding::Unverified("the target region showed no change".into())
+                }
+                _ => CompletionGrounding::Unverified(
+                    "the target region could not be measured comparably".into()),
+            },
+            None => CompletionGrounding::Unverified(
+                "no target region could be derived from the plan".into()),
         }
     }
+}
+
+/// The target-colour criterion: the request's extracted colour compared with
+/// the selection-aware colour statistics of the FINAL state. The selection
+/// domain is the goal-relevant region (the shirt the user named); layer
+/// bounds are not. Anything unavailable - no requested colour, no active
+/// selection, a refused or failed capture, a malformed result - is honest
+/// Unknown, never assumed match or mismatch.
+struct ColourCheck {
+    requested: String,
+    measured: String,
+    within_tolerance: bool,
+}
+
+fn parse_hex_rgb(hex: &str) -> Option<[u8; 3]> {
+    let h = hex.strip_prefix('#').unwrap_or(hex);
+    if h.len() != 6 { return None; }
+    let v = u32::from_str_radix(h, 16).ok()?;
+    Some([((v >> 16) & 0xff) as u8, ((v >> 8) & 0xff) as u8, (v & 0xff) as u8])
+}
+
+fn measure_target_colour<S: LiveEditSession + ?Sized>(session: &mut S, intent: &EditingIntent, final_scene: &VisualScene) -> Option<ColourCheck> {
+    let requested = intent.extracted_color.clone()?;
+    if !final_scene.has_selection { return None; }
+    let value = session.command_run("image.analysis.colorStats",
+        serde_json::json!({"maxPixels": EVIDENCE_MAX_PIXELS})).ok()?;
+    if value.get("domain").and_then(Value::as_str) != Some("selection") { return None; }
+    let measured = value.get("meanColor").and_then(Value::as_str)?.to_string();
+    let (want, got) = (parse_hex_rgb(&requested)?, parse_hex_rgb(&measured)?);
+    // Per-channel tolerance for shading/quantization: a recolour that missed
+    // its hue lands far outside this; a quantized rendering of the right
+    // colour lands inside.
+    let within_tolerance = want.iter().zip(got.iter()).all(|(a, b)| (*a as i32 - *b as i32).abs() <= 32);
+    Some(ColourCheck { requested, measured, within_tolerance })
 }
 
 #[cfg(test)]
@@ -545,4 +676,114 @@ mod region_watch_tests {
         let watch = RegionWatch::new(&huge, &plan(&[("layer.fill.set", 2)]));
         assert!(watch.target.is_none() && watch.protected.is_empty());
     }
+
+    fn evidence(class: VisualEvidenceClass) -> VisualEvidence {
+        VisualEvidence { class, detail: "test".into() }
+    }
+
+    fn measurement(target: Option<VisualEvidenceClass>, protected: Vec<VisualEvidenceClass>, canvas: bool) -> RegionMeasurement {
+        RegionMeasurement {
+            target: target.map(evidence),
+            protected: protected.into_iter().map(evidence).collect(),
+            available: true,
+            target_is_canvas: canvas,
+        }
+    }
+
+    fn satisfied_report() -> EvaluationReport {
+        EvaluationReport { confidence_score: 0.9, intent_satisfied: true, contrast_check_passed: true,
+            hierarchy_valid: true, layout_balance_score: 0.9, observations: Vec::new() }
+    }
+
+    #[test]
+    fn full_canvas_raster_target_is_not_local_protected_region_proof() {
+        let scene = scene(100, 100, &[(2, [0, 0, 100, 100])]);
+        let watch = RegionWatch::new(&scene, &plan(&[("layer.fill.set", 2)]));
+        assert!(watch.target_is_canvas && watch.protected.is_empty());
+        let mut report = satisfied_report();
+        let grounding = measurement(Some(VisualEvidenceClass::Changed), Vec::new(), true)
+            .apply(IntentCategory::ColorStyling, &mut report);
+        assert!(matches!(grounding, CompletionGrounding::Unverified(_)), "a canvas-spanning target must not complete a local recolour");
+        assert!(report.intent_satisfied, "execution success alone stays untouched; completion is withheld by grounding");
+    }
+
+    #[test]
+    fn unknown_target_stays_unknown_not_canvas() {
+        let scene = scene(100, 100, &[(2, [10, 10, 20, 20])]);
+        let watch = RegionWatch::new(&scene, &plan(&[("layer.fill.set", 99)]));
+        assert!(watch.target.is_none() && watch.protected.is_empty() && !watch.target_is_canvas);
+        let mut report = satisfied_report();
+        let grounding = measurement(None, Vec::new(), false).apply(IntentCategory::ColorStyling, &mut report);
+        assert!(matches!(grounding, CompletionGrounding::Unverified(_)));
+    }
+
+    #[test]
+    fn missing_capture_is_unverified_not_completed() {
+        let mut report = satisfied_report();
+        let grounding = measurement(Some(VisualEvidenceClass::Unknown), vec![VisualEvidenceClass::Unknown], false)
+            .apply(IntentCategory::ColorStyling, &mut report);
+        assert!(matches!(grounding, CompletionGrounding::Unverified(_)));
+        let grounding = RegionMeasurement { target: None, protected: Vec::new(), available: false, target_is_canvas: false }
+            .apply(IntentCategory::ColorStyling, &mut satisfied_report());
+        assert!(matches!(grounding, CompletionGrounding::Unverified(_)), "no digest capability must never complete");
+    }
+
+    #[test]
+    fn intentional_global_edit_is_grounded_by_measured_canvas_change() {
+        let mut report = satisfied_report();
+        let grounding = measurement(Some(VisualEvidenceClass::Changed), Vec::new(), true)
+            .apply(IntentCategory::PhotoEnhancement, &mut report);
+        assert!(matches!(grounding, CompletionGrounding::Grounded));
+        assert!(report.intent_satisfied);
+    }
+
+    #[test]
+    fn unchanged_wrong_colour_result_is_unmet_not_success() {
+        let mut report = satisfied_report();
+        let grounding = measurement(Some(VisualEvidenceClass::NoChangeObserved), vec![VisualEvidenceClass::NoChangeObserved], false)
+            .apply(IntentCategory::ColorStyling, &mut report);
+        assert!(!report.intent_satisfied, "a target with no observed change is an unmet goal");
+        assert!(matches!(grounding, CompletionGrounding::Unverified(_)));
+    }
+
+    #[test]
+    fn measured_local_recolour_is_grounded_and_labels_stay_honest() {
+        let mut report = satisfied_report();
+        let grounding = measurement(Some(VisualEvidenceClass::Changed),
+            vec![VisualEvidenceClass::NoChangeObserved, VisualEvidenceClass::NoChangeObserved], false)
+            .apply(IntentCategory::ColorStyling, &mut report);
+        assert!(matches!(grounding, CompletionGrounding::Grounded));
+        assert!(report.observations.iter().any(|o| o.contains("not proof of unchanged pixels")),
+            "equal digests are labeled no-difference-observed, never proof: {:?}", report.observations);
+    }
+
+    #[test]
+    fn local_protected_change_fails_but_global_is_recorded_only() {
+        let mut local = satisfied_report();
+        measurement(Some(VisualEvidenceClass::Changed), vec![VisualEvidenceClass::Changed], false)
+            .apply(IntentCategory::ColorStyling, &mut local);
+        assert!(!local.intent_satisfied, "collateral change fails a local edit");
+        let mut global = satisfied_report();
+        measurement(Some(VisualEvidenceClass::Changed), vec![VisualEvidenceClass::Changed], false)
+            .apply(IntentCategory::PhotoEnhancement, &mut global);
+        assert!(global.intent_satisfied, "a global request legitimately alters the complement");
+    }
+
+    #[test]
+    fn design_completion_rests_on_its_semantic_checks() {
+        let mut report = satisfied_report();
+        let grounding = measurement(Some(VisualEvidenceClass::Changed), vec![VisualEvidenceClass::Changed], true)
+            .apply(IntentCategory::GraphicDesign, &mut report);
+        assert!(matches!(grounding, CompletionGrounding::Grounded));
+        assert!(report.intent_satisfied);
+    }
+
+    #[test]
+    fn hex_colours_parse_and_tolerances_are_per_channel() {
+        assert_eq!(parse_hex_rgb("#FF0000"), Some([255, 0, 0]));
+        assert_eq!(parse_hex_rgb("336699"), Some([0x33, 0x66, 0x99]));
+        assert_eq!(parse_hex_rgb("#abc"), None);
+        assert_eq!(parse_hex_rgb("#gggggg"), None);
+    }
 }
+
