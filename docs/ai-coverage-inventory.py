@@ -31,9 +31,18 @@ for f in files:
     if not f.endswith(".rs") or "/tests" in f or f.endswith("tests.rs"):
         continue
     s = read(f)
-    for pat in [r'spec!\(\s*"([\w.]+)"', r'cmd!\(\s*"([\w.]+)"', r'^\s*id:\s*"([\w.]+)"\s*,',
+    for pat in [r'(?<![\w])spec!\(\s*"([\w.]+)"', r'cmd!\(\s*"([\w.]+)"',  # cmd! also matches filter_cmd!
+                r'key_cmd!\(\s*"([\w.]+)"', r'^\s*id:\s*"([\w.]+)"\s*,',
                 r'const \w+:\s*&str\s*=\s*"([\w]+\.[\w.]+)"', r'CommandSpec\s*\{\s*id:\s*"([\w.]+)"']:
         ids |= set(re.findall(pat, s, re.M))
+    # stack_spec!("entropy", ...) builds id concat!("layer.smartObjects.stackMode.", arg)
+    ids |= {"layer.smartObjects.stackMode." + k for k in re.findall(r'stack_spec!\(\s*"([\w.]+)"', s)}
+    # style_specs!(bool, "type.paragraphStyle", ...) emits seven commands per prefix
+    for prefix in re.findall(r'style_specs!\(\s*\w+,\s*"([\w.]+)"', s):
+        ids |= {f"{prefix}.{leaf}" for leaf in ("new", "duplicate", "delete", "rename", "set", "apply", "redefine")}
+# Filter Gallery commands live in the algo crate's gallery! table: id = "filter.gallery.<key>"
+gal = read("crates/algo/src/artistic.rs")
+ids |= {"filter.gallery." + k for k in re.findall(r'^\s*\w+ = "(\w+)",\s*"', gal[gal.index("gallery! {"):], re.M)}
 cmdrs = read("crates/engine/src/cmd.rs")
 adj = re.findall(r'\(\s*"(\w+)",\s*"', cmdrs[cmdrs.index("const ADJ"):cmdrs.index("for &(kind, label, params) in ADJ")])
 ids |= {f"layer.newAdjustmentLayer.{k}" for k in adj} | {f"image.adjustments.{k}" for k in adj}
@@ -104,6 +113,50 @@ def classify(c):
         return READONLY
     if fam in ("path", "style") or c.startswith(("type.", "shape.", "channel.", "select.", "gradient.", "layer.")):
         return PLANNED
+    # audited remainder (2026-11-24): each rule verified against the engine command semantics
+    if fam == "filter":
+        if c.startswith("filter.video."):
+            return MEDIA
+        if c in ("filter.lastFilter", "filter.filterGallery"):
+            return APPCONTROL  # repeat-shortcut / dialog launcher
+        return PLANNED       # filter expansion needs per-filter validated params (FILTER_FIELDS)
+    if fam == "history":
+        return APPCONTROL    # the journal is user/app navigation; plans add new steps, never travel history
+    if fam == "count":
+        return READONLY      # count-tool state is analysis metadata, not an edit
+    if fam == "layerComp":
+        return PLANNED       # layer comps, a named remaining slice
+    if fam == "notes":
+        return APPCONTROL    # annotations are document metadata, not a pixel edit
+    if fam == "cloneSource":
+        return APPCONTROL    # clone-stamp source/overlay tool state
+    if fam == "brush":
+        return EXTERNAL if c in ("brush.defineFromSelection", "brush.texturePattern") else APPCONTROL
+    if fam == "document":
+        return READONLY if c in ("document.pixel", "document.sampleColor") else APPCONTROL
+    if fam == "image":
+        if c.startswith("image.variables.") or c == "image.applyDataSet":
+            return MACRO
+        return PLANNED       # mode/canvas/duplicate/applyImage slices
+    if fam == "paint":
+        if c in ("paint.setSymmetry", "paint.symmetryDisable", "paint.symmetryFromPath", "paint.mixerLoad"):
+            return APPCONTROL
+        if c in ("paint.magicEraser", "paint.backgroundEraser"):
+            return DESTRUCTIVE
+        return PLANNED       # stroke/dab tools need stroke planning, a named remaining slice
+    if fam == "edit":
+        if c in ("edit.undo", "edit.redo", "edit.toggleLastState", "edit.fade", "edit.checkSpelling",
+                 "edit.keyboardShortcuts", "edit.menus", "edit.toolbar", "edit.colorSettings",
+                 "edit.copy", "edit.copyMerged", "edit.paste", "edit.pasteSpecial.pasteInPlace",
+                 "edit.pasteSpecial.pasteInto", "edit.pasteSpecial.pasteOutside"):
+            return APPCONTROL
+        if c.startswith("edit.purge."):
+            return APPCONTROL
+        if c.startswith("edit.presets.") or c in ("edit.defineBrushPreset", "edit.defineCustomShape", "edit.definePattern"):
+            return EXTERNAL
+        if c in ("edit.cut", "edit.clear", "edit.deleteAndFillSelection") or c.startswith("edit.fill"):
+            return DESTRUCTIVE
+        return PLANNED       # transform/content-aware/auto-align family slices
     return REVIEW
 
 rows = [("contract.describe", "observation"), ("scene.layers", "observation")]

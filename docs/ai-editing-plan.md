@@ -226,10 +226,14 @@ qual-candidate-r8); nothing is pushed or compiled.
 
 Generated accounting lives in `docs/ai-coverage-inventory.md` (script:
 `docs/ai-coverage-inventory.py`, run after every registry or contract change;
-review the diff). Current: 896 entries (894 engine registry + contract-level
-`contract.describe` and `scene.layers`), 125 admitted, 6 observation, 764
+review the diff). Current: 947 entries (946 engine registry + contract-level
+`contract.describe` and `scene.layers`), 125 admitted, 6 observation, 816
 excluded with named reason categories (readonly / external / destructive /
-app / macro / media / dev / localmeasure / planned / review). The three
+app / macro / media / dev / localmeasure / planned). The `review` remainder
+is now zero: every excluded command carries an audited category, and the
+generator's extraction was widened to cover the macro-built ids it missed
+(stack modes, text style commands, brush-key commands and the Filter
+Gallery table in the algo crate). The three
 `localmeasure` commands (`image.analysis.regionPixels`,
 `image.analysis.selectionCoverage`, `image.analysis.layerMaskCoverage`) are
 the goal coordinator's exact measurement substrate: they carry raw
