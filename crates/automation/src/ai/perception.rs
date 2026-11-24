@@ -31,6 +31,11 @@ pub struct VisualElement {
     pub bounds: [i32; 4],
     pub is_visible: bool,
     pub has_mask: bool,
+    /// `[x, y, width, height]` bounding rect of the pixels the layer's mask
+    /// reveals at any nonzero effective value (engine `maskBounds`); None
+    /// when the layer has no enabled mask or the bounds were unavailable.
+    #[serde(default)]
+    pub mask_bounds: Option<[i32; 4]>,
     /// 1.0: every field here is parsed directly from engine `inspect::document`
     /// JSON, not inferred. This is record fidelity only - it says nothing about
     /// semantic detection certainty. Heuristic interpretation lives on finder
@@ -318,6 +323,10 @@ impl PerceptionEngine {
             let kind = layer_val.get("kind").and_then(Value::as_str).unwrap_or("Pixel").to_string();
             let is_visible = layer_val.get("visible").and_then(Value::as_bool).unwrap_or(true);
             let has_mask = layer_val.get("hasMask").and_then(Value::as_bool).unwrap_or(false);
+            let mask_bounds = layer_val.get("maskBounds").and_then(Value::as_array).and_then(|b| {
+                let v: Vec<i32> = b.iter().map(|v| v.as_i64().map(|n| n as i32)).collect::<Option<_>>()?;
+                <[i32; 4]>::try_from(v.as_slice()).ok().filter(|r| r[2] > 0 && r[3] > 0)
+            });
 
             let bounds = if let Some(b) = layer_val.get("bounds").and_then(Value::as_array) {
                 let x0 = b.first().and_then(Value::as_i64).unwrap_or(0) as i32;
@@ -389,6 +398,7 @@ impl PerceptionEngine {
                 bounds,
                 is_visible,
                 has_mask,
+                mask_bounds,
                 confidence: 1.0,
                 opacity,
                 fill,

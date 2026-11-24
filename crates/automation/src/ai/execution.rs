@@ -92,15 +92,13 @@ pub struct SelectionCapture {
     /// The step the capture was taken IMMEDIATELY BEFORE: the operation
     /// whose effect is being evaluated.
     pub step_index: usize,
-    /// Document identity at capture: name + path PLUS the engine's history
-    /// entry list (the actual transaction record, capped at 512 labels).
-    /// Name+path alone do not identify a document: a same-named swapped
-    /// document is caught by the history prefix at measurement time; a
-    /// rollback keeps the prefix and the pixel comparison honestly reports
-    /// no-change.
+    /// Document identity at capture: the engine's unique live DocId plus
+    /// the revision, bound through the transaction. Name+path (and history
+    /// labels, which a same-named different document can share) are kept as
+    /// corroborating context only, never as identity.
+    pub document_id: Option<u64>,
     pub document_name: String,
     pub document_path: Option<String>,
-    pub history_entries: Vec<String>,
     /// Mutation steps before the captured segment (multi-segment plans):
     /// their effects are measured only via the protected-complement
     /// comparison, never attributed to this capture's target.
@@ -356,9 +354,7 @@ impl ExecutionEngine {
             _ => None,
         };
         let (cw, ch) = (document.get("width").and_then(Value::as_i64)?, document.get("height").and_then(Value::as_i64)?);
-        let history_entries: Vec<String> = document.get("history").and_then(Value::as_array)
-            .map(|es| es.iter().filter_map(|e| e.as_str().map(str::to_string)).take(512).collect())
-            .unwrap_or_default();
+        let document_id = document.get("id").and_then(Value::as_u64);
         let a = document.get("selectionBounds")?.as_array()?;
         if a.len() != 4 { return None; }
         let mut bounds = [0i64; 4];
@@ -384,9 +380,9 @@ impl ExecutionEngine {
             .filter(|v| v.get("domain").and_then(Value::as_str) == Some("selection"));
         Some(SelectionCapture {
             step_index,
+            document_id,
             document_name: name,
             document_path: path,
-            history_entries,
             earlier_mutations,
             bounds,
             revision,
@@ -582,9 +578,14 @@ impl ExecutionEngine {
         // several selection segments has its LAST segment's target measured;
         // earlier segments are covered only by the protected-complement
         // comparison, which the measurement report states explicitly.
-        let is_selection_step = |s: &PlanStep| s.command.starts_with("select.") || s.command.contains("mask");
-        let is_mutation = |s: &PlanStep| !NONVISUAL_COMMANDS.contains(&s.command.as_str())
-            && !is_selection_step(s);
+        let is_selection_step = |s: &PlanStep| s.command.starts_with("select.");
+        // Effect metadata, not string guessing: a command mutates when the
+        // engine's own registry says it journals; unknown commands are
+        // treated as mutations (fail closed). Mask commands journal - they
+        // are edits and get a pre-mutation baseline like any other edit.
+        let is_mutation = |s: &PlanStep| !is_selection_step(s)
+            && fotodit_engine::command_specs().iter()
+                .find(|spec| spec.id == s.command).map_or(true, |spec| spec.journal);
         let capture_before_step = collect_evidence.then(|| {
             // Last selection step that has a mutation somewhere after it;
             // capture immediately before that mutation.
@@ -746,13 +747,12 @@ impl ExecutionEngine {
             })();
 
             if capture_before_step == Some(idx) && selection_capture.is_none() {
-                // Mutations before the last selection step preceding idx
-                // belong to earlier selection segments.
-                let last_sel = plan.steps[..idx].iter().rposition(|s|
-                    s.command.starts_with("select.") || s.command.contains("mask"));
-                let earlier_mutations = plan.steps[..last_sel.unwrap_or(0)].iter().filter(|s|
-                    !NONVISUAL_COMMANDS.contains(&s.command.as_str())
-                    && !s.command.starts_with("select.") && !s.command.contains("mask")).count();
+                // Mutations (engine journal metadata) before the last
+                // selection step preceding idx belong to earlier selection
+                // segments.
+                let last_sel = plan.steps[..idx].iter().rposition(|s| s.command.starts_with("select."));
+                let earlier_mutations = plan.steps[..last_sel.unwrap_or(0)].iter()
+                    .filter(|s| is_mutation(s)).count();
                 selection_capture = Self::capture_selection_stage(session, idx, earlier_mutations);
             }
             match resolution.and_then(|params| session.command_run(&step.command, params)) {

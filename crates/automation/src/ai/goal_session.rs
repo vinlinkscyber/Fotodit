@@ -468,6 +468,54 @@ fn compare_exact_regions(before: &Value, after: &Value) -> Option<u64> {
     Some(changed)
 }
 
+/// Tiled exact capture of a region into one row-major RGBA f32 buffer:
+/// 512x512 tiles (the engine's 262144-px per-call cap), scattered into place
+/// so no full-region JSON value ever exists, with a hard aggregate budget of
+/// 2M pixels (32MB of f32 at 16 bytes/pixel) per capture. All size math is
+/// checked; any shortfall, shape mismatch or refused tile is honest None.
+fn capture_exact_tiled<S: LiveEditSession + ?Sized>(session: &mut S, rect: [i64; 4]) -> Option<Vec<f32>> {
+    const TILE: u64 = 512;
+    const MAX_AGGREGATE_PIXELS: u64 = 2_000_000;
+    let (x0, y0) = (rect[0], rect[1]);
+    let (w, h) = (u64::try_from(rect[2]).ok()?, u64::try_from(rect[3]).ok()?);
+    let total = w.checked_mul(h)?;
+    if total == 0 || total > MAX_AGGREGATE_PIXELS { return None; }
+    let mut out = Vec::new();
+    out.try_reserve_exact(usize::try_from(total.checked_mul(4)?).ok()?).ok()?;
+    out.resize(usize::try_from(total.checked_mul(4)?).ok()?, 0.0);
+    let mut ty = 0u64;
+    while ty < h {
+        let th = TILE.min(h - ty);
+        let mut tx = 0u64;
+        while tx < w {
+            let tw = TILE.min(w - tx);
+            let value = session.command_run("image.analysis.regionPixels",
+                json!({"x": x0 + tx as i64, "y": y0 + ty as i64, "width": tw, "height": th})).ok()?;
+            let (_, _, pw, ph, px) = parse_exact_region(&value)?;
+            if pw != tw || ph != th { return None; }
+            for row in 0..ph {
+                let src = usize::try_from(row.checked_mul(tw.checked_mul(4)?)?).ok()?;
+                let dst = usize::try_from(((ty + row).checked_mul(w)?.checked_add(tx)?).checked_mul(4)?).ok()?;
+                let len = usize::try_from(tw.checked_mul(4)?).ok()?;
+                out[dst..dst + len].copy_from_slice(&px[src..src + len]);
+            }
+            tx += tw;
+        }
+        ty += th;
+    }
+    Some(out)
+}
+
+/// Exact comparison of two same-shape raw buffers: the differing-pixel count.
+fn compare_exact_raw(before: &[f32], after: &[f32]) -> Option<u64> {
+    if before.len() != after.len() || before.len() % 4 != 0 { return None; }
+    let mut changed = 0u64;
+    for (a, b) in after.chunks_exact(4).zip(before.chunks_exact(4)) {
+        if a != b { changed += 1; }
+    }
+    Some(changed)
+}
+
 /// Parse an engine selectionCoverage result into (x, y, width, height, coverage).
 fn parse_coverage(value: &Value) -> Option<(i64, i64, u64, u64, Vec<f32>)> {
     if value.get("format").and_then(Value::as_str) != Some("coverage-f32-rowmajor") { return None; }
@@ -524,9 +572,10 @@ struct CapturedRegion {
     target: bool,
     rect: [i64; 4],
     mark: Option<DigestMark>,
-    /// Exact rendered pixels (engine regionPixels JSON) when the region fit
-    /// the exact cap; preferred over the digest tier.
-    pixels: Option<Value>,
+    /// Exact rendered pixels as a raw row-major RGBA f32 buffer, tiled under
+    /// the engine's per-call cap with a 2M-pixel aggregate budget; preferred
+    /// over the digest tier.
+    pixels: Option<Vec<f32>>,
 }
 
 /// Local measured evidence; `available` is false when the host offers no
@@ -541,6 +590,10 @@ struct RegionMeasurement {
     available: bool,
     target_is_canvas: bool,
     target_source: &'static str,
+    /// An aspect of the plan this measurement does not cover (e.g. earlier
+    /// edit segments in a multi-segment plan): always Unverified, never
+    /// silently dropped.
+    uncovered: Option<String>,
 }
 
 /// Whether a satisfied evaluation may stop as Completed. Unknown goal
@@ -559,11 +612,17 @@ impl RegionWatch {
     fn new(scene: &VisualScene, plan: &EditingPlan) -> Self {
         let mut target: Option<[i64; 4]> = None;
         let mut addressed = false;
+        let mut mask_derived = false;
         for step in &plan.steps {
             let Some(id) = step.params.get("layer").or_else(|| step.params.get("id")).and_then(Value::as_u64) else { continue };
             addressed = true;
             let Some(layer) = scene.layers.iter().find(|l| l.id == id) else { continue };
-            let [x, y, w, h] = layer.bounds;
+            // A mask bounds the layer's editable pixels tighter than its
+            // layer bounds: any nonzero effective coverage counts, so
+            // feathered edges stay inside the measured target.
+            let [x, y, w, h] = layer.mask_bounds
+                .inspect(|_| mask_derived = true)
+                .unwrap_or(layer.bounds);
             if w <= 0 || h <= 0 { continue; }
             let (r, b) = (i64::from(x) + i64::from(w), i64::from(y) + i64::from(h));
             target = Some(match target {
@@ -587,7 +646,11 @@ impl RegionWatch {
             .flatten()
             .filter(|b| fits(i64::from(b[2]), i64::from(b[3])))
             .map(|b| [i64::from(b[0]), i64::from(b[1]), i64::from(b[2]), i64::from(b[3])]);
-        let mut target_source = "the plan-targeted layers' bounds";
+        let mut target_source: &'static str = if mask_derived {
+            "the plan-targeted layers' mask bounds (per-pixel mask coverage split not yet wired)"
+        } else {
+            "the plan-targeted layers' bounds"
+        };
         if let Some(region) = selection_region {
             target = Some(region);
             target_source = "the active selection's bounding region";
@@ -618,8 +681,7 @@ impl RegionWatch {
         if self.target.is_none() && self.protected.is_empty() { return None; }
         let mut out = Vec::new();
         for (is_target, rect) in self.target.iter().map(|r| (true, r)).chain(self.protected.iter().map(|r| (false, r))) {
-            let pixels = session.command_run("image.analysis.regionPixels",
-                json!({"x": rect[0], "y": rect[1], "width": rect[2], "height": rect[3]})).ok();
+            let pixels = capture_exact_tiled(session, *rect);
             match ExecutionEngine::capture_digest(session, Some(*rect)) {
                 Ok(Some(mark)) => out.push(CapturedRegion { target: is_target, rect: *rect, mark: Some(mark), pixels }),
                 // No digest capability is not the end when exact pixels were captured.
@@ -637,13 +699,13 @@ impl RegionWatch {
     /// identical grid only (the comparison itself classifies anything else
     /// as Unknown).
     fn measure<S: LiveEditSession + ?Sized>(&self, session: &mut S, before: Option<Vec<CapturedRegion>>) -> RegionMeasurement {
-        let unavailable = || RegionMeasurement { target: None, protected: Vec::new(), available: false, target_is_canvas: false, target_source: "nothing measurable" };
+        let unavailable = || RegionMeasurement { target: None, protected: Vec::new(), available: false, target_is_canvas: false, target_source: "nothing measurable", uncovered: None };
         let Some(before) = before else { return unavailable() };
         let Some(after) = self.capture(session) else { return unavailable() };
-        let mut measurement = RegionMeasurement { target: None, protected: Vec::new(), available: true, target_is_canvas: self.target_is_canvas, target_source: self.target_source };
+        let mut measurement = RegionMeasurement { target: None, protected: Vec::new(), available: true, target_is_canvas: self.target_is_canvas, target_source: self.target_source, uncovered: None };
         for (b, a) in before.iter().zip(after.iter()) {
             let exact = match (&b.pixels, &a.pixels) {
-                (Some(before_px), Some(after_px)) => compare_exact_regions(before_px, after_px).map(|changed| {
+                (Some(before_px), Some(after_px)) => compare_exact_raw(before_px, after_px).map(|changed| {
                     let class = if changed > 0 { VisualEvidenceClass::Changed } else { VisualEvidenceClass::NoChangeObserved };
                     (VisualEvidence { class, detail: format!(
                         "exact per-pixel comparison over {} pixels of the region: {changed} pixels differ",
@@ -701,7 +763,7 @@ impl RegionMeasurement {
             }
         }
         let digest_only = "only sampled-grid digest evidence was available, which is diagnostic and never grounds completion; the exact per-pixel comparison was unavailable (region over the exact cap, or a capture failed or was refused)";
-        match &self.target {
+        let grounding = match &self.target {
             Some((target, target_exact)) => match target.class {
                 VisualEvidenceClass::Changed => {
                     evaluation.observations.push(format!(
@@ -743,6 +805,12 @@ impl RegionMeasurement {
             },
             None => CompletionGrounding::Unverified(
                 "no target region could be derived from the plan".into()),
+        };
+        // Uncovered aspects of the plan (earlier unmeasured edit segments)
+        // withhold completion even when the measured parts ground it.
+        match (grounding, self.uncovered) {
+            (CompletionGrounding::Grounded, Some(uncovered)) => CompletionGrounding::Unverified(uncovered),
+            (grounding, _) => grounding,
         }
     }
 }
@@ -782,35 +850,30 @@ fn parse_hex_rgb(hex: &str) -> Option<[u8; 3]> {
 /// identical regions. The pre-execution scene's selection is never used:
 /// when the plan first selects the shirt, the target IS the plan's selection.
 fn measure_from_selection_stage<S: LiveEditSession + ?Sized>(session: &mut S, capture: Option<&SelectionCapture>) -> RegionMeasurement {
-    let unavailable = || RegionMeasurement { target: None, protected: Vec::new(), available: false, target_is_canvas: false, target_source: "nothing measurable" };
+    let unavailable = || RegionMeasurement { target: None, protected: Vec::new(), available: false, target_is_canvas: false, target_source: "nothing measurable", uncovered: None };
     let Some(capture) = capture else { return unavailable() };
     let failed = |why: &str| VisualEvidence { class: VisualEvidenceClass::Unknown, detail: why.to_string() };
     // Rollback/cancellation identity: the after-execution measurement is only
     // comparable when the document is still the one captured before the
     // evaluated step (same name + path, read back now). A document swapped
     // under the plan makes every capture stale; nothing is assumed.
-    // Name+path do not identify a document: the engine's history entry list
-    // (the actual transaction record) must still contain the capture-time
-    // entries as an exact prefix. Rollback keeps that prefix (the pixel
-    // comparison then honestly reports no-change); a swapped same-named
-    // document fails it. A prefix over the 512-label capture cap is not
-    // verified and fails closed.
+    // Identity is the engine's unique live DocId, bound through the
+    // transaction by a monotonic revision (the after state must be at or
+    // past the capture's revision). Name+path corroborate but never
+    // identify: a same-named different document has a different DocId.
+    // Rollback keeps the same document and honestly measures no-change; a
+    // close/reopen or swap fails the id. A missing id fails closed.
     let identity_ok = session.inspect_active().ok().flatten()
         .map(|doc| {
-            doc.get("name").and_then(Value::as_str) == Some(capture.document_name.as_str())
-            && match doc.get("path") {
-                Some(Value::String(p)) => capture.document_path.as_deref() == Some(p.as_str()),
-                Some(Value::Null) | None => capture.document_path.is_none(),
+            let id_ok = match (doc.get("id").and_then(Value::as_u64), capture.document_id) {
+                (Some(now), Some(then)) => now == then,
                 _ => false,
-            }
-            && match doc.get("history").and_then(Value::as_array) {
-                Some(entries) if capture.history_entries.len() < 512 => {
-                    let current: Vec<&str> = entries.iter().filter_map(Value::as_str).collect();
-                    current.len() >= capture.history_entries.len()
-                        && capture.history_entries.iter().zip(current.iter()).all(|(a, b)| a == b)
-                }
-                _ => false,
-            }
+            };
+            let revision_ok = match (doc.get("revision").and_then(Value::as_u64), capture.revision) {
+                (Some(now), Some(then)) => now >= then,
+                _ => true, // revision unreported: the id carries identity alone
+            };
+            id_ok && revision_ok
         })
         .unwrap_or(false);
     if !identity_ok {
@@ -865,11 +928,14 @@ fn measure_from_selection_stage<S: LiveEditSession + ?Sized>(session: &mut S, ca
         }, false)));
     }
     let target_source: &'static str = if capture.earlier_mutations > 0 {
-        "the plan's final selection segment, captured immediately before its edit (earlier edit segments are measured only via the protected-complement comparison)"
+        "the plan's final selection segment, captured immediately before its edit"
     } else {
         "the plan's selection, captured immediately before the evaluated edit"
     };
-    RegionMeasurement { target, protected, available: true, target_is_canvas: false, target_source }
+    let uncovered = (capture.earlier_mutations > 0).then(|| format!(
+        "{} earlier edit segment(s) of this multi-segment plan were not individually measured; the final segment's protected-complement comparison cannot verify them",
+        capture.earlier_mutations));
+    RegionMeasurement { target, protected, available: true, target_is_canvas: false, target_source, uncovered }
 }
 
 fn measure_target_colour<S: LiveEditSession + ?Sized>(session: &mut S, intent: &EditingIntent, plan: &EditingPlan, final_scene: &VisualScene, capture: Option<&SelectionCapture>, evaluation: &mut EvaluationReport) -> ColourCriterion {
@@ -1019,6 +1085,7 @@ mod region_watch_tests {
             available: true,
             target_is_canvas: canvas,
             target_source: "test region",
+            uncovered: None,
         }
     }
 
@@ -1055,11 +1122,11 @@ mod region_watch_tests {
         let grounding = measurement(Some((VisualEvidenceClass::Unknown, false)), vec![(VisualEvidenceClass::Unknown, false)], false)
             .apply(IntentCategory::ColorStyling, &mut report);
         assert!(matches!(grounding, CompletionGrounding::Unverified(_)));
-        let grounding = RegionMeasurement { target: None, protected: Vec::new(), available: false, target_is_canvas: false, target_source: "test region" }
+        let grounding = RegionMeasurement { target: None, protected: Vec::new(), available: false, target_is_canvas: false, target_source: "test region", uncovered: None }
             .apply(IntentCategory::ColorStyling, &mut satisfied_report());
         assert!(matches!(grounding, CompletionGrounding::Unverified(_)), "no digest capability must never complete");
         let mut design = satisfied_report();
-        let grounding = RegionMeasurement { target: None, protected: Vec::new(), available: false, target_is_canvas: false, target_source: "test region" }
+        let grounding = RegionMeasurement { target: None, protected: Vec::new(), available: false, target_is_canvas: false, target_source: "test region", uncovered: None }
             .apply(IntentCategory::GraphicDesign, &mut design);
         assert!(matches!(grounding, CompletionGrounding::Unverified(_)), "heuristic design checks without any measurement are not completion proof");
     }

@@ -42,6 +42,7 @@ fn document_with(d: &DocState, detail: bool) -> Value {
     let selected = d.selected_layers();
     let instances = smart_instances(&doc.layers);
     json!({
+        "id": doc.id.0,
         "name": doc.name,
         "path": &d.path,
         "width": doc.size.width,
