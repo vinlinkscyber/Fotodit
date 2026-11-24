@@ -273,30 +273,32 @@ shirt. Passing means every link, not a plausible render:
    the criterion: the target region's colour moved to red AND a pixel digest
    of unrelated areas is unchanged. Command success or a good-looking render
    alone is not this proof.
-   Status (984112e, all unverified): the coordinator measures the intent's
-   target region — the ACTIVE SELECTION's bounding region when the plan works
-   through selection/mask steps (captured before execution consumes it),
-   else the plan-targeted layers' bounds, else the canvas — plus up to four
-   protected border regions, before and after execution, with the document
-   revision bound into every comparison. Labels are honest: a changed digest
-   is a fact; an equal digest is "no difference observed on the sampled
-   8-bit grid", never proof, and the Completed detail says so. Preservation
-   is a local-edit criterion only. Completion is gated: design needs its
-   semantic checks AND a measured change (neither alone suffices); local
-   edits need a measured changed target plus an observed-unchanged
-   complement; global requests do not ground on a changed canvas at all —
-   activity is not satisfaction. Everything else stops FinalStateUnverified
-   and routes into the bounded correction pass. A measured no-change target
-   is unmet. The colour leg binds colour to object: NotApplicable without a
-   named colour, Unavailable with the reason when the prompt names several
-   colours, when the plan never worked through a selection/mask, or when no
-   selection survives to the final state; otherwise the selection-domain
-   colorStats mean must match within tolerance. colorStats is also an
-   observation command now, so the planner can measure the selected region's
-   colour before planning. Remaining open: selection-shape (not bounding
-   rect) target geometry; mask-derived regions for plans that build masks
-   from layers without an active selection; exact pixel comparison for the
-   strongest claims; goal-relevant measurements for global enhancements.
+   Status (3ad2c12, all unverified): a selection-driving plan's target is
+   captured AT its target-selection stage — right after the plan's last
+   selection/mask step, before any edit can consume the selection: content
+   bounds, bounding-region digest, the complement border digests (protected
+   BEFORE state) and coverage-aware colour statistics, revision-bound. A
+   pre-existing scene selection is never mistaken for the plan's target.
+   Other plans measure plan-targeted layer bounds or the canvas as before.
+   Labels stay honest: a changed digest is a fact; an equal digest is
+   "no difference observed on the sampled 8-bit grid", never proof, and the
+   Completed detail says so. Preservation is a local-edit criterion only.
+   Completion is gated: design needs its semantic checks AND a measured
+   change (neither alone suffices); local edits need a measured changed
+   target plus an observed-unchanged complement; global requests do not
+   ground on a changed canvas at all — activity is not satisfaction.
+   Everything else stops FinalStateUnverified and routes into the bounded
+   correction pass. A measured no-change target is unmet. The colour leg
+   binds colour to object: NotApplicable without a named colour, Unavailable
+   with the reason for multi-colour prompts or unbound/missing selections;
+   the post-edit check prefers a surviving selection (coverage-aware) and
+   falls back to a dominant-colour check over the consumed selection's
+   bounding region, explicitly labeled weak. Remaining open: selection-shape
+   (not bounding-rect) geometry; mask-derived regions for plans that build
+   masks without an active selection; exact pixel comparison for the
+   strongest claims; goal-relevant measurement for global enhancements;
+   the weak bounding-region colour tier can false-match a requested colour
+   that already dominates the surroundings.
 4. **Correction or honest outcome.** If the measured criterion fails, the one
    structured correction pass runs; if it is exhausted, the chat says the
    goal is unmet or ambiguous, what was left in the document, and that Undo
