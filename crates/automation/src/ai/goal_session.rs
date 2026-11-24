@@ -1134,6 +1134,48 @@ mod region_watch_tests {
         assert_eq!(watch.target_source, "the plan-targeted layers' bounds");
     }
 
+    fn px(r: f32, g: f32, b: f32) -> [f32; 4] { [r, g, b, 1.0] }
+
+    #[test]
+    fn exact_coverage_comparison_counts_covered_collateral_and_feathered_edges() {
+        let before: Vec<f32> = [px(0.0, 0.0, 0.0), px(0.0, 0.0, 0.0), px(0.0, 0.0, 0.0)].concat();
+        let mut after = before.clone();
+        after[4] = 1.0; // pixel 1 green channel changed
+        after[8] = 1.0; // pixel 2 red channel changed
+        // coverage: pixel 0 fully covered (unchanged), pixel 1 feathered 0.3 (covered), pixel 2 zero (collateral)
+        let coverage = vec![1.0f32, 0.3, 0.0];
+        let (covered_changed, covered_total, collateral_changed) =
+            compare_exact_coverage(&before, &after, &coverage).expect("same shapes compare");
+        assert_eq!((covered_changed, covered_total, collateral_changed), (1, 2, 1),
+            "a feathered edge (0.3) is target; zero coverage is collateral");
+        // Shape mismatches are honest None, never a comparison.
+        assert!(compare_exact_coverage(&before, &after, &vec![1.0f32]).is_none());
+        assert!(compare_exact_coverage(&before[..8], &after, &coverage).is_none());
+    }
+
+    #[test]
+    fn exact_covered_mean_weights_by_coverage() {
+        let pixels: Vec<f32> = [px(1.0, 0.0, 0.0), px(0.0, 0.0, 1.0)].concat();
+        let coverage = vec![1.0f32, 1.0];
+        let mean = exact_covered_mean(&pixels, &coverage).expect("same shapes");
+        assert!((mean[0] - 0.5).abs() < 1e-6 && (mean[2] - 0.5).abs() < 1e-6);
+        let coverage = vec![1.0f32, 0.0];
+        let mean = exact_covered_mean(&pixels, &coverage).expect("one covered pixel");
+        assert!((mean[0] - 1.0).abs() < 1e-6 && mean[2].abs() < 1e-6, "zero-coverage pixels do not count");
+        assert!(exact_covered_mean(&pixels, &vec![0.0f32, 0.0]).is_none(), "no covered weight is None");
+    }
+
+    #[test]
+    fn uncovered_earlier_segments_withhold_completion() {
+        let mut report = satisfied_report();
+        let mut m = measurement(Some((VisualEvidenceClass::Changed, true)),
+            vec![(VisualEvidenceClass::NoChangeObserved, true)], false);
+        m.uncovered = Some("1 earlier edit segment was not individually measured".into());
+        let grounding = m.apply(IntentCategory::ColorStyling, &mut report);
+        assert!(matches!(grounding, CompletionGrounding::Unverified(_)),
+            "fully grounded measurements still withhold completion when a segment was never measured");
+    }
+
     #[test]
     fn hex_colours_parse_and_tolerances_are_per_channel() {
         assert_eq!(parse_hex_rgb("#FF0000"), Some([255, 0, 0]));
