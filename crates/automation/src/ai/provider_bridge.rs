@@ -1439,6 +1439,7 @@ const SELECTED_COMMANDS: &[&str] = &["file.new", "type.create", "type.edit", "ty
     "select.modify.contract", "select.modify.feather",
     "select.grow", "select.similar",
     "select.subject", "select.object", "select.sky", "select.focusArea", "select.loadLuminosity",
+    "select.transformSelection", "select.refineEdge",
     "edit.transform", "layer.removeBackground"];
 
 /// Layer-creating commands whose output a later step of the same plan can
@@ -1621,6 +1622,12 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
                 "select.sky" => vec!["mode", "sampleAllLayers", "threshold", "softness"],
                 "select.focusArea" => vec!["range", "noise", "sampleAllLayers", "mode"],
                 "select.loadLuminosity" => vec![],
+                // Warp meshes (style/mesh/grid keys) are not admitted.
+                "select.transformSelection" => vec!["rect", "quad", "corners", "matrix", "scaleX", "scaleY", "rotate", "skewX", "skewY", "dx", "dy", "stepName", "reference", "interpolation"],
+                // Only the outputs that keep the plan in this document and on
+                // provable targets: selection (default) and layerMask (active
+                // layer). newLayer/newDocument outputs are refused.
+                "select.refineEdge" => vec!["radius", "smartRadius", "smooth", "feather", "contrast", "shiftEdge", "decontaminate", "amount", "output", "sampleAllLayers", "refineStrokes", "edits"],
                 "edit.transform" => vec!["layer", "dx", "dy", "scaleX", "scaleY", "rotate", "reference", "interpolation"],
                 "layer.removeBackground" => vec!["layer", "sampleAllLayers", "refine"],
                 _ => return Err(refuse()),
@@ -2251,7 +2258,10 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
         // and selection masks need a live selection at the point they run.
         if matches!(step.command.as_str(), "select.inverse" | "select.modify.border" | "select.modify.smooth"
             | "select.modify.expand" | "select.modify.contract" | "select.modify.feather"
-            | "select.grow" | "select.similar") && !sel { return Err(refuse()); }
+            | "select.grow" | "select.similar" | "select.transformSelection") && !sel { return Err(refuse()); }
+        // Refine Edge works on a selection or on the active layer's mask.
+        if step.command == "select.refineEdge" && !sel
+            && !scene.active_layer_id.is_some_and(|a| masked.contains(&a)) { return Err(refuse()); }
         if matches!(step.command.as_str(), "layer.layerMask.revealSelection" | "layer.layerMask.hideSelection") && !sel { return Err(refuse()); }
         match step.command.as_str() {
             "select.all" | "select.rect" | "select.loadLuminosity" => sel = true,
@@ -2269,6 +2279,12 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
             // it (mask_new_layer sets doc.selection = None; the default layer
             // panel option is masks on).
             "layer.newFillLayer.solidColor" | "layer.newFillLayer.gradient" => sel = false,
+            // A layerMask output consumes the selection into the active
+            // layer's mask, like a selection-mask command.
+            "select.refineEdge" if map.get("output").and_then(Value::as_str) == Some("layerMask") => {
+                sel = false;
+                if let Some(a) = scene.active_layer_id { if !masked.contains(&a) { masked.push(a); } }
+            }
             _ => {}
         }
         // layer.translate: an explicit whole-pixel offset, both axes required.
@@ -2400,6 +2416,87 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
             }
             if map.get("sampleAllLayers").is_some_and(|v| !v.is_boolean()) { return Err(refuse()); }
             if map.get("mode").is_some_and(|v| !matches!(v.as_str(), Some("replace" | "add" | "subtract" | "intersect"))) { return Err(refuse()); }
+        }
+        if step.command == "select.transformSelection" {
+            if map.get("rect").is_some_and(|v| !v.as_array().is_some_and(|a| a.len() == 4
+                && a.iter().all(|c| c.as_f64().is_some_and(|x| x.is_finite() && x.abs() <= 1.0e6)))) { return Err(refuse()); }
+            for key in ["quad", "corners"] {
+                if map.get(key).is_some_and(|v| !v.as_array().is_some_and(|a| a.len() == 4 && a.iter().all(|p| p.as_array().is_some_and(|pt| pt.len() == 2
+                    && pt.iter().all(|c| c.as_f64().is_some_and(|x| x.is_finite() && x.abs() <= 1.0e6)))))) { return Err(refuse()); }
+            }
+            if map.get("matrix").is_some_and(|v| !v.as_array().is_some_and(|a| a.len() == 6
+                && a.iter().all(|c| c.as_f64().is_some_and(|x| x.is_finite() && x.abs() <= 1.0e6)))) { return Err(refuse()); }
+            for key in ["scaleX", "scaleY"] {
+                if map.get(key).is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (0.01..=10_000.0).contains(&x))) { return Err(refuse()); }
+            }
+            if map.get("rotate").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && x.abs() <= 36_000.0)) { return Err(refuse()); }
+            for key in ["skewX", "skewY"] {
+                if map.get(key).is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && x.abs() <= 360.0)) { return Err(refuse()); }
+            }
+            if map.get("stepName").is_some_and(|v| !matches!(v.as_str(), Some("Move Selection") | None)) { return Err(refuse()); }
+            if let Some(v) = map.get("reference") {
+                let named = matches!(v.as_str(), Some("center" | "topLeft" | "top" | "topRight" | "left" | "right" | "bottomLeft" | "bottom" | "bottomRight"));
+                let point = v.as_array().is_some_and(|a| a.len() == 2 && a.iter().all(|c| c.as_f64().is_some_and(|x| x.is_finite() && x.abs() <= 1.0e6)));
+                if !named && !point { return Err(refuse()); }
+            }
+            if map.get("interpolation").is_some_and(|v| !matches!(v.as_str(), Some("bilinear" | "bicubic" | "nearest" | "bicubicSharper" | "bicubicSmoother" | "bicubicAutomatic"))) { return Err(refuse()); }
+        }
+        if step.command == "select.refineEdge" {
+            if map.get("radius").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (0.0..=1000.0).contains(&x))) { return Err(refuse()); }
+            if map.get("smartRadius").is_some_and(|v| !v.is_boolean()) || map.get("decontaminate").is_some_and(|v| !v.is_boolean()) { return Err(refuse()); }
+            for key in ["smooth", "contrast", "amount"] {
+                if map.get(key).is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (0.0..=100.0).contains(&x))) { return Err(refuse()); }
+            }
+            if map.get("feather").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (0.0..=1000.0).contains(&x))) { return Err(refuse()); }
+            if map.get("shiftEdge").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (-100.0..=100.0).contains(&x))) { return Err(refuse()); }
+            if map.get("output").is_some_and(|v| !matches!(v.as_str(), Some("selection" | "layerMask"))) { return Err(refuse()); }
+            if map.get("sampleAllLayers").is_some_and(|v| !v.is_boolean()) { return Err(refuse()); }
+            // Refine Edge Brush strokes, in painting order.
+            if let Some(v) = map.get("refineStrokes") {
+                if !v.as_array().is_some_and(|a| a.len() <= 4096 && a.iter().all(|s| s.as_object().is_some_and(|o| {
+                    let points_ok = o.get("points").is_some_and(|p| p.as_array().is_some_and(|pts| !pts.is_empty() && pts.len() <= 4096
+                        && pts.iter().all(|p| p.as_array().is_some_and(|pt| pt.len() == 2
+                            && pt.iter().all(|c| c.as_f64().is_some_and(|x| x.is_finite() && x.abs() <= 1.0e6))))));
+                    let size_ok = o.get("size").is_none_or(|z| z.as_f64().is_some_and(|x| x.is_finite() && (0.5..=5000.0).contains(&x)));
+                    let mode_ok = o.get("mode").is_none_or(|m| matches!(m.as_str(), Some("add" | "subtract")));
+                    points_ok && size_ok && mode_ok
+                }))) { return Err(refuse()); }
+            }
+            // Workspace edits, applied in order; each variant is validated by
+            // its tool's own shape.
+            if let Some(v) = map.get("edits") {
+                if !v.as_array().is_some_and(|a| a.len() <= 64 && a.iter().all(|e| e.as_object().is_some_and(|o| {
+                    let pts_ok = |key: &str, min: usize| o.get(key).is_some_and(|p| p.as_array().is_some_and(|pts| (min..=4096).contains(&pts.len())
+                        && pts.iter().all(|p| p.as_array().is_some_and(|pt| pt.len() == 2
+                            && pt.iter().all(|c| c.as_f64().is_some_and(|x| x.is_finite() && x.abs() <= 1.0e6))))));
+                    let mode_ok = |allowed: &[&str]| o.get("mode").is_none_or(|m| m.as_str().is_some_and(|s| allowed.contains(&s)));
+                    let sample_ok = o.get("sampleAllLayers").is_none_or(Value::is_boolean);
+                    match o.get("tool").and_then(Value::as_str) {
+                        Some("quick") => pts_ok("points", 1)
+                            && o.get("size").is_none_or(|z| z.as_f64().is_some_and(|x| x.is_finite() && (0.5..=5000.0).contains(&x)))
+                            && mode_ok(&["add", "subtract"]) && sample_ok,
+                        Some("brush") => pts_ok("points", 1)
+                            && o.get("size").is_none_or(|z| z.as_f64().is_some_and(|x| x.is_finite() && (0.5..=5000.0).contains(&x)))
+                            && o.get("hardness").is_none_or(|h| h.as_f64().is_some_and(|x| x.is_finite() && (0.0..=100.0).contains(&x)))
+                            && mode_ok(&["add", "subtract"]),
+                        Some("lasso") => pts_ok("points", 3) && mode_ok(&["add", "subtract"]),
+                        Some("object") => {
+                            let rect_ok = o.get("rect").is_some_and(|r| r.as_array().is_some_and(|a| a.len() == 4
+                                && a.iter().all(|c| c.as_i64().is_some_and(|n| n >= 0 && n < 65536))
+                                && a[2].as_i64().is_some_and(|w| w >= 1) && a[3].as_i64().is_some_and(|h| h >= 1)));
+                            let point_ok = o.get("point").is_some_and(|p| p.as_array().is_some_and(|a| a.len() == 2
+                                && a.iter().all(|c| c.as_i64().is_some_and(|n| n >= 0 && n < 65536))));
+                            (rect_ok || point_ok) && mode_ok(&["add", "subtract"]) && sample_ok
+                        }
+                        Some("subject") => mode_ok(&["replace", "add", "subtract"]) && sample_ok,
+                        Some("clear" | "invert") => true,
+                        _ => false,
+                    }
+                }))) { return Err(refuse()); }
+            }
+            // A layerMask output lands on the live active layer: unprovable
+            // after any creation step retargets it (same rule as filters).
+            if map.get("output").and_then(Value::as_str) == Some("layerMask") && active_changed { return Err(refuse()); }
         }
         if step.command == "select.modify.border"
             && map.get("radius").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (1.0..=200.0).contains(&x))) { return Err(refuse()); }
@@ -2651,6 +2748,43 @@ mod tests {
             plan.steps.push(PlanStep { command: command.into(), params, description: "fixture".into() });
         }
         assert!(validate_selected_plan(&plan, &contract_scene()).is_ok());
+    }
+
+    #[test]
+    fn selected_plan_admits_selection_transform_and_refine_edge_within_contract() {
+        let mut plan = contract_plan("select.subject", json!({}));
+        plan.steps.push(PlanStep { command: "select.transformSelection".into(), params: json!({"scaleX": 120, "rotate": 15}), description: "fixture".into() });
+        plan.steps.push(PlanStep { command: "select.refineEdge".into(), params: json!({"radius": 4, "smartRadius": true, "shiftEdge": -20}), description: "fixture".into() });
+        assert!(validate_selected_plan(&plan, &contract_scene()).is_ok());
+        let mut plan = contract_plan("select.magicWand", json!({"x": 5, "y": 5}));
+        plan.steps.push(PlanStep { command: "select.refineEdge".into(), params: json!({"output": "layerMask",
+            "refineStrokes": [{"points": [[1, 1], [20, 20]], "size": 12}],
+            "edits": [{"tool": "subject"}, {"tool": "lasso", "points": [[0, 0], [9, 0], [4, 8]], "mode": "subtract"}]}), description: "fixture".into() });
+        assert!(validate_selected_plan(&plan, &contract_scene()).is_ok());
+        // Refine Edge also works on the active layer's existing mask.
+        let mut masked_scene = contract_scene();
+        masked_scene.layers[0].has_mask = true;
+        assert!(validate_selected_plan(&contract_plan("select.refineEdge", json!({"smooth": 3})), &masked_scene).is_ok());
+    }
+
+    #[test]
+    fn selected_plan_refuses_selection_transform_and_refine_edge_outside_contract() {
+        // Both need a selection (or, for refineEdge, an active mask) at run point.
+        assert!(validate_selected_plan(&contract_plan("select.transformSelection", json!({"dx": 5})), &contract_scene()).is_err());
+        assert!(validate_selected_plan(&contract_plan("select.refineEdge", json!({"smooth": 3})), &contract_scene()).is_err());
+        // Warp meshes are not admitted.
+        let mut plan = contract_plan("select.subject", json!({}));
+        plan.steps.push(PlanStep { command: "select.transformSelection".into(), params: json!({"mesh": []}), description: "fixture".into() });
+        assert!(validate_selected_plan(&plan, &contract_scene()).is_err());
+        // Outputs that leave the document or create unreferenceable layers are refused.
+        let mut plan = contract_plan("select.subject", json!({}));
+        plan.steps.push(PlanStep { command: "select.refineEdge".into(), params: json!({"output": "newDocument"}), description: "fixture".into() });
+        assert!(validate_selected_plan(&plan, &contract_scene()).is_err());
+        // A layerMask output after a creation step cannot prove its target.
+        let mut plan = contract_plan("select.subject", json!({}));
+        plan.steps.push(PlanStep { command: "layer.duplicate".into(), params: json!({"layer": 7}), description: "fixture".into() });
+        plan.steps.push(PlanStep { command: "select.refineEdge".into(), params: json!({"output": "layerMask"}), description: "fixture".into() });
+        assert!(validate_selected_plan(&plan, &contract_scene()).is_err());
     }
 
     #[test]
