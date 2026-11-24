@@ -336,17 +336,37 @@ impl AssistantBackend for GuiAssistant {
                             // so a reduced disclosure is never treated as the
                             // complete document. Wider caps than the scene
                             // list fit the round's measurement budget.
-                            let ids: Vec<u64> = request.params.get("ids").and_then(|v| v.as_array()).into_iter().flatten()
-                                .filter_map(|id| id.as_u64()).collect();
-                            let mut found = Vec::new();
-                            let mut missing = Vec::new();
-                            for id in &ids {
-                                match pending.scene.layers.iter().find(|l| l.id == *id) {
-                                    Some(l) => found.push(fotodit_automation::ai::scene_layer_json(l, 128, 512, 8)),
-                                    None => missing.push(*id),
+                            let compact = |l: &fotodit_automation::ai::VisualElement| serde_json::json!({
+                                "id": l.id, "name": l.name.chars().take(96).collect::<String>(), "kind": l.kind,
+                                "parentId": l.parent_id, "depth": l.depth, "visible": l.is_visible });
+                            let result = if let Some(ids) = request.params.get("ids").and_then(|v| v.as_array()) {
+                                let mut found = Vec::new();
+                                let mut missing = Vec::new();
+                                for id in ids.iter().filter_map(|id| id.as_u64()) {
+                                    match pending.scene.layers.iter().find(|l| l.id == id) {
+                                        Some(l) => found.push(fotodit_automation::ai::scene_layer_json(l, 128, 512, 8)),
+                                        None => missing.push(id),
+                                    }
                                 }
-                            }
-                            results.push(fotodit_automation::ai::ObservationResult { command: request.command.clone(), result: serde_json::json!({"layers": found, "missing": missing}) });
+                                serde_json::json!({"layers": found, "missing": missing})
+                            } else if let Some(name) = request.params.get("name").and_then(|v| v.as_str()) {
+                                let needle = name.to_lowercase();
+                                let hits: Vec<_> = pending.scene.layers.iter()
+                                    .filter(|l| l.name.to_lowercase().contains(&needle))
+                                    .map(compact).collect();
+                                serde_json::json!({"matches": hits})
+                            } else if let Some(parent) = request.params.get("parent").and_then(|v| v.as_u64()) {
+                                let children: Vec<_> = pending.scene.layers.iter()
+                                    .filter(|l| l.parent_id == Some(parent)).map(compact).collect();
+                                serde_json::json!({"children": children})
+                            } else {
+                                let offset = request.params.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                                let limit = request.params.get("limit").and_then(|v| v.as_u64()).unwrap_or(32) as usize;
+                                let total = pending.scene.layers.len();
+                                let page: Vec<_> = pending.scene.layers.iter().skip(offset).take(limit).map(compact).collect();
+                                serde_json::json!({"layers": page, "total": total, "truncated": offset + page.len() < total})
+                            };
+                            results.push(fotodit_automation::ai::ObservationResult { command: request.command.clone(), result });
                             continue;
                         }
                         if request.command == "contract.describe" {
