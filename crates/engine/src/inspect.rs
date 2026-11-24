@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use fotodit_doc::{Adjustment, Layer, LayerContent, SmartContentsId, SmartSource};
+use fotodit_geom::Rect;
 use serde_json::{Value, json};
 
 use crate::{DocState, Session};
@@ -53,7 +54,7 @@ fn document_with(d: &DocState, detail: bool) -> Value {
         "isolatedLayers": d.isolated_layers.iter().map(|l| l.0).collect::<Vec<_>>(),
         "hasSelection": doc.selection.is_some(),
         "selectionBounds": doc.selection.as_ref().map(|s| { let r = s.content_bounds(); [r.x0, r.y0, r.width() as i32, r.height() as i32] }),
-        "layers": doc.layers.iter().rev().map(|l| layer_sel(l, &selected, &instances, Some(&doc.metadata), detail)).collect::<Vec<_>>(),
+        "layers": doc.layers.iter().rev().map(|l| layer_sel(l, doc.size, &selected, &instances, Some(&doc.metadata), detail)).collect::<Vec<_>>(),
         "history": d.history.entries(),
         "historySource": crate::history_source_cmds::source_json(d),
         "snapshots": d.snapshots.iter().map(|snap| json!({"id": snap.id, "name": snap.name})).collect::<Vec<_>>(),
@@ -79,13 +80,13 @@ fn document_with(d: &DocState, detail: bool) -> Value {
 
 /// Layer tree top-to-bottom (display order). Smart object instances are counted within `l`.
 pub fn layer(l: &Layer) -> Value {
-    layer_sel(l, &[], &smart_instances(std::slice::from_ref(l)), None, false)
+    layer_sel(l, fotodit_geom::Size::new(0, 0), &[], &smart_instances(std::slice::from_ref(l)), None, false)
 }
 
 /// [`layer`] plus every text run and paragraph run, anti-aliasing and the full serialized
 /// layer-effect settings, for format round-trip checks (`fotodit-cli info --detail`).
 pub fn layer_detail(l: &Layer) -> Value {
-    layer_sel(l, &[], &smart_instances(std::slice::from_ref(l)), None, true)
+    layer_sel(l, fotodit_geom::Size::new(0, 0), &[], &smart_instances(std::slice::from_ref(l)), None, true)
 }
 
 /// How many smart objects in `layers`, groups included, share each contents identity.
@@ -105,6 +106,7 @@ fn smart_instances(layers: &[Layer]) -> HashMap<SmartContentsId, usize> {
 /// [`layer`] with a `selected` flag on every node (Layers panel multi-selection).
 fn layer_sel(
     l: &Layer,
+    canvas: fotodit_geom::Size,
     selected: &[fotodit_doc::LayerId],
     instances: &HashMap<SmartContentsId, usize>,
     meta: Option<&fotodit_doc::Metadata>,
@@ -114,6 +116,28 @@ fn layer_sel(
         let r = s.content_bounds();
         [r.x0, r.y0, r.width() as i32, r.height() as i32]
     });
+    // Bounding rect of the pixels the layer mask REVEALS over the canvas
+    // (effective value, density included, >= 0.5): the mask-derived target
+    // region the AI measurement layer needs. Bounded: skipped (null) when
+    // the canvas is unknown (single-layer inspection) or over 16M px, where
+    // the scan would allocate unbounded memory.
+    let mask_bounds: Value = match &l.mask {
+        Some(mask) if mask.enabled && canvas.width > 0 && canvas.height > 0
+            && u64::from(canvas.width) * u64::from(canvas.height) <= 16_000_000 => {
+            let (w, h) = (canvas.width as i32, canvas.height as i32);
+            let mut values = Vec::new();
+            mask.values_into(Rect::from_xywh(0, 0, canvas.width, canvas.height), &mut values);
+            let (mut x0, mut y0, mut x1, mut y1) = (w, h, -1, -1);
+            for (i, v) in values.iter().enumerate() {
+                if *v >= 0.5 {
+                    let (x, y) = (i as i32 % w, i as i32 / w);
+                    x0 = x0.min(x); y0 = y0.min(y); x1 = x1.max(x); y1 = y1.max(y);
+                }
+            }
+            if x1 < 0 { Value::Null } else { json!([x0, y0, x1 - x0 + 1, y1 - y0 + 1]) }
+        }
+        _ => Value::Null,
+    };
     let mut v = json!({
         "id": l.id.0,
         "name": l.name,
@@ -125,6 +149,7 @@ fn layer_sel(
         "blend": l.blend.label(),
         "clipped": l.clipped,
         "hasMask": l.mask.is_some(),
+        "maskBounds": mask_bounds,
         "hasVectorMask": l.vector_mask.is_some(),
         "vectorMaskEnabled": l.vector_mask.as_ref().map(|mask| mask.enabled),
         "bounds": bounds,
@@ -134,7 +159,7 @@ fn layer_sel(
     });
     match &l.content {
         LayerContent::Group(g) => {
-            v["children"] = Value::Array(g.children.iter().rev().map(|c| layer_sel(c, selected, instances, meta, detail)).collect());
+            v["children"] = Value::Array(g.children.iter().rev().map(|c| layer_sel(c, canvas, selected, instances, meta, detail)).collect());
             v["expanded"] = json!(g.expanded);
             if let Some(a) = &g.artboard {
                 v["artboard"] = json!({"rect": [a.rect.x0, a.rect.y0, a.rect.width(), a.rect.height()], "background": a.background.name(), "preset": a.preset});
