@@ -303,23 +303,29 @@ shirt. Passing means every link, not a plausible render:
    with engine-validated parameters, executed through the admitted local
    path with history/undo intact.
 3. **Unchanged unrelated areas.** A bounded before/after measurement proves
-   the criterion: the target region's colour moved to red AND a pixel digest
-   of unrelated areas is unchanged. Command success or a good-looking render
-   alone is not this proof.
-   Status (3ad2c12, all unverified): a selection-driving plan's target is
-   captured AT its target-selection stage — right after the plan's last
-   selection/mask step, before any edit can consume the selection: content
-   bounds, bounding-region digest, the complement border digests (protected
-   BEFORE state) and coverage-aware colour statistics, revision-bound. A
-   pre-existing scene selection is never mistaken for the plan's target.
-   Other plans measure plan-targeted layer bounds or the canvas as before.
+   the criterion: the target region's colour moved to red AND unrelated
+   areas are unchanged under exact per-pixel comparison. Command success or
+   a good-looking render alone is not this proof.
+   Status (6c1e07a, all unverified): a selection-driving plan is captured
+   per selection segment immediately before that segment's first mutation
+   (engine journal metadata classifies mutations, never string matching):
+   the selection's exact per-pixel coverage and the region's exact rendered
+   before-pixels are preserved locally (tiled, 2M-pixel aggregate budget),
+   so measurement survives the selection's consumption. Mask-only plans
+   measure under the mask's exact coverage (any nonzero value counts, so
+   feathered edges stay in the target); collateral change inside the
+   bounding rect is a protected violation. Identity binds through the
+   engine's DocId plus a monotonic revision. A pre-existing scene selection
+   is never mistaken for the plan's target.
    Labels stay honest: a changed digest is a fact; an equal digest is
-   "no difference observed on the sampled 8-bit grid", never proof, and the
-   Completed detail says so. Preservation is a local-edit criterion only.
-   Completion is gated: design needs its semantic checks AND a measured
-   change (neither alone suffices); local edits need a measured changed
-   target plus an observed-unchanged complement; global requests do not
-   ground on a changed canvas at all — activity is not satisfaction.
+   "no difference observed on the sampled 8-bit grid", never proof, and
+   sampled digests and weak dominant-colour checks are diagnostic only and
+   never ground completion. Preservation is a local-edit criterion only.
+   Completion is gated: design needs its semantic checks AND an exact
+   measured change (neither alone suffices); local edits need an exact
+   changed target plus an exactly unchanged protected complement; global
+   requests do not ground on a changed canvas at all — activity is not
+   satisfaction.
    Everything else stops FinalStateUnverified and routes into the bounded
    correction pass. A measured no-change target is unmet. The colour leg
    binds colour to object: NotApplicable without a named colour, Unavailable
