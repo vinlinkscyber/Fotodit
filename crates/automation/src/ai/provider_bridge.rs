@@ -1441,7 +1441,8 @@ const SELECTED_COMMANDS: &[&str] = &["file.new", "type.create", "type.edit", "ty
     "select.quick", "select.magneticLasso",
     "select.float", "select.drop", "select.reselect",
     "edit.transform", "layer.removeBackground",
-    "edit.fill", "edit.stroke", "image.autoTone", "image.autoContrast", "image.autoColor"];
+    "edit.fill", "edit.stroke", "image.autoTone", "image.autoContrast", "image.autoColor",
+    "image.imageSize", "image.canvasSize", "image.crop"];
 
 /// The reviewed core commands whose full engine schemas always ride in the
 /// provider contract. Every other admitted command (the rest of
@@ -1690,6 +1691,9 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
                 "select.magneticLasso" => vec!["points", "width", "contrast", "close", "trace", "mode", "antiAlias", "feather"],
                 "select.float" => vec!["dx", "dy", "copy", "stepName", "target"],
                 "select.drop" | "select.reselect" => vec![],
+                "image.imageSize" => vec!["width", "height", "units", "percent", "resolution", "keepPrintSize", "scaleStyles", "resample"],
+                "image.canvasSize" => vec!["width", "height", "units", "relative", "anchor", "extensionColor"],
+                "image.crop" => vec!["x", "y", "width", "height", "angle", "deleteCroppedPixels", "contentAware", "targetWidth", "targetHeight", "resolution", "resample"],
                 // Only the outputs that keep the plan in this document and on
                 // provable targets: selection (default) and layerMask (active
                 // layer). newLayer/newDocument outputs are refused.
@@ -2724,6 +2728,102 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
             if map.get("ellipse").is_some_and(|v| !v.is_boolean()) || map.get("antiAlias").is_some_and(|v| !v.is_boolean()) { return Err(refuse()); }
             if map.get("feather").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (0.0..=1000.0).contains(&x))) { return Err(refuse()); }
         }
+        // Document geometry: size-changing commands update the tracked
+        // dimensions the way the engine computes them, so later canvas-bound
+        // steps check the canvas they will actually meet.
+        if step.command == "image.imageSize" {
+            if map.get("units").is_some_and(|v| !matches!(v.as_str(), Some("px" | "pt"))) { return Err(refuse()); }
+            // Points resolve against the document's resolution, which the
+            // scene does not carry: a pt size has no checkable pixel meaning.
+            if map.get("units").and_then(Value::as_str) == Some("pt") { return Err(refuse()); }
+            // keepPrintSize resamples by the resolution ratio, which likewise
+            // needs the document's current resolution.
+            if map.get("keepPrintSize").and_then(Value::as_bool) == Some(true) { return Err(refuse()); }
+            let side = |k: &str| -> Result<Option<f64>, AiError> {
+                match map.get(k).filter(|v| !v.is_null()) {
+                    None => Ok(None),
+                    Some(v) => v.as_f64().filter(|x| x.is_finite() && *x > 0.0).map(Some).ok_or_else(refuse),
+                }
+            };
+            let (mut nw, mut nh) = (side("width")?, side("height")?);
+            if let Some(pc) = map.get("percent") {
+                let pc = pc.as_f64().filter(|v| v.is_finite() && *v > 0.0).ok_or_else(refuse)?;
+                if nw.is_none() { nw = Some(f64::from(width) * pc / 100.0); }
+                if nh.is_none() { nh = Some(f64::from(height) * pc / 100.0); }
+            }
+            if map.get("resolution").is_some_and(|v| !v.is_null() && !v.as_f64().is_some_and(|x| x.is_finite() && (1.0..=30000.0).contains(&x))) { return Err(refuse()); }
+            for key in ["keepPrintSize", "scaleStyles"] {
+                if map.get(key).is_some_and(|v| !v.is_boolean()) { return Err(refuse()); }
+            }
+            if map.get("resample").is_some_and(|v| !matches!(v.as_str(), Some("automatic" | "preserveDetails" | "bicubicSmoother" | "bicubicSharper" | "bicubicAutomatic" | "bicubic" | "nearest" | "bilinear" | "lanczos" | "none"))) { return Err(refuse()); }
+            if nw.is_none() && nh.is_none() && map.get("percent").is_none() && map.get("resolution").is_none() { return Err(refuse()); }
+            // The engine's own arithmetic: a missing side keeps the aspect
+            // ratio, then round. Capped to the contract's new-document size.
+            let (w2, h2) = match (nw, nh) {
+                (Some(a), Some(b)) => (a, b),
+                (Some(a), None) => (a, a * f64::from(height) / f64::from(width.max(1))),
+                (None, Some(b)) => (b * f64::from(width) / f64::from(height.max(1)), b),
+                (None, None) => (f64::from(width), f64::from(height)),
+            };
+            let (w2, h2) = (w2.round(), h2.round());
+            if w2 < 1.0 || h2 < 1.0 || w2 > 8192.0 || h2 > 8192.0 || w2 * h2 > 16777216.0 { return Err(refuse()); }
+            width = w2 as u32; height = h2 as u32;
+        }
+        if step.command == "image.canvasSize" {
+            if map.get("units").is_some_and(|v| !matches!(v.as_str(), Some("px" | "percent"))) { return Err(refuse()); }
+            if map.get("relative").is_some_and(|v| !v.is_boolean()) { return Err(refuse()); }
+            if map.get("anchor").is_some_and(|v| !matches!(v.as_str(), Some("topLeft" | "top" | "topRight" | "left" | "center" | "right" | "bottomLeft" | "bottom" | "bottomRight"))) { return Err(refuse()); }
+            if let Some(v) = map.get("extensionColor") {
+                let ok = matches!(v.as_str(), Some("background" | "foreground" | "white" | "black" | "transparent"))
+                    || v.as_str().is_some_and(|c| c.len() == 7 && c.starts_with('#') && c.as_bytes()[1..].iter().all(u8::is_ascii_hexdigit));
+                if !ok { return Err(refuse()); }
+            }
+            let relative = map.get("relative").and_then(Value::as_bool).unwrap_or(false);
+            let percent = map.get("units").and_then(Value::as_str) == Some("percent");
+            if relative && percent { return Err(refuse()); }
+            let dim = |k: &str, own: f64| -> Result<f64, AiError> {
+                match map.get(k).filter(|v| !v.is_null()) {
+                    None => Ok(if relative { 0.0 } else { own }),
+                    Some(v) => {
+                        let x = v.as_f64().filter(|x| x.is_finite()).ok_or_else(refuse)?;
+                        if percent && x <= 0.0 { return Err(refuse()); }
+                        if !relative && !percent && x <= 0.0 { return Err(refuse()); }
+                        Ok(if percent { x * own / 100.0 } else { x })
+                    }
+                }
+            };
+            let (w, h) = (dim("width", f64::from(width))?, dim("height", f64::from(height))?);
+            let (w2, h2) = if relative { (f64::from(width) + w, f64::from(height) + h) } else { (w, h) };
+            let (w2, h2) = (w2.round(), h2.round());
+            if w2 < 1.0 || h2 < 1.0 || w2 > 8192.0 || h2 > 8192.0 || w2 * h2 > 16777216.0 { return Err(refuse()); }
+            width = w2 as u32; height = h2 as u32;
+        }
+        if step.command == "image.crop" {
+            for key in ["x", "y"] {
+                if map.get(key).is_none() || !map.get(key).and_then(Value::as_f64).is_some_and(|x| x.is_finite() && x.abs() <= 1.0e6) { return Err(refuse()); }
+            }
+            let (Some(w), Some(h)) = (map.get("width").and_then(Value::as_f64), map.get("height").and_then(Value::as_f64)) else { return Err(refuse()); };
+            if !(w.is_finite() && (1.0..=8192.0).contains(&w)) || !(h.is_finite() && (1.0..=8192.0).contains(&h)) { return Err(refuse()); }
+            if map.get("angle").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (-3600.0..=3600.0).contains(&x))) { return Err(refuse()); }
+            for key in ["deleteCroppedPixels", "contentAware"] {
+                if map.get(key).is_some_and(|v| !v.is_boolean()) { return Err(refuse()); }
+            }
+            // targetWidth/targetHeight: both or neither (the engine's rule).
+            if map.contains_key("targetWidth") != map.contains_key("targetHeight") { return Err(refuse()); }
+            let target = match (map.get("targetWidth"), map.get("targetHeight")) {
+                (Some(a), Some(b)) => {
+                    let (Some(a), Some(b)) = (a.as_f64(), b.as_f64()) else { return Err(refuse()); };
+                    if !(a.is_finite() && (1.0..=8192.0).contains(&a)) || !(b.is_finite() && (1.0..=8192.0).contains(&b)) { return Err(refuse()); }
+                    Some((a, b))
+                }
+                _ => None,
+            };
+            if map.get("resolution").is_some_and(|v| !v.as_f64().is_some_and(|x| x.is_finite() && (1.0..=30000.0).contains(&x))) { return Err(refuse()); }
+            if map.get("resample").is_some_and(|v| !matches!(v.as_str(), Some("bicubic" | "bilinear" | "nearest" | "lanczos" | "preserveDetails"))) { return Err(refuse()); }
+            let (w2, h2) = target.unwrap_or((w, h));
+            if w2 * h2 > 16777216.0 { return Err(refuse()); }
+            width = w2.round() as u32; height = h2.round() as u32;
+        }
         for key in ["x", "y", "amount", "threshold"] {
             if map.get(key).is_some_and(|v| v.as_i64().is_none()) { return Err(refuse()); }
         }
@@ -2998,6 +3098,45 @@ mod tests {
         let mut plan = contract_plan("select.all", json!({}));
         plan.steps.push(PlanStep { command: "select.reselect".into(), params: json!({}), description: "fixture".into() });
         assert!(validate_selected_plan(&plan, &contract_scene()).is_err(), "reselect over live selection");
+    }
+
+    #[test]
+    fn selected_plan_tracks_document_geometry_changes() {
+        // The scene is 400x300. After imageSize, canvas-bound steps check the
+        // new canvas: a wand point beyond the old size is now valid.
+        let mut plan = contract_plan("image.imageSize", json!({"width": 800, "height": 600, "resample": "bicubic"}));
+        plan.steps.push(PlanStep { command: "select.magicWand".into(), params: json!({"x": 700, "y": 500}), description: "fixture".into() });
+        assert!(validate_selected_plan(&plan, &contract_scene()).is_ok());
+        // percent scales both sides; a missing side keeps the aspect ratio.
+        assert!(validate_selected_plan(&contract_plan("image.imageSize", json!({"percent": 200})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("image.imageSize", json!({"width": 100})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("image.imageSize", json!({"resolution": 144, "resample": "none"})), &contract_scene()).is_ok());
+        // canvasSize: absolute, relative and percent forms.
+        assert!(validate_selected_plan(&contract_plan("image.canvasSize", json!({"width": 800, "height": 600, "anchor": "topLeft", "extensionColor": "#336699"})), &contract_scene()).is_ok());
+        let mut plan = contract_plan("image.canvasSize", json!({"width": 100, "height": -50, "relative": true}));
+        plan.steps.push(PlanStep { command: "select.magicWand".into(), params: json!({"x": 499, "y": 249}), description: "fixture".into() });
+        assert!(validate_selected_plan(&plan, &contract_scene()).is_ok(), "relative canvas 500x250");
+        assert!(validate_selected_plan(&contract_plan("image.canvasSize", json!({"units": "percent", "width": 200, "height": 200})), &contract_scene()).is_ok());
+        // Crop updates the tracked canvas to the cropped (or targeted) size.
+        let mut plan = contract_plan("image.crop", json!({"x": 0, "y": 0, "width": 100, "height": 50}));
+        plan.steps.push(PlanStep { command: "select.magicWand".into(), params: json!({"x": 99, "y": 49}), description: "fixture".into() });
+        assert!(validate_selected_plan(&plan, &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("image.crop", json!({"x": 0, "y": 0, "width": 100, "height": 50, "targetWidth": 200, "targetHeight": 100, "angle": 5, "contentAware": true})), &contract_scene()).is_ok());
+        for (name, command, params) in [
+            ("pt units need the resolution", "image.imageSize", json!({"width": 100, "units": "pt"})),
+            ("keepPrintSize needs the resolution", "image.imageSize", json!({"resolution": 144, "keepPrintSize": true})),
+            ("imageSize over the cap", "image.imageSize", json!({"width": 9000, "height": 9000})),
+            ("imageSize changes nothing", "image.imageSize", json!({"scaleStyles": false})),
+            ("bad percent", "image.imageSize", json!({"percent": -50})),
+            ("percent canvas is absolute only", "image.canvasSize", json!({"units": "percent", "width": 200, "height": 200, "relative": true})),
+            ("bad extension color", "image.canvasSize", json!({"width": 100, "height": 100, "extensionColor": "red"})),
+            ("canvas over the cap", "image.canvasSize", json!({"width": 9000, "height": 100})),
+            ("crop target needs both sides", "image.crop", json!({"x": 0, "y": 0, "width": 100, "height": 50, "targetWidth": 200})),
+            ("crop angle range", "image.crop", json!({"x": 0, "y": 0, "width": 100, "height": 50, "angle": 4000})),
+            ("crop needs a rect", "image.crop", json!({"width": 100, "height": 50})),
+        ] {
+            assert!(validate_selected_plan(&contract_plan(command, params), &contract_scene()).is_err(), "{name}");
+        }
     }
 
     #[test]
