@@ -304,7 +304,7 @@ impl AiEngine {
                     if satisfied {
                         if unverified.is_empty() {
                             return outcome.stop(GoalStop::Completed,
-                                "All edit steps completed. Measured evidence is sampled-grid observation: a changed digest is a fact; an equal digest is no-difference-observed, not proof of pixel identity.");
+                                "All edit steps completed. Completion grounds on exact per-pixel comparison of the target and its protected surroundings; sampled-grid digest observations, when recorded, are diagnostic only and did not authorize this outcome.");
                         }
                         return outcome.stop(GoalStop::FinalStateUnverified, format!(
                             "the edit finished, but goal satisfaction is unverified: {}.",
