@@ -236,7 +236,7 @@ impl AiEngine {
             // A selection-driving plan is measured at its target-selection
             // stage (execution.rs captures it mid-plan); the pre-execution
             // scene's selection is NOT the target when the plan first selects.
-            let plan_drives_selection = plan.steps.iter().any(|s| s.command.starts_with("select.") || s.command.contains("mask"));
+            let plan_drives_selection = plan_uses_active_selection(&plan);
             let region_watch = (!plan_drives_selection).then(|| RegionWatch::new(&scene, &plan));
             let region_before = region_watch.as_ref().and_then(|w| w.capture(&mut host));
             let start = host.calls.len();
@@ -438,6 +438,20 @@ impl<S: LiveEditSession + ?Sized> LiveEditSession for GoalHost<'_, S> {
 /// observed on the sampled, 8-bit-quantized grid" - stride sampling skips
 /// pixels, HDR and sub-8-bit differences quantize away, and a 64-bit
 /// non-cryptographic hash can collide. It is never proof of unchanged pixels.
+/// A plan works through the active selection when it has selection steps
+/// or one of the two mask commands that CONSUME it (revealSelection and
+/// hideSelection make the selection the mask and drop it). Other mask
+/// commands (revealAll, hideAll, edit, delete, apply, enabled, linked,
+/// fromTransparency) never touch the selection: a mask-only plan built
+/// from them has no selection segment to capture and is measured by
+/// RegionWatch under the mask's coverage instead. String matching here
+/// classifies the plan's OWN declared commands, the planner's output, not
+/// the engine's runtime effect metadata.
+fn plan_uses_active_selection(plan: &EditingPlan) -> bool {
+    plan.steps.iter().any(|s| s.command.starts_with("select.")
+        || matches!(s.command.as_str(), "layer.layerMask.revealSelection" | "layer.layerMask.hideSelection"))
+}
+
 struct RegionWatch {
     target: Option<[i64; 4]>,
     protected: Vec<[i64; 4]>,
@@ -580,7 +594,7 @@ impl RegionWatch {
         // selection (selection or mask steps), the selection's bounding
         // region IS the intent's region (the shirt), which layer bounds are
         // not. Captured BEFORE execution consumes the selection.
-        let uses_selection = plan.steps.iter().any(|s| s.command.starts_with("select.") || s.command.contains("mask"));
+        let uses_selection = plan_uses_active_selection(plan);
         let selection_region = (uses_selection && scene.has_selection)
             .then(|| scene.selection_bounds)
             .flatten()
@@ -1265,6 +1279,26 @@ mod region_watch_tests {
         // A plan that never touches the selection keeps layer/canvas targeting.
         let watch = RegionWatch::new(&scene, &plan(&[("layer.fill.set", 2)]));
         assert_eq!(watch.target_source, "the plan-targeted layers' bounds");
+    }
+
+    #[test]
+    fn mask_only_plans_are_region_watch_measured_not_selection_measured() {
+        // The two selection-consuming mask commands route the plan to the
+        // selection-segment measurement; other mask commands do not touch
+        // the selection, so RegionWatch measures them under the mask's
+        // coverage instead of falling through to nothing.
+        assert!(plan_uses_active_selection(&plan(&[("layer.layerMask.revealSelection", 2)])));
+        assert!(plan_uses_active_selection(&plan(&[("layer.layerMask.hideSelection", 2)])));
+        let mask_only = plan(&[("layer.layerMask.revealAll", 2), ("layer.fill.set", 2)]);
+        assert!(!plan_uses_active_selection(&mask_only));
+        let mut layer = VisualElement { ..Default::default() };
+        layer.id = 2;
+        layer.bounds = [100, 100, 300, 200];
+        layer.mask_bounds = Some([120, 120, 100, 80]);
+        let scene = VisualScene { width: 1000, height: 800, layers: vec![layer], ..Default::default() };
+        let watch = RegionWatch::new(&scene, &mask_only);
+        assert_eq!(watch.target, Some([120, 120, 100, 80]), "the mask bounds the target tighter than the layer bounds");
+        assert_eq!(watch.target_mask_layer, Some(2), "a single masked layer enables mask-coverage splitting");
     }
 
     fn px(r: f32, g: f32, b: f32) -> [f32; 4] { [r, g, b, 1.0] }
