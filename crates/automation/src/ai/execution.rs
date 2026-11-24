@@ -89,13 +89,28 @@ pub struct ExecutionEvidence {
 /// or dispatch.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SelectionCapture {
+    /// The step the capture was taken IMMEDIATELY BEFORE: the operation
+    /// whose effect is being evaluated.
     pub step_index: usize,
+    /// Document identity at capture (name + path); a post-plan measurement is
+    /// only comparable when the identity matches, never assumed.
+    pub document_name: String,
+    pub document_path: Option<String>,
     /// Selection content bounds [x, y, width, height] at capture time.
     pub bounds: [i64; 4],
     pub revision: Option<u64>,
+    /// Exact per-pixel coverage of the selection over `bounds` (engine
+    /// selectionCoverage JSON): the target's exact coverage, preserved
+    /// locally so it survives the selection's consumption.
+    pub coverage: Option<Value>,
+    /// Exact rendered pixels of `bounds` before the edit (engine
+    /// regionPixels JSON), when the region fit the exact cap.
+    pub before_pixels: Option<Value>,
     pub region: Option<DigestMark>,
     /// Up to four border rects (top, bottom, left, right) with their digests.
     pub protected: Vec<([i64; 4], Option<DigestMark>)>,
+    /// Exact rendered pixels of each border rect before the edit.
+    pub protected_pixels: Vec<([i64; 4], Option<Value>)>,
     /// Selection-domain colour statistics (engine JSON shape), when captured.
     pub color_stats: Option<Value>,
 }
@@ -179,7 +194,10 @@ const VISUAL_COMMANDS: &[&str] = &[
 /// Read-only query commands (registered, `journal: false`): success never
 /// involves a pixel change. `image.adjustments.colorLookup.list` is the one
 /// non-journaling id under its prefix.
-const NONVISUAL_COMMANDS: &[&str] = &["image.analysis.colorStats", "image.analysis.pixelDigest", "image.adjustments.colorLookup.list"];
+const NONVISUAL_COMMANDS: &[&str] = &[
+    "image.analysis.colorStats", "image.analysis.pixelDigest",
+    "image.analysis.regionPixels", "image.analysis.selectionCoverage",
+    "image.adjustments.colorLookup.list"];
 
 /// Evidence classification for a plan step's command.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -310,33 +328,61 @@ impl ExecutionEngine {
         Ok(Some(DigestMark { digest, x, y, width, height, stride, sampled, revision }))
     }
 
-    /// The target-selection stage capture: selection content bounds from
-    /// inspection, a digest over that bounding region, the BEFORE digests of
-    /// the canvas-complement border rects (the protected regions), and
-    /// coverage-aware colour statistics of the selection itself. Bounded: one
-    /// stage per plan, at most six renders. None when the selection is empty
-    /// or unreadable at this point.
+    /// The target-selection stage capture, taken IMMEDIATELY BEFORE the
+    /// operation whose effect is being evaluated: document identity, the
+    /// selection's exact per-pixel coverage and the region's exact rendered
+    /// pixels (both bounded by the engine's exact cap, so the target's exact
+    /// coverage survives the selection's consumption and before/after pixels
+    /// compare exactly - no image bytes ever leave the process), the
+    /// bounding-region digest, the protected canvas-complement border rects
+    /// (digests plus exact pixels), and coverage-aware colour statistics of
+    /// the selection itself. None when the selection is empty or unreadable
+    /// at this point; unavailable exact reads stay None (honest unknown).
     fn capture_selection_stage<S: LiveEditSession + ?Sized>(session: &mut S, step_index: usize) -> Option<SelectionCapture> {
         let document = session.inspect_active().ok()??;
         let revision = document.get("revision").and_then(Value::as_u64);
+        let name = document.get("name").and_then(Value::as_str)?.to_string();
+        let path = match document.get("path") {
+            Some(Value::String(p)) => Some(p.clone()),
+            _ => None,
+        };
         let (cw, ch) = (document.get("width").and_then(Value::as_i64)?, document.get("height").and_then(Value::as_i64)?);
         let a = document.get("selectionBounds")?.as_array()?;
         if a.len() != 4 { return None; }
         let mut bounds = [0i64; 4];
         for (i, v) in a.iter().enumerate() { bounds[i] = v.as_i64()?; }
         if bounds[2] <= 0 || bounds[3] <= 0 { return None; }
-        let region = Self::capture_digest(session, Some(bounds)).ok().flatten();
         let [tx, ty, tw, th] = bounds;
+        let coverage = session.command_run("image.analysis.selectionCoverage", json!({})).ok();
+        let before_pixels = session.command_run("image.analysis.regionPixels",
+            json!({"x": tx, "y": ty, "width": tw, "height": th})).ok();
+        let region = Self::capture_digest(session, Some(bounds)).ok().flatten();
         let mut protected = Vec::new();
+        let mut protected_pixels = Vec::new();
         for rect in [[0, 0, cw, ty], [0, ty + th, cw, ch - ty - th], [0, ty, tx, th], [tx + tw, ty, cw - tx - tw, th]] {
             if rect[2] > 0 && rect[3] > 0 {
                 let mark = Self::capture_digest(session, Some(rect)).ok().flatten();
+                let px = session.command_run("image.analysis.regionPixels",
+                    json!({"x": rect[0], "y": rect[1], "width": rect[2], "height": rect[3]})).ok();
                 protected.push((rect, mark));
+                protected_pixels.push((rect, px));
             }
         }
         let color_stats = session.command_run("image.analysis.colorStats", json!({"maxPixels": EVIDENCE_MAX_PIXELS})).ok()
             .filter(|v| v.get("domain").and_then(Value::as_str) == Some("selection"));
-        Some(SelectionCapture { step_index, bounds, revision, region, protected, color_stats })
+        Some(SelectionCapture {
+            step_index,
+            document_name: name,
+            document_path: path,
+            bounds,
+            revision,
+            coverage,
+            before_pixels,
+            region,
+            protected,
+            protected_pixels,
+            color_stats,
+        })
     }
 
     /// Compare two captures. A dimension change is an observable change of
@@ -514,12 +560,16 @@ impl ExecutionEngine {
         // re-baselines instead of attributing an unobserved step's changes.
         let mut last_digest: Option<DigestMark> = None;
         let mut evidence_captures = 0usize;
-        // The target-selection stage: the plan's LAST selection- or
-        // mask-driving step. Its capture happens right after that step
-        // succeeds, before any following edit can consume the selection.
-        let last_selection_step = collect_evidence
+        // The target-selection stage: IMMEDIATELY BEFORE the first step
+        // following the plan's last selection/mask-driving step - the
+        // operation whose effect is being evaluated. Capturing after the last
+        // selection step would be wrong when that step IS the edit or when it
+        // consumes the selection; a trailing selection-only plan captures
+        // nothing.
+        let capture_before_step = collect_evidence
             .then(|| plan.steps.iter().rposition(|s| s.command.starts_with("select.") || s.command.contains("mask")))
-            .flatten();
+            .flatten()
+            .and_then(|last| (last + 1 < plan.steps.len()).then_some(last + 1));
         let mut selection_capture: Option<SelectionCapture> = None;
 
         for (idx, step) in plan.steps.iter().enumerate() {
@@ -670,11 +720,12 @@ impl ExecutionEngine {
                 Ok(resolved_params)
             })();
 
+            if capture_before_step == Some(idx) && selection_capture.is_none() {
+                selection_capture = Self::capture_selection_stage(session, idx);
+            }
             match resolution.and_then(|params| session.command_run(&step.command, params)) {
                 Ok(output) => {
-                    if last_selection_step == Some(idx) {
-                        selection_capture = Self::capture_selection_stage(session, idx);
-                    }
+                    let _ = &output;
                     // Only real creation steps produce referenceable ids; other
                     // commands echo their target id in the same "layer" output
                     // key (type.setStyle, layer.removeBackground, ...). The set

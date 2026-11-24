@@ -889,10 +889,13 @@ fn real_digest_quantization_hides_hdr_and_sub_byte_differences() {
 }
 
 /// REAL-ENGINE FIXTURE (authored now; runs only under an approved CI run):
-/// a plan that selects before editing yields a target-selection capture at
-/// the selection stage - bounds, region digest, protected-complement state
-/// and coverage-aware colour statistics - binding the measured criteria to
-/// the plan's actual target, not to any pre-existing selection.
+/// a plan that selects before editing yields a target-selection capture
+/// taken IMMEDIATELY BEFORE the edit whose effect is evaluated - document
+/// identity, bounds, the selection's exact per-pixel coverage, the exact
+/// before-pixels, the region digest, protected-complement state and
+/// coverage-aware colour statistics - binding the measured criteria to the
+/// plan's actual target, not to any pre-existing selection, with the exact
+/// coverage preserved through the selection's consumption.
 #[test]
 fn selection_stage_capture_binds_the_plans_target_before_the_edit() {
     let mut headless = Headless::new();
@@ -913,8 +916,15 @@ fn selection_stage_capture_binds_the_plans_target_before_the_edit() {
     let (result, evidence) = ExecutionEngine::execute_plan_in_with_evidence(&mut headless, &plan).unwrap();
     assert!(result.is_success);
     let capture = evidence.selection_capture.expect("a plan with a selection step yields a target-selection capture");
-    assert_eq!(capture.step_index, 0);
+    assert_eq!(capture.step_index, 1, "the capture is taken immediately before the edit step it evaluates");
     assert_eq!(capture.bounds, [0, 0, 64, 64]);
+    assert!(!capture.document_name.is_empty(), "the document identity rides the capture");
+    let coverage = capture.coverage.expect("the selection's exact per-pixel coverage is preserved before the edit");
+    assert_eq!(coverage.get("format").and_then(Value::as_str), Some("coverage-f32-rowmajor"));
+    assert_eq!(coverage.get("coverage").and_then(Value::as_array).map(Vec::len), Some(64 * 64));
+    let before = capture.before_pixels.expect("the exact before-pixels are captured before the edit");
+    assert_eq!(before.get("format").and_then(Value::as_str), Some("rgba-f32-rowmajor"));
+    assert_eq!(before.get("pixels").and_then(Value::as_array).map(Vec::len), Some(64 * 64 * 4));
     assert!(capture.region.is_some(), "the selection's bounding region is digested before the edit");
     assert!(capture.protected.is_empty(), "a full-canvas selection leaves no protected complement to measure");
     let stats = capture.color_stats.expect("coverage-aware colour statistics ride the capture");

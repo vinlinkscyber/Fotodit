@@ -442,17 +442,101 @@ struct RegionWatch {
     target_source: &'static str,
 }
 
+/// Parse an engine regionPixels result into (x, y, width, height, pixels).
+fn parse_exact_region(value: &Value) -> Option<(i64, i64, u64, u64, Vec<f32>)> {
+    if value.get("format").and_then(Value::as_str) != Some("rgba-f32-rowmajor") { return None; }
+    let x = value.get("x").and_then(Value::as_i64)?;
+    let y = value.get("y").and_then(Value::as_i64)?;
+    let width = value.get("width").and_then(Value::as_u64).filter(|v| *v >= 1)?;
+    let height = value.get("height").and_then(Value::as_u64).filter(|v| *v >= 1)?;
+    let pixels: Vec<f32> = value.get("pixels")?.as_array()?.iter().map(|v| v.as_f64().map(|f| f as f32)).collect::<Option<_>>()?;
+    if pixels.len() as u64 != width * height * 4 { return None; }
+    Some((x, y, width, height, pixels))
+}
+
+/// Exact whole-region comparison over an identical rect and grid: the count
+/// of differing pixels. 0 differing pixels means exactly identical rendered
+/// RGBA over the region - real evidence, not a sampled-grid observation.
+fn compare_exact_regions(before: &Value, after: &Value) -> Option<u64> {
+    let (bx, by, bw, bh, bp) = parse_exact_region(before)?;
+    let (ax, ay, aw, ah, ap) = parse_exact_region(after)?;
+    if (bx, by, bw, bh) != (ax, ay, aw, ah) { return None; }
+    let mut changed = 0u64;
+    for (a, b) in ap.chunks_exact(4).zip(bp.chunks_exact(4)) {
+        if a != b { changed += 1; }
+    }
+    Some(changed)
+}
+
+/// Parse an engine selectionCoverage result into (x, y, width, height, coverage).
+fn parse_coverage(value: &Value) -> Option<(i64, i64, u64, u64, Vec<f32>)> {
+    if value.get("format").and_then(Value::as_str) != Some("coverage-f32-rowmajor") { return None; }
+    let x = value.get("x").and_then(Value::as_i64)?;
+    let y = value.get("y").and_then(Value::as_i64)?;
+    let width = value.get("width").and_then(Value::as_u64).filter(|v| *v >= 1)?;
+    let height = value.get("height").and_then(Value::as_u64).filter(|v| *v >= 1)?;
+    let coverage: Vec<f32> = value.get("coverage")?.as_array()?.iter().map(|v| v.as_f64().map(|f| f as f32)).collect::<Option<_>>()?;
+    if coverage.len() as u64 != width * height { return None; }
+    Some((x, y, width, height, coverage))
+}
+
+/// Exact covered/uncovered comparison: the selection's preserved per-pixel
+/// coverage splits the bounding region into the target (coverage >= 0.5) and
+/// the region's collateral (coverage < 0.5). Returns (covered_changed,
+/// covered_total, collateral_changed). The preserved coverage is what lets
+/// this survive the selection's consumption.
+fn compare_exact_coverage(before: &Value, after: &Value, coverage: &Value) -> Option<(u64, u64, u64)> {
+    let (bx, by, bw, bh, bp) = parse_exact_region(before)?;
+    let (ax, ay, aw, ah, ap) = parse_exact_region(after)?;
+    let (cx, cy, cw, ch, cov) = parse_coverage(coverage)?;
+    if (bx, by, bw, bh) != (ax, ay, aw, ah) || (bx, by, bw, bh) != (cx, cy, cw, ch) { return None; }
+    let (mut covered_changed, mut covered_total, mut collateral_changed) = (0u64, 0u64, 0u64);
+    for ((c, a), b) in cov.iter().zip(ap.chunks_exact(4)).zip(bp.chunks_exact(4)) {
+        if *c >= 0.5 {
+            covered_total += 1;
+            if a != b { covered_changed += 1; }
+        } else if a != b {
+            collateral_changed += 1;
+        }
+    }
+    Some((covered_changed, covered_total, collateral_changed))
+}
+
+/// Coverage-weighted mean RGB of the covered pixels of a regionPixels
+/// result, for the exact colour criterion.
+fn exact_covered_mean(pixels: &Value, coverage: &Value) -> Option<[f32; 3]> {
+    let (_, _, _, _, px) = parse_exact_region(pixels)?;
+    let (_, _, _, _, cov) = parse_coverage(coverage)?;
+    let (mut acc, mut total) = ([0f64; 3], 0f64);
+    for (c, p) in cov.iter().zip(px.chunks_exact(4)) {
+        let w = f64::from(*c);
+        acc[0] += w * f64::from(p[0]);
+        acc[1] += w * f64::from(p[1]);
+        acc[2] += w * f64::from(p[2]);
+        total += w;
+    }
+    if total <= 0.0 { return None; }
+    Some([(acc[0] / total) as f32, (acc[1] / total) as f32, (acc[2] / total) as f32])
+}
+
 struct CapturedRegion {
     target: bool,
+    rect: [i64; 4],
     mark: Option<DigestMark>,
+    /// Exact rendered pixels (engine regionPixels JSON) when the region fit
+    /// the exact cap; preferred over the digest tier.
+    pixels: Option<Value>,
 }
 
 /// Local measured evidence; `available` is false when the host offers no
 /// digest capability, in which case nothing about the evaluation changes
 /// (honest absence, never assumed change or no-change).
 struct RegionMeasurement {
-    target: Option<VisualEvidence>,
-    protected: Vec<VisualEvidence>,
+    /// (evidence, exact): exact means an unsampled, unquantized, unhashed
+    /// per-pixel comparison over the whole region. Sampled-grid digest
+    /// evidence is diagnostic only and can never ground completion.
+    target: Option<(VisualEvidence, bool)>,
+    protected: Vec<(VisualEvidence, bool)>,
     available: bool,
     target_is_canvas: bool,
     target_source: &'static str,
@@ -533,10 +617,16 @@ impl RegionWatch {
         if self.target.is_none() && self.protected.is_empty() { return None; }
         let mut out = Vec::new();
         for (is_target, rect) in self.target.iter().map(|r| (true, r)).chain(self.protected.iter().map(|r| (false, r))) {
+            let pixels = session.command_run("image.analysis.regionPixels",
+                json!({"x": rect[0], "y": rect[1], "width": rect[2], "height": rect[3]})).ok();
             match ExecutionEngine::capture_digest(session, Some(*rect)) {
-                Ok(Some(mark)) => out.push(CapturedRegion { target: is_target, mark: Some(mark) }),
-                Ok(None) => return None,
-                Err(_) => out.push(CapturedRegion { target: is_target, mark: None }),
+                Ok(Some(mark)) => out.push(CapturedRegion { target: is_target, rect: *rect, mark: Some(mark), pixels }),
+                // No digest capability is not the end when exact pixels were captured.
+                Ok(None) => {
+                    if pixels.is_none() { return None; }
+                    out.push(CapturedRegion { target: is_target, rect: *rect, mark: None, pixels })
+                }
+                Err(_) => out.push(CapturedRegion { target: is_target, rect: *rect, mark: None, pixels }),
             }
         }
         Some(out)
@@ -551,11 +641,23 @@ impl RegionWatch {
         let Some(after) = self.capture(session) else { return unavailable() };
         let mut measurement = RegionMeasurement { target: None, protected: Vec::new(), available: true, target_is_canvas: self.target_is_canvas, target_source: self.target_source };
         for (b, a) in before.iter().zip(after.iter()) {
-            let evidence = match (&b.mark, &a.mark) {
-                (Some(b), Some(a)) => ExecutionEngine::compare_digests(b, a),
-                _ => VisualEvidence { class: VisualEvidenceClass::Unknown,
-                    detail: "a region capture failed or was refused; no evidence of change or of no-change".into() },
+            let exact = match (&b.pixels, &a.pixels) {
+                (Some(before_px), Some(after_px)) => compare_exact_regions(before_px, after_px).map(|changed| {
+                    let class = if changed > 0 { VisualEvidenceClass::Changed } else { VisualEvidenceClass::NoChangeObserved };
+                    (VisualEvidence { class, detail: format!(
+                        "exact per-pixel comparison over {} pixels of the region: {changed} pixels differ",
+                        b.rect[2] * b.rect[3]) }, true)
+                }),
+                _ => None,
             };
+            let evidence = exact.unwrap_or_else(|| {
+                let evidence = match (&b.mark, &a.mark) {
+                    (Some(b), Some(a)) => ExecutionEngine::compare_digests(b, a),
+                    _ => VisualEvidence { class: VisualEvidenceClass::Unknown,
+                        detail: "a region capture failed or was refused; no evidence of change or of no-change".into() },
+                };
+                (evidence, false)
+            });
             if b.target { measurement.target = Some(evidence); } else { measurement.protected.push(evidence); }
         }
         measurement
@@ -578,7 +680,7 @@ impl RegionMeasurement {
         }
         let local = matches!(category, IntentCategory::ColorStyling | IntentCategory::SubjectIsolation
             | IntentCategory::BackgroundReplacement | IntentCategory::TypographyRefinement);
-        let changed = self.protected.iter().filter(|e| e.class == VisualEvidenceClass::Changed).count();
+        let changed = self.protected.iter().filter(|(e, _)| e.class == VisualEvidenceClass::Changed).count();
         if changed > 0 {
             if local {
                 evaluation.intent_satisfied = false;
@@ -588,30 +690,42 @@ impl RegionMeasurement {
                 evaluation.observations.push(format!(
                     "Measured pixel evidence: {changed} region(s) outside the derived target changed; this request's intent is not a local-edit preservation criterion, so this is recorded, not failed."));
             }
-        } else if !self.protected.is_empty() && self.protected.iter().all(|e| e.class == VisualEvidenceClass::NoChangeObserved) {
-            evaluation.observations.push(
-                "Measured pixel evidence: no difference observed in the protected regions outside the target (sampled 8-bit grid; not proof of unchanged pixels).".into());
+        } else if !self.protected.is_empty() {
+            if self.protected.iter().all(|(e, exact)| e.class == VisualEvidenceClass::NoChangeObserved && *exact) {
+                evaluation.observations.push(
+                    "Measured pixel evidence: exact per-pixel comparison found no differing pixel in the protected regions outside the target.".into());
+            } else if self.protected.iter().all(|(e, _)| e.class == VisualEvidenceClass::NoChangeObserved) {
+                evaluation.observations.push(
+                    "Measured pixel evidence: no difference observed in the protected regions outside the target (sampled 8-bit grid; not proof of unchanged pixels).".into());
+            }
         }
+        let digest_only = "only sampled-grid digest evidence was available, which is diagnostic and never grounds completion; the exact per-pixel comparison was unavailable (region over the exact cap, or a capture failed or was refused)";
         match &self.target {
-            Some(target) => match target.class {
+            Some((target, target_exact)) => match target.class {
                 VisualEvidenceClass::Changed => {
                     evaluation.observations.push(format!(
                         "Measured pixel evidence: the target region ({}) changed.", self.target_source));
                     if matches!(category, IntentCategory::GraphicDesign) {
                         // Completion rests on the category's own semantic
                         // checks PLUS this measured change; neither alone is
-                        // proof of the full requested design.
-                        CompletionGrounding::Grounded
+                        // proof of the full requested design, and the change
+                        // must be exact, not a sampled-grid digest.
+                        if *target_exact { CompletionGrounding::Grounded }
+                        else { CompletionGrounding::Unverified(digest_only.into()) }
                     } else if !local {
                         CompletionGrounding::Unverified(
                             "a measured change is activity, not verification that this kind of request was satisfied".into())
                     } else if self.target_is_canvas {
                         CompletionGrounding::Unverified(
                             "the derived target spans the canvas; the requested local target was not measured".into())
+                    } else if !*target_exact {
+                        CompletionGrounding::Unverified(digest_only.into())
                     } else if local && (self.protected.is_empty()
-                        || !self.protected.iter().all(|e| e.class == VisualEvidenceClass::NoChangeObserved)) {
+                        || !self.protected.iter().all(|(e, _)| e.class == VisualEvidenceClass::NoChangeObserved)) {
                         CompletionGrounding::Unverified(
                             "the areas outside the target were not all measured unchanged".into())
+                    } else if !self.protected.iter().all(|(_, exact)| *exact) {
+                        CompletionGrounding::Unverified(digest_only.into())
                     } else {
                         CompletionGrounding::Grounded
                     }
@@ -670,22 +784,71 @@ fn measure_from_selection_stage<S: LiveEditSession + ?Sized>(session: &mut S, ca
     let unavailable = || RegionMeasurement { target: None, protected: Vec::new(), available: false, target_is_canvas: false, target_source: "nothing measurable" };
     let Some(capture) = capture else { return unavailable() };
     let failed = |why: &str| VisualEvidence { class: VisualEvidenceClass::Unknown, detail: why.to_string() };
-    let target = capture.region.as_ref().map(|before| match ExecutionEngine::capture_digest(session, Some(capture.bounds)) {
+    // Rollback/cancellation identity: the after-execution measurement is only
+    // comparable when the document is still the one captured before the
+    // evaluated step (same name + path, read back now). A document swapped
+    // under the plan makes every capture stale; nothing is assumed.
+    let identity_ok = session.inspect_active().ok().flatten()
+        .map(|doc| doc.get("name").and_then(Value::as_str) == Some(capture.document_name.as_str())
+            && match doc.get("path") {
+                Some(Value::String(p)) => capture.document_path.as_deref() == Some(p.as_str()),
+                Some(Value::Null) | None => capture.document_path.is_none(),
+                _ => false,
+            })
+        .unwrap_or(false);
+    if !identity_ok {
+        let mut m = unavailable();
+        m.available = true;
+        m.target = Some((failed("the document identity changed between the target-selection capture and the after-execution measurement (rollback, close or swap); the captures are not comparable"), false));
+        return m;
+    }
+    // Exact target evidence first: the preserved per-pixel coverage splits
+    // the bounding region into the selection's own pixels and the region's
+    // collateral, and the before/after rendered pixels compare exactly. This
+    // survives the selection's consumption and needs no surviving selection.
+    let target_exact = match (&capture.before_pixels, &capture.coverage) {
+        (Some(before_px), Some(cov)) => {
+            let [x, y, w, h] = capture.bounds;
+            match session.command_run("image.analysis.regionPixels", json!({"x": x, "y": y, "width": w, "height": h})) {
+                Ok(after_px) => compare_exact_coverage(before_px, &after_px, cov).map(|(covered_changed, covered_total, collateral_changed)| {
+                    let class = if covered_changed > 0 { VisualEvidenceClass::Changed } else { VisualEvidenceClass::NoChangeObserved };
+                    (VisualEvidence { class, detail: format!(
+                        "exact per-pixel comparison under the selection's preserved coverage: {covered_changed} of {covered_total} covered (target) pixels differ; {collateral_changed} collateral pixel(s) inside the bounding region also differ") }, true)
+                }),
+                Err(_) => Some((failed("the after-execution exact region capture failed or was refused"), false)),
+            }
+        }
+        _ => None,
+    };
+    let target = target_exact.or_else(|| capture.region.as_ref().map(|before| (match ExecutionEngine::capture_digest(session, Some(capture.bounds)) {
         Ok(Some(after)) => ExecutionEngine::compare_digests(before, &after),
         _ => failed("the after-execution region capture failed or was refused"),
-    });
+    }, false)));
     let mut protected = Vec::new();
-    for (rect, before) in &capture.protected {
-        protected.push(match before {
+    for ((rect, before), (_, before_px)) in capture.protected.iter().zip(capture.protected_pixels.iter()) {
+        let exact = match before_px {
+            Some(before_px) => match session.command_run("image.analysis.regionPixels",
+                json!({"x": rect[0], "y": rect[1], "width": rect[2], "height": rect[3]})) {
+                Ok(after_px) => compare_exact_regions(before_px, &after_px).map(|changed| {
+                    let class = if changed > 0 { VisualEvidenceClass::Changed } else { VisualEvidenceClass::NoChangeObserved };
+                    (VisualEvidence { class, detail: format!(
+                        "exact per-pixel comparison over {} pixels of the protected region: {changed} pixels differ",
+                        rect[2] * rect[3]) }, true)
+                }),
+                Err(_) => Some((failed("an after-execution exact protected-region capture failed or was refused"), false)),
+            },
+            None => None,
+        };
+        protected.push(exact.unwrap_or_else(|| (match before {
             Some(before) => match ExecutionEngine::capture_digest(session, Some(*rect)) {
                 Ok(Some(after)) => ExecutionEngine::compare_digests(before, &after),
                 _ => failed("an after-execution protected-region capture failed or was refused"),
             },
             None => failed("the protected region's before-execution capture failed or was refused"),
-        });
+        }, false)));
     }
     RegionMeasurement { target, protected, available: true, target_is_canvas: false,
-        target_source: "the plan's selection at its target-selection stage (bounding region)" }
+        target_source: "the plan's selection, captured immediately before the evaluated edit" }
 }
 
 fn measure_target_colour<S: LiveEditSession + ?Sized>(session: &mut S, intent: &EditingIntent, plan: &EditingPlan, final_scene: &VisualScene, capture: Option<&SelectionCapture>, evaluation: &mut EvaluationReport) -> ColourCriterion {
@@ -708,6 +871,31 @@ fn measure_target_colour<S: LiveEditSession + ?Sized>(session: &mut S, intent: &
         }
     }
     let unknown = |why: &str| ColourCriterion::Unavailable(format!("the target's colour could not be measured ({why})"));
+    // Exact tier: the target's preserved per-pixel coverage plus the exact
+    // after-execution pixels give the coverage-weighted mean colour of the
+    // covered pixels - the requested colour bound to the requested region,
+    // valid even after the selection was consumed.
+    if let Some(c) = capture {
+        if let (Some(before_cov), Some(_)) = (&c.coverage, &c.before_pixels) {
+            let [x, y, w, h] = c.bounds;
+            match session.command_run("image.analysis.regionPixels",
+                serde_json::json!({"x": x, "y": y, "width": w, "height": h})) {
+                Ok(after_px) => {
+                    if let (Some(mean), Some(want)) = (exact_covered_mean(&after_px, before_cov), parse_hex_rgb(&requested)) {
+                        let tolerance = 32.0 / 255.0;
+                        let within_tolerance = want.iter().zip(mean.iter())
+                            .all(|(a, b)| (f32::from(*a) / 255.0 - *b).abs() <= tolerance);
+                        let measured = format!("#{:02x}{:02x}{:02x}",
+                            (mean[0] * 255.0).round() as u8, (mean[1] * 255.0).round() as u8, (mean[2] * 255.0).round() as u8);
+                        evaluation.observations.push(format!(
+                            "Measured colour criterion: exact coverage-weighted mean colour of the target's covered pixels is {measured}."));
+                        return ColourCriterion::Checked(ColourCheck { requested, measured, within_tolerance });
+                    }
+                }
+                Err(_) => return unknown("the exact after-execution region capture failed or was refused"),
+            }
+        }
+    }
     if final_scene.has_selection {
         let value = match session.command_run("image.analysis.colorStats",
             serde_json::json!({"maxPixels": EVIDENCE_MAX_PIXELS})) {
@@ -744,9 +932,16 @@ fn measure_target_colour<S: LiveEditSession + ?Sized>(session: &mut S, intent: &
     }));
     match matched {
         Some(within_tolerance) => {
-            evaluation.observations.push(
-                "Measured colour criterion (weak): the selection was consumed, so its bounding region was measured whole - unselected surroundings count.".into());
-            ColourCriterion::Checked(ColourCheck { requested, measured: "dominant colours of the bounding region".into(), within_tolerance })
+            // Diagnostic only: the selection was consumed, so this measures
+            // the bounding region whole - unselected surroundings count, and
+            // a colour merely surviving anywhere in the region has produced
+            // false matches. It is recorded for the report and can NEVER
+            // satisfy the criterion.
+            evaluation.observations.push(format!(
+                "Colour diagnostic (cannot satisfy the criterion): with the selection consumed and no exact coverage preserved, the requested colour {} a dominant colour of the whole bounding region, unselected surroundings included.",
+                if within_tolerance { "is" } else { "is not" }));
+            ColourCriterion::Unavailable(
+                "the selection was consumed without a preserved exact coverage; the bounding-region dominant-colour check is diagnostic only".into())
         }
         None => unknown("no dominant colours in the region result"),
     }
@@ -796,10 +991,10 @@ mod region_watch_tests {
         VisualEvidence { class, detail: "test".into() }
     }
 
-    fn measurement(target: Option<VisualEvidenceClass>, protected: Vec<VisualEvidenceClass>, canvas: bool) -> RegionMeasurement {
+    fn measurement(target: Option<(VisualEvidenceClass, bool)>, protected: Vec<(VisualEvidenceClass, bool)>, canvas: bool) -> RegionMeasurement {
         RegionMeasurement {
-            target: target.map(evidence),
-            protected: protected.into_iter().map(evidence).collect(),
+            target: target.map(|(c, x)| (evidence(c), x)),
+            protected: protected.into_iter().map(|(c, x)| (evidence(c), x)).collect(),
             available: true,
             target_is_canvas: canvas,
             target_source: "test region",
@@ -817,7 +1012,7 @@ mod region_watch_tests {
         let watch = RegionWatch::new(&scene, &plan(&[("layer.fill.set", 2)]));
         assert!(watch.target_is_canvas && watch.protected.is_empty());
         let mut report = satisfied_report();
-        let grounding = measurement(Some(VisualEvidenceClass::Changed), Vec::new(), true)
+        let grounding = measurement(Some((VisualEvidenceClass::Changed, true)), Vec::new(), true)
             .apply(IntentCategory::ColorStyling, &mut report);
         assert!(matches!(grounding, CompletionGrounding::Unverified(_)), "a canvas-spanning target must not complete a local recolour");
         assert!(report.intent_satisfied, "execution success alone stays untouched; completion is withheld by grounding");
@@ -836,7 +1031,7 @@ mod region_watch_tests {
     #[test]
     fn missing_capture_is_unverified_not_completed() {
         let mut report = satisfied_report();
-        let grounding = measurement(Some(VisualEvidenceClass::Unknown), vec![VisualEvidenceClass::Unknown], false)
+        let grounding = measurement(Some((VisualEvidenceClass::Unknown, false)), vec![(VisualEvidenceClass::Unknown, false)], false)
             .apply(IntentCategory::ColorStyling, &mut report);
         assert!(matches!(grounding, CompletionGrounding::Unverified(_)));
         let grounding = RegionMeasurement { target: None, protected: Vec::new(), available: false, target_is_canvas: false, target_source: "test region" }
@@ -851,7 +1046,7 @@ mod region_watch_tests {
     #[test]
     fn intentional_global_edit_change_is_activity_not_satisfaction() {
         let mut report = satisfied_report();
-        let grounding = measurement(Some(VisualEvidenceClass::Changed), Vec::new(), true)
+        let grounding = measurement(Some((VisualEvidenceClass::Changed, true)), Vec::new(), true)
             .apply(IntentCategory::PhotoEnhancement, &mut report);
         assert!(matches!(grounding, CompletionGrounding::Unverified(_)),
             "a changed canvas does not verify a global enhancement request");
@@ -861,7 +1056,7 @@ mod region_watch_tests {
     #[test]
     fn unchanged_wrong_colour_result_is_unmet_not_success() {
         let mut report = satisfied_report();
-        let grounding = measurement(Some(VisualEvidenceClass::NoChangeObserved), vec![VisualEvidenceClass::NoChangeObserved], false)
+        let grounding = measurement(Some((VisualEvidenceClass::NoChangeObserved, true)), vec![(VisualEvidenceClass::NoChangeObserved, true)], false)
             .apply(IntentCategory::ColorStyling, &mut report);
         assert!(!report.intent_satisfied, "a target with no observed change is an unmet goal");
         assert!(matches!(grounding, CompletionGrounding::Unverified(_)));
@@ -870,10 +1065,22 @@ mod region_watch_tests {
     #[test]
     fn measured_local_recolour_is_grounded_and_labels_stay_honest() {
         let mut report = satisfied_report();
-        let grounding = measurement(Some(VisualEvidenceClass::Changed),
-            vec![VisualEvidenceClass::NoChangeObserved, VisualEvidenceClass::NoChangeObserved], false)
+        let grounding = measurement(Some((VisualEvidenceClass::Changed, true)),
+            vec![(VisualEvidenceClass::NoChangeObserved, true), (VisualEvidenceClass::NoChangeObserved, true)], false)
             .apply(IntentCategory::ColorStyling, &mut report);
         assert!(matches!(grounding, CompletionGrounding::Grounded));
+        assert!(report.observations.iter().any(|o| o.contains("exact per-pixel comparison")),
+            "exact evidence is labeled exact: {:?}", report.observations);
+    }
+
+    #[test]
+    fn digest_only_evidence_never_grounds_completion() {
+        let mut report = satisfied_report();
+        let grounding = measurement(Some((VisualEvidenceClass::Changed, false)),
+            vec![(VisualEvidenceClass::NoChangeObserved, false)], false)
+            .apply(IntentCategory::ColorStyling, &mut report);
+        assert!(matches!(grounding, CompletionGrounding::Unverified(_)),
+            "sampled-grid digest evidence is diagnostic only and never grounds completion");
         assert!(report.observations.iter().any(|o| o.contains("not proof of unchanged pixels")),
             "equal digests are labeled no-difference-observed, never proof: {:?}", report.observations);
     }
@@ -881,11 +1088,11 @@ mod region_watch_tests {
     #[test]
     fn local_protected_change_fails_but_global_is_recorded_only() {
         let mut local = satisfied_report();
-        measurement(Some(VisualEvidenceClass::Changed), vec![VisualEvidenceClass::Changed], false)
+        measurement(Some((VisualEvidenceClass::Changed, true)), vec![(VisualEvidenceClass::Changed, true)], false)
             .apply(IntentCategory::ColorStyling, &mut local);
         assert!(!local.intent_satisfied, "collateral change fails a local edit");
         let mut global = satisfied_report();
-        measurement(Some(VisualEvidenceClass::Changed), vec![VisualEvidenceClass::Changed], false)
+        measurement(Some((VisualEvidenceClass::Changed, true)), vec![(VisualEvidenceClass::Changed, true)], false)
             .apply(IntentCategory::PhotoEnhancement, &mut global);
         assert!(global.intent_satisfied, "a global request legitimately alters the complement");
     }
@@ -893,7 +1100,7 @@ mod region_watch_tests {
     #[test]
     fn design_completion_rests_on_its_semantic_checks() {
         let mut report = satisfied_report();
-        let grounding = measurement(Some(VisualEvidenceClass::Changed), vec![VisualEvidenceClass::Changed], true)
+        let grounding = measurement(Some((VisualEvidenceClass::Changed, true)), vec![(VisualEvidenceClass::Changed, true)], true)
             .apply(IntentCategory::GraphicDesign, &mut report);
         assert!(matches!(grounding, CompletionGrounding::Grounded));
         assert!(report.intent_satisfied);
