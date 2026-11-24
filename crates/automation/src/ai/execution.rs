@@ -181,6 +181,9 @@ pub(crate) struct DigestMark {
     pub(crate) height: u64,
     pub(crate) stride: u64,
     pub(crate) sampled: u64,
+    /// Engine document revision the capture was taken at, when the host
+    /// reports it: binds the evidence to a document state lineage.
+    pub(crate) revision: Option<u64>,
 }
 
 /// Observed identity hint and history state of the active document, read through
@@ -260,6 +263,7 @@ impl ExecutionEngine {
         let height = value.get("height").and_then(Value::as_u64).filter(|v| *v >= 1).ok_or_else(invalid)?;
         let stride = value.get("stride").and_then(Value::as_u64).filter(|v| *v >= 1).ok_or_else(invalid)?;
         let sampled = value.get("sampledPixels").and_then(Value::as_u64).ok_or_else(invalid)?;
+        let revision = value.get("revision").and_then(Value::as_u64);
         let (x, y) = if region.is_some() {
             (value.get("x").and_then(Value::as_i64).ok_or_else(invalid)?,
              value.get("y").and_then(Value::as_i64).ok_or_else(invalid)?)
@@ -276,7 +280,7 @@ impl ExecutionEngine {
         if cols.checked_mul(rows) != Some(sampled) {
             return Err(invalid());
         }
-        Ok(Some(DigestMark { digest, x, y, width, height, stride, sampled }))
+        Ok(Some(DigestMark { digest, x, y, width, height, stride, sampled, revision }))
     }
 
     /// Compare two captures. A dimension change is an observable change of
@@ -309,20 +313,25 @@ impl ExecutionEngine {
                 ),
             };
         }
+        let revision_note = match (before.revision, after.revision) {
+            (Some(b), Some(a)) if b == a => format!("; SAME document revision {b} at both captures: no journaled change landed between them"),
+            (Some(b), Some(a)) => format!("; document revisions {b} -> {a}"),
+            _ => "; capture revisions unreported".to_string(),
+        };
         if before.digest != after.digest {
             VisualEvidence {
                 class: VisualEvidenceClass::Changed,
                 detail: format!(
-                    "the sampled quantized composite data differs ({}x{}, stride {}, {} px sampled); a data difference is not proof of a visible appearance change, intent or quality",
-                    after.width, after.height, after.stride, after.sampled
+                    "the sampled quantized composite data differs ({}x{}, stride {}, {} px sampled{}); a data difference is not proof of a visible appearance change, intent or quality",
+                    after.width, after.height, after.stride, after.sampled, revision_note
                 ),
             }
         } else {
             VisualEvidence {
                 class: VisualEvidenceClass::NoChangeObserved,
                 detail: format!(
-                    "no difference observed on the sampled, 8-bit-clamped grid ({}x{}, stride {}, {} px sampled); sampling, quantization and hash collisions can hide changes",
-                    after.width, after.height, after.stride, after.sampled
+                    "no difference observed on the sampled, 8-bit-clamped grid ({}x{}, stride {}, {} px sampled{}); sampling, quantization and hash collisions can hide changes",
+                    after.width, after.height, after.stride, after.sampled, revision_note
                 ),
             }
         }

@@ -221,6 +221,12 @@ impl NaturalLanguageEngine {
             ("charcoal", "#334155"),
             ("coral", "#fb7185"),
             ("teal", "#0d9488"),
+            ("red", "#dc2626"),
+            ("orange", "#ea580c"),
+            ("yellow", "#eab308"),
+            ("purple", "#9333ea"),
+            ("violet", "#8b5cf6"),
+            ("brown", "#92400e"),
         ];
 
         for (name, hex) in named_colors {
@@ -230,6 +236,40 @@ impl NaturalLanguageEngine {
         }
 
         None
+    }
+
+    /// Every distinct colour the prompt names, longest names first and
+    /// deduplicated by hex ("navy blue" counts once, not also as "blue").
+    /// More than one means a colour criterion cannot tell WHICH colour binds
+    /// to WHICH object ("keep the background red, make the shirt blue") and
+    /// must stay unverified rather than checking the wrong one.
+    pub(crate) fn colour_terms(&self, text: &str) -> Vec<String> {
+        // Same table as extract_color, longest names first.
+        let named_colors: &[(&str, &str)] = &[
+            ("navy blue", "#0f172a"), ("royal blue", "#1d4ed8"), ("sky blue", "#38bdf8"),
+            ("sage green", "#84a98c"), ("blush pink", "#fbcfe8"), ("pure white", "#ffffff"),
+            ("dark slate", "#0f172a"), ("champagne", "#fde68a"), ("charcoal", "#334155"),
+            ("emerald", "#059669"), ("golden", "#f59e0b"), ("navy", "#1e293b"),
+            ("blue", "#2563eb"), ("gold", "#d97706"), ("sage", "#94a3b8"),
+            ("green", "#16a34a"), ("rose", "#f43f5e"), ("pink", "#ec4899"),
+            ("cream", "#fef3c7"), ("white", "#ffffff"), ("black", "#000000"),
+            ("gray", "#64748b"), ("coral", "#fb7185"), ("teal", "#0d9488"),
+            ("red", "#dc2626"), ("orange", "#ea580c"), ("yellow", "#eab308"),
+            ("purple", "#9333ea"), ("violet", "#8b5cf6"), ("brown", "#92400e"),
+        ];
+        let mut spans: Vec<(usize, usize)> = Vec::new();
+        let mut found: Vec<String> = Vec::new();
+        for (name, hex) in named_colors {
+            let mut at = 0;
+            while let Some(pos) = text[at..].find(name) {
+                let (s, e) = (at + pos, at + pos + name.len());
+                at = e;
+                if spans.iter().any(|(cs, ce)| s >= *cs && e <= *ce) { continue; }
+                spans.push((s, e));
+                if !found.iter().any(|h| h == hex) { found.push((*hex).to_string()); }
+            }
+        }
+        found
     }
 
     fn extract_numeric(&self, text: &str) -> Option<f64> {
