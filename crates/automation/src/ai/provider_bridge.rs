@@ -2345,6 +2345,8 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
         if filter.is_none() {
             for (key, value) in map {
                 let valid = match key.as_str() {
+                    // Quick Selection's brush size has its own 1..5000 block.
+                    "size" if step.command == "select.quick" => true,
                     "size" => number(key, 6.0, 512.0),
                     // Commands with their own color vocabulary (group label names,
                     // gradient stop swatches) validate it in their dedicated blocks.
@@ -2381,6 +2383,9 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
                     "sampleAllLayers" | "refine" => value.is_boolean(),
                     // Newly admitted adjustment kinds.
                     "exposure" => number(key, -20.0, 20.0),
+                    // Exposure's offset is a number; gradient offsets are [x%,y%] arrays
+                    // validated in the gradient blocks.
+                    "offset" if step.command != "layer.newAdjustmentLayer.exposure" => true,
                     "offset" => number(key, -0.5, 0.5),
                     "levels" => number(key, 2.0, 255.0),
                     "level" => number(key, 1.0, 255.0),
