@@ -940,18 +940,34 @@ fn region_pixels(s: &mut Session, p: &Value) -> Result<Value> {
     }))
 }
 
-/// Exact per-pixel selection coverage (f32, row-major over the selection's
-/// content bounds): preserves the target's exact coverage locally so it
-/// survives the selection's consumption by the edit being measured.
-fn selection_coverage(s: &mut Session, _p: &Value) -> Result<Value> {
+/// Exact per-pixel selection coverage (f32, row-major): preserves the
+/// target's exact coverage locally so it survives the selection's
+/// consumption by the edit being measured. Without a rect the selection's
+/// content bounds are read; an all-or-none x/y/width/height rect reads
+/// exactly that region (clamped to the canvas), which is how tiled callers
+/// stay under the cap.
+fn selection_coverage(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "image.analysis.selectionCoverage";
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let d = st.doc.clone();
     let revision = st.revision;
     let sel = d.selection.as_ref().ok_or_else(|| bad(CMD, "no active selection"))?;
-    let r = sel.content_bounds().intersect(&d.bounds());
+    let rect_param = ["x", "y", "width", "height"].iter().map(|k| p.get(*k).and_then(Value::as_i64)).collect::<Vec<_>>();
+    let r = if rect_param.iter().all(Option::is_some) {
+        let (x, y) = (rect_param[0].unwrap(), rect_param[1].unwrap());
+        let (rw, rh) = (rect_param[2].unwrap(), rect_param[3].unwrap());
+        if !(1..=i64::from(u32::MAX)).contains(&rw) || !(1..=i64::from(u32::MAX)).contains(&rh)
+            || x < i64::from(i32::MIN) || x > i64::from(i32::MAX) || y < i64::from(i32::MIN) || y > i64::from(i32::MAX) {
+            return Err(bad(CMD, "region needs integer x/y and width/height in 1..=u32::MAX"));
+        }
+        d.bounds().intersect(&Rect::from_xywh(x as i32, y as i32, rw as u32, rh as u32))
+    } else if rect_param.iter().any(Option::is_some) {
+        return Err(bad(CMD, "x, y, width and height are all-or-none"));
+    } else {
+        sel.content_bounds().intersect(&d.bounds())
+    };
     if r.is_empty() {
-        return Err(bad(CMD, "the selection is empty"));
+        return Err(bad(CMD, "the selection (or requested region) is empty"));
     }
     if u64::from(r.width()) * u64::from(r.height()) > MAX_EXACT_REGION_PIXELS {
         return Err(bad(CMD, format!(
@@ -1609,7 +1625,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.analysis.selectionCoverage",
             "Selection Coverage",
             ["Image", "Analysis"],
-            r##"{} → read-only exact per-pixel coverage of the active selection over its content bounds (max 262144 px)"##,
+            r##"{"x":int,"y":int,"width":int,"height":int (optional, all-or-none; default the selection's content bounds; max 262144 px)} → read-only exact per-pixel coverage of the active selection over the region"##,
             has_doc,
             selection_coverage,
             false

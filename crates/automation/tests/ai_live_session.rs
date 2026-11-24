@@ -920,11 +920,10 @@ fn selection_stage_capture_binds_the_plans_target_before_the_edit() {
     assert_eq!(capture.bounds, [0, 0, 64, 64]);
     assert!(!capture.document_name.is_empty(), "the document identity rides the capture");
     let coverage = capture.coverage.expect("the selection's exact per-pixel coverage is preserved before the edit");
-    assert_eq!(coverage.get("format").and_then(Value::as_str), Some("coverage-f32-rowmajor"));
-    assert_eq!(coverage.get("coverage").and_then(Value::as_array).map(Vec::len), Some(64 * 64));
+    assert_eq!(coverage.len(), 64 * 64, "one coverage value per pixel of the bounding region");
+    assert!(coverage.iter().all(|c| *c > 0.0), "select.all covers every pixel");
     let before = capture.before_pixels.expect("the exact before-pixels are captured before the edit");
-    assert_eq!(before.get("format").and_then(Value::as_str), Some("rgba-f32-rowmajor"));
-    assert_eq!(before.get("pixels").and_then(Value::as_array).map(Vec::len), Some(64 * 64 * 4));
+    assert_eq!(before.len(), 64 * 64 * 4, "RGBA f32 per pixel of the bounding region");
     assert!(capture.region.is_some(), "the selection's bounding region is digested before the edit");
     assert!(capture.protected.is_empty(), "a full-canvas selection leaves no protected complement to measure");
     let stats = capture.color_stats.expect("coverage-aware colour statistics ride the capture");

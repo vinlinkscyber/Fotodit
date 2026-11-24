@@ -106,18 +106,19 @@ pub struct SelectionCapture {
     /// Selection content bounds [x, y, width, height] at capture time.
     pub bounds: [i64; 4],
     pub revision: Option<u64>,
-    /// Exact per-pixel coverage of the selection over `bounds` (engine
-    /// selectionCoverage JSON): the target's exact coverage, preserved
-    /// locally so it survives the selection's consumption.
-    pub coverage: Option<Value>,
-    /// Exact rendered pixels of `bounds` before the edit (engine
-    /// regionPixels JSON), when the region fit the exact cap.
-    pub before_pixels: Option<Value>,
+    /// Exact per-pixel coverage of the selection over `bounds` (row-major
+    /// f32, tiled under the engine's per-call cap, 2M-px aggregate): the
+    /// target's exact coverage, preserved locally so it survives the
+    /// selection's consumption.
+    pub coverage: Option<Vec<f32>>,
+    /// Exact rendered pixels of `bounds` before the edit (row-major RGBA
+    /// f32, same tiling and budget).
+    pub before_pixels: Option<Vec<f32>>,
     pub region: Option<DigestMark>,
     /// Up to four border rects (top, bottom, left, right) with their digests.
     pub protected: Vec<([i64; 4], Option<DigestMark>)>,
     /// Exact rendered pixels of each border rect before the edit.
-    pub protected_pixels: Vec<([i64; 4], Option<Value>)>,
+    pub protected_pixels: Vec<([i64; 4], Option<Vec<f32>>)>,
     /// Selection-domain colour statistics (engine JSON shape), when captured.
     pub color_stats: Option<Value>,
 }
@@ -335,6 +336,74 @@ impl ExecutionEngine {
         Ok(Some(DigestMark { digest, x, y, width, height, stride, sampled, revision }))
     }
 
+    /// Parse an engine regionPixels result into (x, y, width, height, pixels).
+    pub(crate) fn parse_exact_region(value: &Value) -> Option<(i64, i64, u64, u64, Vec<f32>)> {
+        if value.get("format").and_then(Value::as_str) != Some("rgba-f32-rowmajor") { return None; }
+        let x = value.get("x").and_then(Value::as_i64)?;
+        let y = value.get("y").and_then(Value::as_i64)?;
+        let width = value.get("width").and_then(Value::as_u64).filter(|v| *v >= 1)?;
+        let height = value.get("height").and_then(Value::as_u64).filter(|v| *v >= 1)?;
+        let pixels: Vec<f32> = value.get("pixels")?.as_array()?.iter().map(|v| v.as_f64().map(|f| f as f32)).collect::<Option<_>>()?;
+        if pixels.len() as u64 != width.checked_mul(height)?.checked_mul(4)? { return None; }
+        Some((x, y, width, height, pixels))
+    }
+
+    /// Parse an engine selectionCoverage result into (x, y, width, height, coverage).
+    pub(crate) fn parse_coverage(value: &Value) -> Option<(i64, i64, u64, u64, Vec<f32>)> {
+        if value.get("format").and_then(Value::as_str) != Some("coverage-f32-rowmajor") { return None; }
+        let x = value.get("x").and_then(Value::as_i64)?;
+        let y = value.get("y").and_then(Value::as_i64)?;
+        let width = value.get("width").and_then(Value::as_u64).filter(|v| *v >= 1)?;
+        let height = value.get("height").and_then(Value::as_u64).filter(|v| *v >= 1)?;
+        let coverage: Vec<f32> = value.get("coverage")?.as_array()?.iter().map(|v| v.as_f64().map(|f| f as f32)).collect::<Option<_>>()?;
+        if coverage.len() as u64 != width.checked_mul(height)? { return None; }
+        Some((x, y, width, height, coverage))
+    }
+
+    /// Tiled exact capture of `command` ("image.analysis.regionPixels" or
+    /// "image.analysis.selectionCoverage") over a region into one row-major
+    /// buffer: 512x512 tiles (the engine's 262144-px per-call cap) scattered
+    /// into place so no full-region JSON value ever exists, hard aggregate
+    /// budget 2M px (32MB of RGBA f32 / 8MB of coverage at 16/4 bytes per
+    /// pixel), checked arithmetic throughout. None on any shortfall.
+    pub(crate) fn capture_tiled<S: LiveEditSession + ?Sized>(session: &mut S, command: &str, rect: [i64; 4], channels: u64) -> Option<Vec<f32>> {
+        const TILE: u64 = 512;
+        const MAX_AGGREGATE_PIXELS: u64 = 2_000_000;
+        let (x0, y0) = (rect[0], rect[1]);
+        let (w, h) = (u64::try_from(rect[2]).ok()?, u64::try_from(rect[3]).ok()?);
+        let total = w.checked_mul(h)?;
+        if total == 0 || total > MAX_AGGREGATE_PIXELS { return None; }
+        let len = usize::try_from(total.checked_mul(channels)?).ok()?;
+        let mut out = Vec::new();
+        out.try_reserve_exact(len).ok()?;
+        out.resize(len, 0.0);
+        let mut ty = 0u64;
+        while ty < h {
+            let th = TILE.min(h - ty);
+            let mut tx = 0u64;
+            while tx < w {
+                let tw = TILE.min(w - tx);
+                let value = session.command_run(command,
+                    json!({"x": x0 + tx as i64, "y": y0 + ty as i64, "width": tw, "height": th})).ok()?;
+                let (_, _, pw, ph, px) = if channels == 4 {
+                    Self::parse_exact_region(&value)?
+                } else {
+                    Self::parse_coverage(&value)?
+                };
+                if pw != tw || ph != th { return None; }
+                for row in 0..ph {
+                    let src = usize::try_from(row.checked_mul(tw.checked_mul(channels)?)?).ok()?;
+                    let dst = usize::try_from(((ty + row).checked_mul(w)?.checked_add(tx)?).checked_mul(channels)?).ok()?;
+                    let n = usize::try_from(tw.checked_mul(channels)?).ok()?;
+                    out[dst..dst + n].copy_from_slice(&px[src..src + n]);
+                }
+                tx += tw;
+            }
+            ty += th;
+        }
+        Some(out)
+    }
+
     /// The target-selection stage capture, taken IMMEDIATELY BEFORE the
     /// operation whose effect is being evaluated: document identity, the
     /// selection's exact per-pixel coverage and the region's exact rendered
@@ -361,17 +430,15 @@ impl ExecutionEngine {
         for (i, v) in a.iter().enumerate() { bounds[i] = v.as_i64()?; }
         if bounds[2] <= 0 || bounds[3] <= 0 { return None; }
         let [tx, ty, tw, th] = bounds;
-        let coverage = session.command_run("image.analysis.selectionCoverage", json!({})).ok();
-        let before_pixels = session.command_run("image.analysis.regionPixels",
-            json!({"x": tx, "y": ty, "width": tw, "height": th})).ok();
+        let coverage = Self::capture_tiled(session, "image.analysis.selectionCoverage", bounds, 1);
+        let before_pixels = Self::capture_tiled(session, "image.analysis.regionPixels", bounds, 4);
         let region = Self::capture_digest(session, Some(bounds)).ok().flatten();
         let mut protected = Vec::new();
         let mut protected_pixels = Vec::new();
         for rect in [[0, 0, cw, ty], [0, ty + th, cw, ch - ty - th], [0, ty, tx, th], [tx + tw, ty, cw - tx - tw, th]] {
             if rect[2] > 0 && rect[3] > 0 {
                 let mark = Self::capture_digest(session, Some(rect)).ok().flatten();
-                let px = session.command_run("image.analysis.regionPixels",
-                    json!({"x": rect[0], "y": rect[1], "width": rect[2], "height": rect[3]})).ok();
+                let px = Self::capture_tiled(session, "image.analysis.regionPixels", rect, 4);
                 protected.push((rect, mark));
                 protected_pixels.push((rect, px));
             }

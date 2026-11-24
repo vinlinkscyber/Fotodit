@@ -442,69 +442,8 @@ struct RegionWatch {
     target_source: &'static str,
 }
 
-/// Parse an engine regionPixels result into (x, y, width, height, pixels).
-fn parse_exact_region(value: &Value) -> Option<(i64, i64, u64, u64, Vec<f32>)> {
-    if value.get("format").and_then(Value::as_str) != Some("rgba-f32-rowmajor") { return None; }
-    let x = value.get("x").and_then(Value::as_i64)?;
-    let y = value.get("y").and_then(Value::as_i64)?;
-    let width = value.get("width").and_then(Value::as_u64).filter(|v| *v >= 1)?;
-    let height = value.get("height").and_then(Value::as_u64).filter(|v| *v >= 1)?;
-    let pixels: Vec<f32> = value.get("pixels")?.as_array()?.iter().map(|v| v.as_f64().map(|f| f as f32)).collect::<Option<_>>()?;
-    if pixels.len() as u64 != width * height * 4 { return None; }
-    Some((x, y, width, height, pixels))
-}
 
-/// Exact whole-region comparison over an identical rect and grid: the count
-/// of differing pixels. 0 differing pixels means exactly identical rendered
-/// RGBA over the region - real evidence, not a sampled-grid observation.
-fn compare_exact_regions(before: &Value, after: &Value) -> Option<u64> {
-    let (bx, by, bw, bh, bp) = parse_exact_region(before)?;
-    let (ax, ay, aw, ah, ap) = parse_exact_region(after)?;
-    if (bx, by, bw, bh) != (ax, ay, aw, ah) { return None; }
-    let mut changed = 0u64;
-    for (a, b) in ap.chunks_exact(4).zip(bp.chunks_exact(4)) {
-        if a != b { changed += 1; }
-    }
-    Some(changed)
-}
 
-/// Tiled exact capture of a region into one row-major RGBA f32 buffer:
-/// 512x512 tiles (the engine's 262144-px per-call cap), scattered into place
-/// so no full-region JSON value ever exists, with a hard aggregate budget of
-/// 2M pixels (32MB of f32 at 16 bytes/pixel) per capture. All size math is
-/// checked; any shortfall, shape mismatch or refused tile is honest None.
-fn capture_exact_tiled<S: LiveEditSession + ?Sized>(session: &mut S, rect: [i64; 4]) -> Option<Vec<f32>> {
-    const TILE: u64 = 512;
-    const MAX_AGGREGATE_PIXELS: u64 = 2_000_000;
-    let (x0, y0) = (rect[0], rect[1]);
-    let (w, h) = (u64::try_from(rect[2]).ok()?, u64::try_from(rect[3]).ok()?);
-    let total = w.checked_mul(h)?;
-    if total == 0 || total > MAX_AGGREGATE_PIXELS { return None; }
-    let mut out = Vec::new();
-    out.try_reserve_exact(usize::try_from(total.checked_mul(4)?).ok()?).ok()?;
-    out.resize(usize::try_from(total.checked_mul(4)?).ok()?, 0.0);
-    let mut ty = 0u64;
-    while ty < h {
-        let th = TILE.min(h - ty);
-        let mut tx = 0u64;
-        while tx < w {
-            let tw = TILE.min(w - tx);
-            let value = session.command_run("image.analysis.regionPixels",
-                json!({"x": x0 + tx as i64, "y": y0 + ty as i64, "width": tw, "height": th})).ok()?;
-            let (_, _, pw, ph, px) = parse_exact_region(&value)?;
-            if pw != tw || ph != th { return None; }
-            for row in 0..ph {
-                let src = usize::try_from(row.checked_mul(tw.checked_mul(4)?)?).ok()?;
-                let dst = usize::try_from(((ty + row).checked_mul(w)?.checked_add(tx)?).checked_mul(4)?).ok()?;
-                let len = usize::try_from(tw.checked_mul(4)?).ok()?;
-                out[dst..dst + len].copy_from_slice(&px[src..src + len]);
-            }
-            tx += tw;
-        }
-        ty += th;
-    }
-    Some(out)
-}
 
 /// Exact comparison of two same-shape raw buffers: the differing-pixel count.
 fn compare_exact_raw(before: &[f32], after: &[f32]) -> Option<u64> {
@@ -516,31 +455,17 @@ fn compare_exact_raw(before: &[f32], after: &[f32]) -> Option<u64> {
     Some(changed)
 }
 
-/// Parse an engine selectionCoverage result into (x, y, width, height, coverage).
-fn parse_coverage(value: &Value) -> Option<(i64, i64, u64, u64, Vec<f32>)> {
-    if value.get("format").and_then(Value::as_str) != Some("coverage-f32-rowmajor") { return None; }
-    let x = value.get("x").and_then(Value::as_i64)?;
-    let y = value.get("y").and_then(Value::as_i64)?;
-    let width = value.get("width").and_then(Value::as_u64).filter(|v| *v >= 1)?;
-    let height = value.get("height").and_then(Value::as_u64).filter(|v| *v >= 1)?;
-    let coverage: Vec<f32> = value.get("coverage")?.as_array()?.iter().map(|v| v.as_f64().map(|f| f as f32)).collect::<Option<_>>()?;
-    if coverage.len() as u64 != width * height { return None; }
-    Some((x, y, width, height, coverage))
-}
 
-/// Exact covered/uncovered comparison: the selection's preserved per-pixel
-/// coverage splits the bounding region into the target (ANY nonzero
-/// coverage, so feathered and low-opacity edges are never discarded) and
-/// the region's collateral (exactly zero coverage). Returns
-/// (covered_changed, covered_total, collateral_changed). The preserved
-/// coverage is what lets this survive the selection's consumption.
-fn compare_exact_coverage(before: &Value, after: &Value, coverage: &Value) -> Option<(u64, u64, u64)> {
-    let (bx, by, bw, bh, bp) = parse_exact_region(before)?;
-    let (ax, ay, aw, ah, ap) = parse_exact_region(after)?;
-    let (cx, cy, cw, ch, cov) = parse_coverage(coverage)?;
-    if (bx, by, bw, bh) != (ax, ay, aw, ah) || (bx, by, bw, bh) != (cx, cy, cw, ch) { return None; }
+/// Exact covered/uncovered comparison over raw row-major buffers: the
+/// selection's preserved per-pixel coverage splits the bounding region into
+/// the target (ANY nonzero coverage, so feathered and low-opacity edges are
+/// never discarded) and the region's collateral (exactly zero coverage).
+/// Returns (covered_changed, covered_total, collateral_changed). The
+/// preserved coverage is what lets this survive the selection's consumption.
+fn compare_exact_coverage(before: &[f32], after: &[f32], coverage: &[f32]) -> Option<(u64, u64, u64)> {
+    if before.len() != after.len() || coverage.len().checked_mul(4) != Some(before.len()) { return None; }
     let (mut covered_changed, mut covered_total, mut collateral_changed) = (0u64, 0u64, 0u64);
-    for ((c, a), b) in cov.iter().zip(ap.chunks_exact(4)).zip(bp.chunks_exact(4)) {
+    for ((c, a), b) in coverage.iter().zip(after.chunks_exact(4)).zip(before.chunks_exact(4)) {
         if *c > 0.0 {
             covered_total += 1;
             if a != b { covered_changed += 1; }
@@ -551,13 +476,12 @@ fn compare_exact_coverage(before: &Value, after: &Value, coverage: &Value) -> Op
     Some((covered_changed, covered_total, collateral_changed))
 }
 
-/// Coverage-weighted mean RGB of the covered pixels of a regionPixels
-/// result, for the exact colour criterion.
-fn exact_covered_mean(pixels: &Value, coverage: &Value) -> Option<[f32; 3]> {
-    let (_, _, _, _, px) = parse_exact_region(pixels)?;
-    let (_, _, _, _, cov) = parse_coverage(coverage)?;
+/// Coverage-weighted mean RGB of the covered pixels of a raw region buffer,
+/// for the exact colour criterion. A mean verifies no distribution.
+fn exact_covered_mean(pixels: &[f32], coverage: &[f32]) -> Option<[f32; 3]> {
+    if coverage.len().checked_mul(4) != Some(pixels.len()) { return None; }
     let (mut acc, mut total) = ([0f64; 3], 0f64);
-    for (c, p) in cov.iter().zip(px.chunks_exact(4)) {
+    for (c, p) in coverage.iter().zip(pixels.chunks_exact(4)) {
         let w = f64::from(*c);
         acc[0] += w * f64::from(p[0]);
         acc[1] += w * f64::from(p[1]);
@@ -681,7 +605,7 @@ impl RegionWatch {
         if self.target.is_none() && self.protected.is_empty() { return None; }
         let mut out = Vec::new();
         for (is_target, rect) in self.target.iter().map(|r| (true, r)).chain(self.protected.iter().map(|r| (false, r))) {
-            let pixels = capture_exact_tiled(session, *rect);
+            let pixels = ExecutionEngine::capture_tiled(session, "image.analysis.regionPixels", *rect, 4);
             match ExecutionEngine::capture_digest(session, Some(*rect)) {
                 Ok(Some(mark)) => out.push(CapturedRegion { target: is_target, rect: *rect, mark: Some(mark), pixels }),
                 // No digest capability is not the end when exact pixels were captured.
@@ -888,14 +812,13 @@ fn measure_from_selection_stage<S: LiveEditSession + ?Sized>(session: &mut S, ca
     // survives the selection's consumption and needs no surviving selection.
     let target_exact = match (&capture.before_pixels, &capture.coverage) {
         (Some(before_px), Some(cov)) => {
-            let [x, y, w, h] = capture.bounds;
-            match session.command_run("image.analysis.regionPixels", json!({"x": x, "y": y, "width": w, "height": h})) {
-                Ok(after_px) => compare_exact_coverage(before_px, &after_px, cov).map(|(covered_changed, covered_total, collateral_changed)| {
+            match ExecutionEngine::capture_tiled(session, "image.analysis.regionPixels", capture.bounds, 4) {
+                Some(after_px) => compare_exact_coverage(before_px, &after_px, cov).map(|(covered_changed, covered_total, collateral_changed)| {
                     let class = if covered_changed > 0 { VisualEvidenceClass::Changed } else { VisualEvidenceClass::NoChangeObserved };
                     (VisualEvidence { class, detail: format!(
                         "exact per-pixel comparison under the selection's preserved coverage: {covered_changed} of {covered_total} covered (target) pixels differ; {collateral_changed} collateral pixel(s) inside the bounding region also differ") }, true)
                 }),
-                Err(_) => Some((failed("the after-execution exact region capture failed or was refused"), false)),
+                None => Some((failed("the after-execution exact region capture failed, was refused, or exceeded the aggregate budget"), false)),
             }
         }
         _ => None,
@@ -907,15 +830,14 @@ fn measure_from_selection_stage<S: LiveEditSession + ?Sized>(session: &mut S, ca
     let mut protected = Vec::new();
     for ((rect, before), (_, before_px)) in capture.protected.iter().zip(capture.protected_pixels.iter()) {
         let exact = match before_px {
-            Some(before_px) => match session.command_run("image.analysis.regionPixels",
-                json!({"x": rect[0], "y": rect[1], "width": rect[2], "height": rect[3]})) {
-                Ok(after_px) => compare_exact_regions(before_px, &after_px).map(|changed| {
+            Some(before_px) => match ExecutionEngine::capture_tiled(session, "image.analysis.regionPixels", *rect, 4) {
+                Some(after_px) => compare_exact_raw(before_px, &after_px).map(|changed| {
                     let class = if changed > 0 { VisualEvidenceClass::Changed } else { VisualEvidenceClass::NoChangeObserved };
                     (VisualEvidence { class, detail: format!(
                         "exact per-pixel comparison over {} pixels of the protected region: {changed} pixels differ",
                         rect[2] * rect[3]) }, true)
                 }),
-                Err(_) => Some((failed("an after-execution exact protected-region capture failed or was refused"), false)),
+                None => Some((failed("an after-execution exact protected-region capture failed, was refused, or exceeded the aggregate budget"), false)),
             },
             None => None,
         };
@@ -964,10 +886,8 @@ fn measure_target_colour<S: LiveEditSession + ?Sized>(session: &mut S, intent: &
     // valid even after the selection was consumed.
     if let Some(c) = capture {
         if let (Some(before_cov), Some(_)) = (&c.coverage, &c.before_pixels) {
-            let [x, y, w, h] = c.bounds;
-            match session.command_run("image.analysis.regionPixels",
-                serde_json::json!({"x": x, "y": y, "width": w, "height": h})) {
-                Ok(after_px) => {
+            match ExecutionEngine::capture_tiled(session, "image.analysis.regionPixels", c.bounds, 4) {
+                Some(after_px) => {
                     if let (Some(mean), Some(want)) = (exact_covered_mean(&after_px, before_cov), parse_hex_rgb(&requested)) {
                         let tolerance = 32.0 / 255.0;
                         let within_tolerance = want.iter().zip(mean.iter())
@@ -979,7 +899,7 @@ fn measure_target_colour<S: LiveEditSession + ?Sized>(session: &mut S, intent: &
                         return ColourCriterion::Checked(ColourCheck { requested, measured, within_tolerance });
                     }
                 }
-                Err(_) => return unknown("the exact after-execution region capture failed or was refused"),
+                None => return unknown("the exact after-execution region capture failed, was refused, or exceeded the aggregate budget"),
             }
         }
     }
