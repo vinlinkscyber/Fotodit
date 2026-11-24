@@ -1020,6 +1020,14 @@ fn layer_mask_coverage(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(CMD, "x, y, width and height are all-or-none"));
     } else {
         let (cw, ch) = (d.size.width, d.size.height);
+        // The full-canvas scan runs before the cap check below, so bound
+        // its allocation honestly (same 16M px bound as inspect's
+        // maskBounds); larger canvases use the rect form for tiled reads.
+        if u64::from(cw) * u64::from(ch) > 16_000_000 {
+            return Err(bad(CMD, format!(
+                "the canvas is too large for a full mask scan ({}×{} px; pass x/y/width/height for tiled reads)",
+                cw, ch)));
+        }
         let mut values = Vec::new();
         mask.values_into(Rect::from_xywh(0, 0, cw, ch), &mut values);
         let (w, h) = (cw as i32, ch as i32);

@@ -12,8 +12,8 @@ use serde_json::{Value, json};
 
 use super::{AiContext, AiEngine, AiError, EditingIntent, EditingPlan, EvaluationReport,
     ExecutionEngine, ExecutionEvidence, ExecutionResult, IntentCategory, LiveEditSession,
-    PlanStep, VisualScene};
-use super::execution::{DigestMark, EVIDENCE_MAX_PIXELS};
+    PlanStep, VisualElement, VisualScene};
+use super::execution::{DigestMark, SelectionCapture, EVIDENCE_MAX_PIXELS};
 use super::natural_language::NaturalLanguageEngine;
 use super::{VisualEvidence, VisualEvidenceClass};
 use crate::AutomationError;
@@ -1108,7 +1108,8 @@ mod region_watch_tests {
     fn plan(steps: &[(&str, u64)]) -> EditingPlan {
         EditingPlan { title: "t".into(), rationale: "r".into(), category: IntentCategory::ColorStyling, steps: steps.iter()
             .map(|(command, layer)| PlanStep { command: command.to_string(),
-                params: json!({"layer": layer}), description: String::new() }).collect() }
+                params: json!({"layer": layer}), description: String::new() }).collect(),
+            creates_document: false, target_size: None }
     }
 
     #[test]
