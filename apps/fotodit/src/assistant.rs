@@ -587,13 +587,17 @@ mod tests {
     /// The user's rule: AI natural editing is online-only. With no provider connected
     /// the chat says so plainly, edits nothing and leaves manual editing alone - no
     /// offline rule-based substitute runs, for a creation request or an open document.
+    /// The backend must be installed (as in the real build) with no provider consent
+    /// active; the fixture's transport counter proves no provider attempt is made.
     #[test]
     fn unconnected_chat_says_ai_is_offline_and_edits_nothing() {
-        let mut app = FotoditApp::new(fotodit_engine::Session::new(), Services::default());
+        use std::sync::atomic::Ordering;
+        let (mut app, calls, _) = chat_fixture(false);
         let ctx = egui::Context::default();
         let reply = fotodit_ui_egui::panels::assistant::submit(&mut app, &ctx, "create a poster for my taxi business called chndrax");
         assert!(reply.contains("AI editing isn't connected"), "{reply}");
         assert!(reply.contains("Manual editing"), "{reply}");
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "no provider attempt without an active provider");
         assert!(app.session.active().is_none(), "no offline substitute created a document");
         app.session.execute("file.new", serde_json::json!({"width": 32, "height": 32, "background": "white"})).unwrap();
         let before = fotodit_engine::inspect::document(app.session.active().unwrap())["history"].as_array().unwrap().len();

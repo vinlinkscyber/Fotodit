@@ -1,11 +1,11 @@
 name: Focused provider contract and portable Windows build
 
-# COMBINED VERIFICATION CANDIDATE r7 for scratch branch qual/verify-r7 (reviewer-prepared,
+# COMBINED VERIFICATION CANDIDATE r8 for scratch branch qual/verify-r8 (reviewer-prepared,
 # unexecuted). This file replaces .github/workflows/build-windows.yml ONLY on the scratch
 # branch so it stays dispatchable (workflow_dispatch requires the same workflow path on the
 # default branch; main is never touched). Changes vs the r5 candidate (run 45061554996,
 # green, editor-only zip 61.2MB delivered; user found Edit > AI Providers greyed):
-#   1. Branch guard retargeted to refs/heads/qual/verify-r7; fresh tag qual-candidate-r7
+#   1. Branch guard retargeted to refs/heads/qual/verify-r8; fresh tag qual-candidate-r8
 #      (r5 is burned; never retag).
 #   2. Menu availability fix: crates/ui-egui/src/menus/state.rs lists edit.aiProviders
 #      among the always-available shell commands. Root cause of the greyed menu: it fell
@@ -50,7 +50,7 @@ env:
 jobs:
   release:
     name: Verify tag and create the draft release
-    if: github.repository == 'vinlinkscyber/Fotodit' && github.ref == 'refs/heads/qual/verify-r7'
+    if: github.repository == 'vinlinkscyber/Fotodit' && github.ref == 'refs/heads/qual/verify-r8'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # contents:write lets the run's ephemeral GITHUB_TOKEN create the draft release and,
@@ -75,11 +75,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $out = gh api repos/vinlinkscyber/Fotodit/git/refs/tags/qual-candidate-r7
-          if ($LASTEXITCODE -ne 0) { throw "tag lookup failed (gh exit $LASTEXITCODE); tag qual-candidate-r7 must be pre-created before dispatch" }
+          $out = gh api repos/vinlinkscyber/Fotodit/git/refs/tags/qual-candidate-r8
+          if ($LASTEXITCODE -ne 0) { throw "tag lookup failed (gh exit $LASTEXITCODE); tag qual-candidate-r8 must be pre-created before dispatch" }
           $ref = $out | ConvertFrom-Json
-          if ($ref.object.type -ne 'commit') { throw "tag qual-candidate-r7 must be lightweight (point directly at a commit), got $($ref.object.type)" }
-          if ($ref.object.sha -ne $env:GITHUB_SHA) { throw "tag qual-candidate-r7 points at $($ref.object.sha), not the dispatched commit $env:GITHUB_SHA" }
+          if ($ref.object.type -ne 'commit') { throw "tag qual-candidate-r8 must be lightweight (point directly at a commit), got $($ref.object.type)" }
+          if ($ref.object.sha -ne $env:GITHUB_SHA) { throw "tag qual-candidate-r8 points at $($ref.object.sha), not the dispatched commit $env:GITHUB_SHA" }
       # Draft release assets are unmetered storage (release quotas: 2 GiB per file, no
       # total-size or bandwidth limit), unlike Actions artifact storage. Drafts are
       # visible and downloadable only to people with write access to this repository.
@@ -95,13 +95,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $ErrorActionPreference = 'Stop'
-          gh release create qual-candidate-r7 --draft --verify-tag --repo vinlinkscyber/Fotodit --title "Qualification build (draft) - run $env:GITHUB_RUN_ID" --notes 'Unsigned portable Windows x64 test build plus rendered toolbar verification evidence for the qualification candidate. Draft only: never publish. Visible and downloadable only to people with write access to this repository. SHA256SUMS.txt inside the zip verifies every packaged file.'
+          gh release create qual-candidate-r8 --draft --verify-tag --repo vinlinkscyber/Fotodit --title "Qualification build (draft) - run $env:GITHUB_RUN_ID" --notes 'Unsigned portable Windows x64 test build plus rendered toolbar verification evidence for the qualification candidate. Draft only: never publish. Visible and downloadable only to people with write access to this repository. SHA256SUMS.txt inside the zip verifies every packaged file.'
           if ($LASTEXITCODE -ne 0) { throw "gh release create failed with exit code $LASTEXITCODE" }
 
   focused:
     name: Focused tests and portable Windows build
     needs: release
-    if: github.repository == 'vinlinkscyber/Fotodit' && github.ref == 'refs/heads/qual/verify-r7'
+    if: github.repository == 'vinlinkscyber/Fotodit' && github.ref == 'refs/heads/qual/verify-r8'
     runs-on: windows-latest
     timeout-minutes: 180
     permissions:
@@ -254,7 +254,7 @@ jobs:
         run: |
           $report = Join-Path $env:RUNNER_TEMP 'fotodit-size-report.txt'
           if (Test-Path $report) {
-            gh release upload qual-candidate-r7 $report --clobber --repo vinlinkscyber/Fotodit
+            gh release upload qual-candidate-r8 $report --clobber --repo vinlinkscyber/Fotodit
             if ($LASTEXITCODE -ne 0) { throw "gh release upload failed with exit code $LASTEXITCODE" }
           } else {
             Write-Output 'No size report produced (a step before packaging failed); run log is the evidence.'
@@ -266,13 +266,13 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $zip = Join-Path $env:RUNNER_TEMP 'fotodit-portable-windows-x64.zip'
-          gh release upload qual-candidate-r7 $zip --clobber --repo vinlinkscyber/Fotodit
+          gh release upload qual-candidate-r8 $zip --clobber --repo vinlinkscyber/Fotodit
           if ($LASTEXITCODE -ne 0) { throw "gh release upload failed with exit code $LASTEXITCODE" }
 
   linux-render:
     name: Rendered toolbar verification (ubuntu-latest)
     needs: release
-    if: github.repository == 'vinlinkscyber/Fotodit' && github.ref == 'refs/heads/qual/verify-r7'
+    if: github.repository == 'vinlinkscyber/Fotodit' && github.ref == 'refs/heads/qual/verify-r8'
     runs-on: ubuntu-latest
     timeout-minutes: 180
     permissions:
@@ -353,4 +353,4 @@ jobs:
             [ -e "$f" ] && files+=("$f")
           done
           if [ ${#files[@]} -eq 0 ]; then echo 'No evidence files produced; run log is the evidence.'; exit 0; fi
-          if ! gh release upload qual-candidate-r7 "${files[@]}" --clobber --repo vinlinkscyber/Fotodit; then echo 'gh release upload failed'; exit 1; fi
+          if ! gh release upload qual-candidate-r8 "${files[@]}" --clobber --repo vinlinkscyber/Fotodit; then echo 'gh release upload failed'; exit 1; fi

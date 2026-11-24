@@ -68,17 +68,22 @@ fn main() {
 
         // Rendered proof, not only a flag read: the settings window's content (a
         // provider row and its masked key field) must be in the accessibility tree
-        // after the click. The window TITLE is not asserted: egui does not provably
-        // expose it as a queryable node (the r6 run failed exactly there, while the
-        // flag-based unit regression proved the click does open the window).
-        assert!(harness.state().ai_providers.open, "menu click did not open provider settings, document={document}");
+        // after the click. Two surfaces are deliberately NOT asserted: the window
+        // TITLE (egui does not provably expose it as a queryable node - the r6 run
+        // failed exactly there) and the state flag (ai_providers.open is private to
+        // the ui-egui crate; examples compile externally, the r7 run failed there).
+        // The unit regressions inside the crate cover the flag; here the rendered
+        // content is the proof.
         assert!(
             harness.query_by_label_contains("Google Gemini").is_some(),
             "settings window content did not render after the menu click, document={document}"
         );
         assert!(
-            harness.query_all_by_role(egui::accesskit::Role::TextInput).next().is_some(),
-            "no key entry field rendered, document={document}"
+            harness
+                .query_all_by_role(egui::accesskit::Role::PasswordInput)
+                .next()
+                .is_some(),
+            "no masked key entry field rendered, document={document}"
         );
         println!("menu click opens provider settings, document={document}");
 
