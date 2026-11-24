@@ -316,6 +316,25 @@ impl AssistantBackend for GuiAssistant {
                 {
                     let mut host = GuiSession { app: &mut *app, ctx };
                     for request in &requests {
+                        if request.command == "scene.layers" {
+                            // Targeted read past the scene's 32-layer cut:
+                            // answered locally from the full perceived scene,
+                            // so a reduced disclosure is never treated as the
+                            // complete document. Wider caps than the scene
+                            // list fit the round's measurement budget.
+                            let ids: Vec<u64> = request.params.get("ids").and_then(|v| v.as_array()).into_iter().flatten()
+                                .filter_map(|id| id.as_u64()).collect();
+                            let mut found = Vec::new();
+                            let mut missing = Vec::new();
+                            for id in &ids {
+                                match pending.scene.layers.iter().find(|l| l.id == *id) {
+                                    Some(l) => found.push(fotodit_automation::ai::scene_layer_json(l, 128, 512, 8)),
+                                    None => missing.push(*id),
+                                }
+                            }
+                            results.push(fotodit_automation::ai::ObservationResult { command: request.command.clone(), result: serde_json::json!({"layers": found, "missing": missing}) });
+                            continue;
+                        }
                         if request.command == "contract.describe" {
                             // Schema discovery is not an engine operation:
                             // answer it from the same catalog the contract was

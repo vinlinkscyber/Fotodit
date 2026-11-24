@@ -44,9 +44,11 @@ core = re.findall(r'"([\w.]+)"', re.search(r"const CORE_CONTRACT_COMMANDS: &\[&s
 obs = re.findall(r'"([\w.]+)"', re.search(r"const OBSERVATION_COMMANDS: &\[&str\] = &\[(.*?)\];", pb, re.S).group(1))
 ff = sorted(set(re.findall(r'\(\s*"(filter\.[\w.]+)"\s*,', read("crates/engine/src/filters/validation.rs"))))
 
-# contract.describe is a contract-level command answered from the command
-# catalog, not an engine registry entry; every other observation is.
-missing = [c for c in sel + ff + [o for o in obs if o != "contract.describe"] if c not in ids]
+# contract.describe (schema catalog) and scene.layers (perceived-scene read)
+# are contract-level commands, not engine registry entries; every other
+# observation is.
+CONTRACT_LEVEL = {"contract.describe", "scene.layers"}
+missing = [c for c in sel + ff + [o for o in obs if o not in CONTRACT_LEVEL] if c not in ids]
 if missing:
     raise SystemExit(f"admitted commands not found in the engine registry: {missing}")
 
@@ -100,7 +102,7 @@ def classify(c):
         return PLANNED
     return REVIEW
 
-rows = [("contract.describe", "observation")]
+rows = [("contract.describe", "observation"), ("scene.layers", "observation")]
 for c in sorted(ids):
     if c in obs:
         status = "observation"
@@ -155,7 +157,7 @@ out.append("")
 total = len(rows)
 out.append(f"- Engine registry: **{total-1}** commands (literal specs plus the generated"
            f" adjustment-layer/destructive pairs and the validated filter table),"
-           " plus the contract-level contract.describe")
+           " plus the contract-level contract.describe and scene.layers")
 out.append(f"- Admitted to the provider contract: **{len(admitted)}**"
            f" ({counts['admitted-core']} with full schemas always in the prompt,"
            f" {counts['admitted-index']} disclosed by id in `command_index`, schema on demand"
@@ -179,7 +181,8 @@ out.append("| command | bounded to |")
 out.append("| --- | --- |")
 out.append("| `image.detectFaces` | minScore 0..1, sampleAllLayers; detections carry detector uncertainty, never identities |")
 out.append("| `image.analysis.pixelDigest` | maxPixels 1..4000000; bounded statistical digest |")
-out.append("| `contract.describe` | 1..12 admitted command ids per round; answered locally from the command catalog, no engine path |")
+out.append("| `contract.describe` | 1..12 admitted command ids per round in total; answered locally from the command catalog, no engine path |")
+out.append("| `scene.layers` | 1..8 layer ids per round; answered locally from the full perceived scene, including layers past the scene list's cut |")
 out.append("")
 out.append("## Excluded commands, by family and reason")
 out.append("")

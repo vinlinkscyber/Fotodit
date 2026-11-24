@@ -40,7 +40,7 @@ pub use planner::{AiPlanner, DeterministicRulePlanner, PlanStep};
 pub use provider_bridge::{
     AiProviderBridge, ContextLoadBalancer, ContextProfile, HttpTransport, MAX_OBSERVATION_ROUNDS,
     OBSERVATION_COMMANDS,
-    ObservationRequest, ObservationResult, PlanResponse, ProviderConfig,
+    ObservationRequest, ObservationResult, PlanResponse, ProviderConfig, scene_layer_json,
     ProviderId, SystemCurlTransport, VisualVerdict,
 };
 
