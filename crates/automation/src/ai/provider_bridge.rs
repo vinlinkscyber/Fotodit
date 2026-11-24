@@ -1423,7 +1423,8 @@ const SELECTED_COMMANDS: &[&str] = &["file.new", "type.create", "type.edit", "ty
     "layer.arrange.bringForward", "layer.arrange.bringToFront",
     "layer.arrange.sendBackward", "layer.arrange.sendToBack",
     "layer.createClippingMask", "layer.releaseClippingMask",
-    "layer.new.group", "layer.translate",
+    "layer.new.group", "layer.groupLayers", "layer.translate",
+    "layer.mergeDown", "layer.mergeGroup", "layer.flattenImage",
     "layer.layerMask.revealAll", "layer.layerMask.hideAll",
     "layer.layerMask.revealSelection", "layer.layerMask.hideSelection",
     "layer.layerMask.fromTransparency", "layer.layerMask.delete", "layer.layerMask.apply",
@@ -1554,6 +1555,9 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
                 | "layer.layerMask.revealSelection" | "layer.layerMask.hideSelection"
                 | "layer.layerMask.fromTransparency" | "layer.layerMask.delete" | "layer.layerMask.apply" => vec!["layer"],
                 "layer.new.group" => vec!["name", "color", "mode", "opacity"],
+                "layer.groupLayers" => vec!["layer", "name", "color", "mode", "opacity"],
+                "layer.mergeDown" | "layer.mergeGroup" => vec!["layer"],
+                "layer.flattenImage" => vec![],
                 "layer.translate" => vec!["layer", "dx", "dy"],
                 "select.all" | "select.deselect" | "select.inverse" => vec![],
                 "select.rect" => vec!["x", "y", "width", "height", "mode", "ellipse", "line", "antiAlias", "feather"],
@@ -1567,7 +1571,10 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
         // take no keys; every other command needs at least one parameter.
         let paramless = filter.is_some_and(|rules| rules.is_empty())
             || step.command == "layer.newAdjustmentLayer.invert"
-            || matches!(step.command.as_str(), "select.all" | "select.deselect" | "select.inverse");
+            || matches!(step.command.as_str(), "select.all" | "select.deselect" | "select.inverse" | "layer.flattenImage"
+                // groupLayers' no-layer form groups the engine's active layer;
+                // any layer kind may be grouped, so no scene kind proof is due.
+                | "layer.groupLayers");
         if map.is_empty() && !paramless { return Err(refuse()); }
         if let Some(rules) = filter {
             for (key, value) in map {
@@ -1874,6 +1881,52 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
                 }
             }
         }
+        // layer.groupLayers: an optional single layer to group (the engine's
+        // no-layer form groups the active one); it must exist and be visible.
+        if step.command == "layer.groupLayers" {
+            if let Some(value) = map.get("layer") {
+                match layer_ref(Some(value)).ok_or_else(refuse)? {
+                    LayerRef::Existing(id) => {
+                        if hidden.contains(&id)
+                            || !scene.layers.iter().any(|l| l.id == id && l.is_visible) { return Err(refuse()); }
+                    }
+                    LayerRef::Created(n) => {
+                        if n >= pos || hidden_created.contains(&n)
+                            || created_at(&created, n).is_none() { return Err(refuse()); }
+                    }
+                }
+            }
+        }
+        // Merges destroy their source layer. Only explicit pre-plan layers
+        // qualify: the flat scene cannot prove a plan-created layer's
+        // stacking neighbor, and a merged-away id must not satisfy any later
+        // step (tracked like a deletion). The merge target keeps its id and
+        // stays referenceable, matching the engine (pixels::merge_down keeps
+        // the lower layer's id).
+        if step.command == "layer.mergeDown" {
+            match layer_ref(map.get("layer")).ok_or_else(refuse)? {
+                LayerRef::Existing(id) => {
+                    if hidden.contains(&id)
+                        || !scene.layers.iter().any(|l| l.id == id && l.is_visible) { return Err(refuse()); }
+                    hidden.push(id);
+                }
+                LayerRef::Created(_) => return Err(refuse()),
+            }
+        }
+        if step.command == "layer.mergeGroup" {
+            match layer_ref(map.get("layer")).ok_or_else(refuse)? {
+                LayerRef::Existing(id) => {
+                    if hidden.contains(&id)
+                        || !scene.layers.iter().any(|l| l.id == id && l.is_visible && l.kind == "Group") { return Err(refuse()); }
+                    hidden.push(id);
+                }
+                LayerRef::Created(_) => return Err(refuse()),
+            }
+        }
+        // Flattening destroys every layer the scene describes, the selection
+        // and the active-layer identity, so nothing known survives it: last
+        // step only.
+        if step.command == "layer.flattenImage" && index + 1 != plan.steps.len() { return Err(refuse()); }
         // Selection-dependent steps: inverse and selection masks need a live
         // selection at the point they run.
         if step.command == "select.inverse" && !sel { return Err(refuse()); }
@@ -1888,7 +1941,7 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
         // layer.translate: an explicit whole-pixel offset, both axes required.
         if step.command == "layer.translate"
             && (map.get("dx").and_then(Value::as_i64).is_none() || map.get("dy").and_then(Value::as_i64).is_none()) { return Err(refuse()); }
-        if step.command == "layer.new.group" {
+        if matches!(step.command.as_str(), "layer.new.group" | "layer.groupLayers") {
             if map.get("name").is_some_and(|v| !v.as_str().is_some_and(|s| !s.is_empty() && s.chars().count() <= 128)) { return Err(refuse()); }
             if map.get("color").is_some_and(|v| !matches!(v.as_str(),
                 Some("none" | "red" | "orange" | "yellow" | "green" | "seafoam" | "blue" | "indigo" | "magenta" | "fuchsia" | "violet" | "gray"))) { return Err(refuse()); }
@@ -2106,7 +2159,37 @@ mod tests {
         VisualScene { width: 400, height: 300, active_layer_id: Some(7), layers: vec![
             VisualElement { id: 7, kind: "Pixel".into(), name: "Photo".into(), is_visible: true, ..Default::default() },
             VisualElement { id: 9, kind: "Type".into(), name: "Heading".into(), text_content: Some("Original".into()), is_visible: true, ..Default::default() },
+            VisualElement { id: 11, kind: "Group".into(), name: "Set".into(), is_visible: true, ..Default::default() },
         ], ..Default::default() }
+    }
+
+    #[test]
+    fn selected_plan_admits_merges_and_grouping_within_contract() {
+        assert!(validate_selected_plan(&contract_plan("layer.groupLayers", json!({"layer": 7, "name": "Set", "color": "blue"})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("layer.groupLayers", json!({})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("layer.mergeDown", json!({"layer": 9})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("layer.mergeGroup", json!({"layer": 11})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("layer.flattenImage", json!({})), &contract_scene()).is_ok());
+    }
+
+    #[test]
+    fn selected_plan_refuses_unprovable_or_destructive_merge_forms() {
+        // A plan-created layer's stacking neighbor is unprovable from the flat scene.
+        let mut plan = contract_plan("layer.duplicate", json!({"layer": 7}));
+        plan.steps.push(PlanStep { command: "layer.mergeDown".into(), params: json!({"layer": {"$step": 1}}), description: "fixture".into() });
+        assert!(validate_selected_plan(&plan, &contract_scene()).is_err());
+        // mergeGroup needs a group, not a pixel layer.
+        assert!(validate_selected_plan(&contract_plan("layer.mergeGroup", json!({"layer": 7})), &contract_scene()).is_err());
+        // A merged-away id must not satisfy a later step.
+        let mut plan = contract_plan("layer.mergeDown", json!({"layer": 9}));
+        plan.steps.push(PlanStep { command: "layer.setProps".into(), params: json!({"layer": 9, "opacity": 0.5}), description: "fixture".into() });
+        assert!(validate_selected_plan(&plan, &contract_scene()).is_err());
+        // Flattening destroys every layer the scene describes: last step only.
+        let mut plan = contract_plan("layer.flattenImage", json!({}));
+        plan.steps.push(PlanStep { command: "layer.setProps".into(), params: json!({"layer": 7, "opacity": 0.5}), description: "fixture".into() });
+        assert!(validate_selected_plan(&plan, &contract_scene()).is_err());
+        // Group colors are the engine's enum.
+        assert!(validate_selected_plan(&contract_plan("layer.groupLayers", json!({"layer": 7, "color": "teal"})), &contract_scene()).is_err());
     }
 
     #[test]
