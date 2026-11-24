@@ -77,7 +77,7 @@ The connected path, each stage owned by named components:
 ## 4. Audited baseline
 
 Full-codebase connected-path audit, 2026-11-24. Candidate branch
-`qual/verify-r5` @ `f59605e`; `main` @ `5328e43` does not yet contain the
+`qual/verify-r8` @ `f59605e`; `main` @ `5328e43` does not yet contain the
 goal-session/assistant-app path (`apps/fotodit/src/assistant.rs`,
 `goal_session.rs`, `goal_repair.rs`, `enhancement_preflight.rs` exist only on
 the candidate). Line anchors refer to `f59605e`.
