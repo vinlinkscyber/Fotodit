@@ -290,15 +290,26 @@ shirt. Passing means every link, not a plausible render:
    Everything else stops FinalStateUnverified and routes into the bounded
    correction pass. A measured no-change target is unmet. The colour leg
    binds colour to object: NotApplicable without a named colour, Unavailable
-   with the reason for multi-colour prompts or unbound/missing selections;
-   the post-edit check prefers a surviving selection (coverage-aware) and
-   falls back to a dominant-colour check over the consumed selection's
-   bounding region, explicitly labeled weak. Remaining open: selection-shape
-   (not bounding-rect) geometry; mask-derived regions for plans that build
-   masks without an active selection; exact pixel comparison for the
-   strongest claims; goal-relevant measurement for global enhancements;
-   the weak bounding-region colour tier can false-match a requested colour
-   that already dominates the surroundings.
+   with the reason for multi-colour prompts or unbound/missing selections.
+   The target-selection capture is taken immediately before the operation
+   whose effect is evaluated and preserves the selection's exact per-pixel
+   coverage plus the region's exact rendered pixels locally (bounded at
+   262144 px, never leaving the process), with the document identity
+   recorded so rollback, cancellation or a document swap makes the
+   comparison Unknown instead of silently stale. Completion grounds only on
+   the exact tier: covered (target) pixels compared per-pixel against the
+   preserved coverage, collateral pixels inside the bounding region counted
+   separately, protected regions compared exactly. Sampled-grid digests and
+   the bounding-region dominant-colour check survive as diagnostics only -
+   recorded in observations, never authorizing completion. The colour
+   criterion's exact tier is a coverage-weighted mean over the target's own
+   covered pixels (+/-32 per channel), so it binds colour to region even
+   after the selection is consumed. Layer masks now report their bounds in
+   scene inspection. Remaining open: mask-derived measurement regions for
+   plans that build masks without an active selection (the bounds are now
+   exposed; wiring them as measurement targets is not yet done);
+   goal-relevant measurement for global enhancements; the exact cap leaves
+   very large targets on the diagnostic tier.
 4. **Correction or honest outcome.** If the measured criterion fails, the one
    structured correction pass runs; if it is exhausted, the chat says the
    goal is unmet or ambiguous, what was left in the document, and that Undo
