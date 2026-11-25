@@ -1565,7 +1565,8 @@ const SELECTED_COMMANDS: &[&str] = &["file.new", "type.create", "type.edit", "ty
     "select.float", "select.drop", "select.reselect",
     "edit.transform", "layer.removeBackground",
     "edit.fill", "edit.stroke", "image.autoTone", "image.autoContrast", "image.autoColor",
-    "image.imageSize", "image.canvasSize", "image.crop"];
+    "image.imageSize", "image.canvasSize", "image.crop",
+    "image.imageRotation.180", "image.imageRotation.90cw", "image.imageRotation.90ccw", "image.imageRotation.flipCanvasHorizontal", "image.imageRotation.flipCanvasVertical"];
 
 /// The reviewed core commands whose full engine schemas always ride in the
 /// provider contract. Every other admitted command (the rest of
@@ -1865,6 +1866,8 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
                     "mirror", "rotationAdaptation", "mode", "opacity", "preserveTransparency", "target"],
                 "edit.stroke" => vec!["width", "color", "location", "mode", "opacity", "preserveTransparency"],
                 "image.autoTone" | "image.autoContrast" | "image.autoColor" => vec![],
+                "image.imageRotation.180" | "image.imageRotation.90cw" | "image.imageRotation.90ccw"
+                | "image.imageRotation.flipCanvasHorizontal" | "image.imageRotation.flipCanvasVertical" => vec![],
                 "layer.removeBackground" => vec!["layer", "sampleAllLayers", "refine"],
                 _ => return Err(refuse()),
             },
@@ -1883,7 +1886,10 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
                 | "select.loadLuminosity" | "select.subject" | "select.sky" | "select.focusArea"
                 // Drop and reselect take no parameters at all (empty key list).
                 | "select.drop" | "select.reselect"
-                | "image.autoTone" | "image.autoContrast" | "image.autoColor");
+                | "image.autoTone" | "image.autoContrast" | "image.autoColor"
+                // Whole-canvas turns/flips take no parameters.
+                | "image.imageRotation.180" | "image.imageRotation.90cw" | "image.imageRotation.90ccw"
+                | "image.imageRotation.flipCanvasHorizontal" | "image.imageRotation.flipCanvasVertical");
         if map.is_empty() && !paramless { return Err(refuse()); }
         if let Some(rules) = filter {
             for (key, value) in map {
@@ -3016,6 +3022,11 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
             // value, not the f64 the provider sent.
             if let Some(r) = new_dpi { dpi = r as f32 as f64; }
         }
+        // A quarter turn swaps the tracked canvas dimensions the way the
+        // engine does, so later coordinates validate against the new canvas.
+        if matches!(step.command.as_str(), "image.imageRotation.90cw" | "image.imageRotation.90ccw") {
+            std::mem::swap(&mut width, &mut height);
+        }
         if step.command == "image.canvasSize" {
             if map.get("units").is_some_and(|v| !matches!(v.as_str(), Some("px" | "percent"))) { return Err(refuse()); }
             if map.get("relative").is_some_and(|v| !v.is_boolean()) { return Err(refuse()); }
@@ -3505,6 +3516,10 @@ mod tests {
         ] {
             assert!(validate_selected_plan(&contract_plan("gradient.fill.stop", params), &contract_scene()).is_err(), "{name}");
         }
+        // Canvas turns: parameterless, dimensions swap on quarter turns.
+        assert!(validate_selected_plan(&contract_plan("image.imageRotation.90cw", json!({})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("image.imageRotation.flipCanvasHorizontal", json!({})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("image.imageRotation.180", json!({"angle": 10})), &contract_scene()).is_err());
         // Layer styles: one explicit visible layer, engine units, no assets.
         assert!(validate_selected_plan(&contract_plan("layer.layerStyle.dropShadow", json!({"layer": 7, "color": "#000000", "opacity": 60, "angle": 120, "distance": 8, "size": 10, "blend": "multiply", "contour": "Cone"})), &contract_scene()).is_ok());
         assert!(validate_selected_plan(&contract_plan("layer.layerStyle.stroke", json!({"layer": 7, "size": 3, "position": "outside", "color": "#ffffff"})), &contract_scene()).is_ok());
