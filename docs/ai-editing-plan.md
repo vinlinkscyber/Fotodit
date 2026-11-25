@@ -272,6 +272,17 @@ rendered effect), a CI run for the 14 new validator tests, and a measured
 goal criterion for styles. patternOverlay and bevel texture stay excluded
 (asset references).
 
+Global-goal verification (implemented-unverified, compiler-checked only): for
+PhotoEnhancement/DirectFilter/ColorStyling/GeneralEditing requests with a
+canvas-wide target, goal_session derives one tonal direction from the request
+words (brighter, darker, more/less contrast, more/less saturated, black and
+white, warmer, cooler) and checks it on exact before/after canvas pixels
+(luma, luma stddev, mean chroma, R-B warmth; 0.5% margin, monochrome chroma
+<= 0.01). Met clears only the generic "activity is not verification" gap;
+unmet fails satisfaction; opposed or several goals, or no exact pixels, stay
+unverified. Not covered: goals with no tonal word ("make it nicer"), regions
+over the 2M-px exact budget, local requests, and any engine-executed test.
+
 ## 7. Verification gates
 
 A change counts as done only when its gate evidence exists. Gates run only with
