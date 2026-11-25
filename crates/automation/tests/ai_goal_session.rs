@@ -428,3 +428,40 @@ fn black_canvas_host() -> Headless {
     host.command_run("file.new", json!({"width": 16, "height": 16, "background": "black"})).unwrap();
     host
 }
+
+/// Provider-admitted commands that have no CommandCatalog entry (shape, layer
+/// styles, type anti-alias, image rotation) must reach the real engine through
+/// the goal loop, and engine-side parameter constraints still apply.
+#[test]
+fn real_engine_runs_uncatalogued_admitted_commands_through_the_goal_loop() {
+    let mut host = Headless::trusted_local();
+    host.command_run("file.new", json!({"width": 32, "height": 24, "background": "white"})).unwrap();
+    let steps = vec![
+        step("shape.create", json!({"kind": "rect", "rect": [4, 4, 16, 10], "fill": "#cc2200"})),
+        step("layer.layerStyle.dropShadow", json!({"layer": {"$step": 1}, "distance": 3, "size": 4})),
+        step("layer.layerStyle.stroke", json!({"layer": {"$step": 1}, "size": 2, "position": "outside", "color": "#000000"})),
+        step("image.imageRotation.90cw", json!({})),
+    ];
+    let outcome = engine(plan(steps)).process_goal_in(&mut host, &GoalRequest::new("add a red box with a shadow and an outline, then rotate the canvas"), &mut AiContext::new(), &NoGoalRepair);
+    assert_ne!(outcome.stop, GoalStop::PlanningFailed, "{:?}", outcome.stop);
+    let execution = outcome.attempts[0].execution.as_ref().expect("the plan must reach execution");
+    assert!(execution.is_success, "uncatalogued admitted commands must execute: {execution:?}");
+    let doc = host.inspect_active().unwrap().expect("document stays open");
+    let text = doc.to_string();
+    assert!(text.contains("\"width\":24") && text.contains("\"height\":32"), "quarter turn swaps the canvas size: {text}");
+}
+
+/// Admission is by id only: a made-up id is still refused before dispatch, and
+/// the engine still rejects out-of-range parameters of an admitted command.
+#[test]
+fn admission_refuses_unknown_ids_and_engine_still_rejects_bad_style_params() {
+    let mut host = Headless::trusted_local();
+    host.command_run("file.new", json!({"width": 16, "height": 16, "background": "white"})).unwrap();
+    let outcome = engine(plan(vec![step("layer.layerStyle.notAStyle", json!({}))]))
+        .process_goal_in(&mut host, &GoalRequest::new("add a style"), &mut AiContext::new(), &NoGoalRepair);
+    assert_eq!(outcome.stop, GoalStop::PlanningFailed);
+    assert!(outcome.attempts.is_empty() || outcome.attempts[0].execution.is_none());
+    let bad = engine(plan(vec![step("layer.layerStyle.stroke", json!({"layer": 1, "size": 100000, "position": "sideways"}))]))
+        .process_goal_in(&mut host, &GoalRequest::new("add an outline"), &mut AiContext::new(), &NoGoalRepair);
+    assert!(bad.attempts.first().and_then(|a| a.execution.as_ref()).is_none_or(|e| !e.is_success), "bad style params must not succeed");
+}
