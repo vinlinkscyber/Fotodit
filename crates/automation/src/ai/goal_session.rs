@@ -284,6 +284,7 @@ impl AiEngine {
                         }
                     };
                     let mut evaluation = self.eval_engine.evaluate(&intent, &scene, &final_scene, &execution);
+                    let tonal = measure_tonal_goal(intent.category, &request.original_prompt, measured.tonal.as_ref(), measured.target_is_canvas);
                     let grounding = measured.apply(intent.category, &mut evaluation);
                     // The target-colour criterion: when the request named a
                     // colour, the final selection's measured colour must match
@@ -294,6 +295,21 @@ impl AiEngine {
                         CompletionGrounding::Grounded => Vec::new(),
                         CompletionGrounding::Unverified(reason) => vec![reason],
                     };
+                    // Global tonal criterion: a met measured direction replaces
+                    // only the generic "activity is not verification" gap; every
+                    // other unverified reason (unmeasured segments, budgets) stays.
+                    match &tonal {
+                        TonalCriterion::NotApplicable => {}
+                        TonalCriterion::Met(text) => {
+                            unverified.retain(|r| r != GENERIC_GLOBAL_GAP);
+                            evaluation.observations.push(format!("Measured global tonal criterion met ({text})."));
+                        }
+                        TonalCriterion::Unmet(text) => {
+                            evaluation.intent_satisfied = false;
+                            evaluation.observations.push(format!("Measured global tonal criterion not met ({text})."));
+                        }
+                        TonalCriterion::Unavailable(reason) => unverified.push(reason.clone()),
+                    }
                     match &colour {
                         ColourCriterion::NotApplicable => {}
                         ColourCriterion::Checked(check) if !check.within_tolerance => {
@@ -549,11 +565,97 @@ struct RegionMeasurement {
     /// edit segments in a multi-segment plan): always Unverified, never
     /// silently dropped.
     uncovered: Option<String>,
+    /// Exact whole-canvas tonal statistics (before, after) for the global
+    /// tonal criterion; only set for a canvas-wide target measured exactly.
+    tonal: Option<(TonalStats, TonalStats)>,
+}
+
+/// Whole-canvas exact tonal statistics from a raw RGBA f32 buffer: mean luma,
+/// luma standard deviation (RMS contrast), mean chroma (max-min of RGB) and
+/// mean warmth (R-B). Pixels with no alpha are skipped.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TonalStats { luma: f64, contrast: f64, chroma: f64, warmth: f64 }
+
+impl TonalStats {
+    fn of(px: &[f32]) -> Option<Self> {
+        let (mut n, mut sl, mut sl2, mut sc, mut sw) = (0f64, 0f64, 0f64, 0f64, 0f64);
+        for p in px.chunks_exact(4) {
+            if !(p[3] > 0.0) { continue; }
+            let (r, g, b) = (f64::from(p[0]), f64::from(p[1]), f64::from(p[2]));
+            if !(r.is_finite() && g.is_finite() && b.is_finite()) { return None; }
+            let l = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+            n += 1.0; sl += l; sl2 += l * l;
+            sc += r.max(g).max(b) - r.min(g).min(b);
+            sw += r - b;
+        }
+        if n < 1.0 { return None; }
+        let mean = sl / n;
+        Some(Self { luma: mean, contrast: (sl2 / n - mean * mean).max(0.0).sqrt(), chroma: sc / n, warmth: sw / n })
+    }
+}
+
+/// A measurable property a global request names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TonalGoal { Brighter, Darker, MoreContrast, LessContrast, MoreSaturated, LessSaturated, Monochrome, Warmer, Cooler }
+
+/// The one tonal property the request names, from its words alone (language,
+/// never the photo). Opposed or several properties give `None`: the goal is
+/// then not reducible to one measured direction, so completion stays
+/// unverified rather than guessed.
+fn tonal_goal(prompt: &str) -> Option<TonalGoal> {
+    let p = prompt.to_lowercase();
+    let has = |ws: &[&str]| ws.iter().any(|w| p.contains(w));
+    let table: [(TonalGoal, &[&str]); 9] = [
+        (TonalGoal::Monochrome, &["black and white", "black & white", "b&w", "monochrome", "grayscale", "greyscale"]),
+        (TonalGoal::Brighter, &["brighter", "brighten", "lighten", "lighter", "increase brightness", "more exposure"]),
+        (TonalGoal::Darker, &["darker", "darken", "dimmer", "decrease brightness", "less exposure"]),
+        (TonalGoal::MoreContrast, &["more contrast", "increase contrast", "punchier", "higher contrast"]),
+        (TonalGoal::LessContrast, &["less contrast", "reduce contrast", "lower contrast", "flatter"]),
+        (TonalGoal::MoreSaturated, &["more saturat", "saturate", "more vibrant", "more colorful", "more colourful"]),
+        (TonalGoal::LessSaturated, &["desaturate", "less saturat", "muted", "more muted"]),
+        (TonalGoal::Warmer, &["warmer", "warm up", "warm tone"]),
+        (TonalGoal::Cooler, &["cooler", "cool down", "cool tone"]),
+    ];
+    let mut found = table.iter().filter(|(_, ws)| has(ws)).map(|(g, _)| *g);
+    let first = found.next()?;
+    if found.next().is_some() { return None; }
+    Some(first)
+}
+
+enum TonalCriterion { NotApplicable, Met(String), Unmet(String), Unavailable(String) }
+
+/// Checks the named tonal direction against the exact before/after canvas
+/// statistics. The thresholds are small fixed margins so a visibly null edit
+/// is not "met": 0.5% luma/contrast/chroma/warmth, and monochrome needs mean
+/// chroma at or under 0.01 after.
+fn measure_tonal_goal(category: IntentCategory, prompt: &str, tonal: Option<&(TonalStats, TonalStats)>, target_is_canvas: bool) -> TonalCriterion {
+    if !matches!(category, IntentCategory::PhotoEnhancement | IntentCategory::DirectFilterOrAdjustment
+        | IntentCategory::ColorStyling | IntentCategory::GeneralEditing) { return TonalCriterion::NotApplicable; }
+    let Some(goal) = tonal_goal(prompt) else { return TonalCriterion::NotApplicable };
+    let Some((b, a)) = tonal.filter(|_| target_is_canvas) else {
+        return TonalCriterion::Unavailable("the request names a global tonal goal, but exact whole-canvas before/after pixels were not available to measure it".into());
+    };
+    const M: f64 = 0.005;
+    let (name, before, after, ok) = match goal {
+        TonalGoal::Brighter => ("mean luma", b.luma, a.luma, a.luma >= b.luma + M),
+        TonalGoal::Darker => ("mean luma", b.luma, a.luma, a.luma <= b.luma - M),
+        TonalGoal::MoreContrast => ("luma contrast", b.contrast, a.contrast, a.contrast >= b.contrast + M),
+        TonalGoal::LessContrast => ("luma contrast", b.contrast, a.contrast, a.contrast <= b.contrast - M),
+        TonalGoal::MoreSaturated => ("mean chroma", b.chroma, a.chroma, a.chroma >= b.chroma + M),
+        TonalGoal::LessSaturated => ("mean chroma", b.chroma, a.chroma, a.chroma <= b.chroma - M),
+        TonalGoal::Monochrome => ("mean chroma", b.chroma, a.chroma, a.chroma <= 0.01),
+        TonalGoal::Warmer => ("mean warmth (R-B)", b.warmth, a.warmth, a.warmth >= b.warmth + M),
+        TonalGoal::Cooler => ("mean warmth (R-B)", b.warmth, a.warmth, a.warmth <= b.warmth - M),
+    };
+    let text = format!("{goal:?}: {name} went from {before:.4} to {after:.4}");
+    if ok { TonalCriterion::Met(text) } else { TonalCriterion::Unmet(text) }
 }
 
 /// Whether a satisfied evaluation may stop as Completed. Unknown goal
 /// satisfaction stays unverified; it never completes on execution success
 /// alone.
+const GENERIC_GLOBAL_GAP: &str = "a measured change is activity, not verification that this kind of request was satisfied";
+
 enum CompletionGrounding {
     Grounded,
     Unverified(String),
@@ -667,10 +769,10 @@ impl RegionWatch {
     /// identical grid only (the comparison itself classifies anything else
     /// as Unknown).
     fn measure<S: LiveEditSession + ?Sized>(&self, session: &mut S, before: Option<Vec<CapturedRegion>>) -> RegionMeasurement {
-        let unavailable = || RegionMeasurement { target: None, protected: Vec::new(), available: false, target_is_canvas: false, target_source: "nothing measurable", uncovered: None };
+        let unavailable = || RegionMeasurement { target: None, protected: Vec::new(), available: false, target_is_canvas: false, target_source: "nothing measurable", uncovered: None, tonal: None };
         let Some(before) = before else { return unavailable() };
         let Some(after) = self.capture(session) else { return unavailable() };
-        let mut measurement = RegionMeasurement { target: None, protected: Vec::new(), available: true, target_is_canvas: self.target_is_canvas, target_source: self.target_source, uncovered: None };
+        let mut measurement = RegionMeasurement { target: None, protected: Vec::new(), available: true, target_is_canvas: self.target_is_canvas, target_source: self.target_source, uncovered: None, tonal: None };
         for (b, a) in before.iter().zip(after.iter()) {
             // A mask-derived target compares under its mask's exact coverage:
             // covered (any nonzero) pixels are the target; zero-coverage
@@ -702,6 +804,11 @@ impl RegionWatch {
                 };
                 (evidence, false)
             });
+            if b.target && self.target_is_canvas && b.coverage.is_none() {
+                if let (Some(bp), Some(ap)) = (&b.pixels, &a.pixels) {
+                    if let (Some(x), Some(y)) = (TonalStats::of(bp), TonalStats::of(ap)) { measurement.tonal = Some((x, y)); }
+                }
+            }
             if b.target { measurement.target = Some(evidence); } else { measurement.protected.push(evidence); }
             if let Some(c) = collateral.filter(|c| *c > 0) {
                 measurement.protected.push((VisualEvidence { class: VisualEvidenceClass::Changed, detail: format!(
@@ -762,7 +869,7 @@ impl RegionMeasurement {
                         else { CompletionGrounding::Unverified(digest_only.into()) }
                     } else if !local {
                         CompletionGrounding::Unverified(
-                            "a measured change is activity, not verification that this kind of request was satisfied".into())
+                            GENERIC_GLOBAL_GAP.into())
                     } else if self.target_is_canvas {
                         CompletionGrounding::Unverified(
                             "the derived target spans the canvas; the requested local target was not measured".into())
@@ -863,7 +970,7 @@ fn capture_identity_matches<S: LiveEditSession + ?Sized>(session: &mut S, captur
 /// pre-plan canvas baseline (canvas within the aggregate budget); without it
 /// the protected leg is honest Unknown, never skipped silently.
 fn measure_segments<S: LiveEditSession + ?Sized>(session: &mut S, captures: &[SelectionCapture], canvas_before: Option<&Vec<f32>>, canvas_size: Option<[i64; 2]>) -> RegionMeasurement {
-    let unavailable = || RegionMeasurement { target: None, protected: Vec::new(), available: false, target_is_canvas: false, target_source: "nothing measurable", uncovered: None };
+    let unavailable = || RegionMeasurement { target: None, protected: Vec::new(), available: false, target_is_canvas: false, target_source: "nothing measurable", uncovered: None, tonal: None };
     let failed = |why: &str| VisualEvidence { class: VisualEvidenceClass::Unknown, detail: why.to_string() };
     if captures.is_empty() { return unavailable(); }
     // Target leg: every segment's covered pixels, compared exactly.
@@ -930,11 +1037,11 @@ fn measure_segments<S: LiveEditSession + ?Sized>(session: &mut S, captures: &[Se
     detail.push_str(&segment_reports.join("; "));
     if let Some((e, _)) = &mut target_evidence { e.detail = format!("{}; {}", e.detail, detail); }
     RegionMeasurement { target: target_evidence, protected, available: true, target_is_canvas: false,
-        target_source: "every selection segment's preserved coverage plus the canvas-level baseline", uncovered: None }
+        target_source: "every selection segment's preserved coverage plus the canvas-level baseline", uncovered: None, tonal: None }
 }
 
 fn measure_from_selection_stage<S: LiveEditSession + ?Sized>(session: &mut S, capture: Option<&SelectionCapture>) -> RegionMeasurement {
-    let unavailable = || RegionMeasurement { target: None, protected: Vec::new(), available: false, target_is_canvas: false, target_source: "nothing measurable", uncovered: None };
+    let unavailable = || RegionMeasurement { target: None, protected: Vec::new(), available: false, target_is_canvas: false, target_source: "nothing measurable", uncovered: None, tonal: None };
     let Some(capture) = capture else { return unavailable() };
     let failed = |why: &str| VisualEvidence { class: VisualEvidenceClass::Unknown, detail: why.to_string() };
     // Identity is the engine's unique live DocId, bound through the
@@ -1010,7 +1117,7 @@ fn measure_from_selection_stage<S: LiveEditSession + ?Sized>(session: &mut S, ca
     let uncovered = (capture.earlier_mutations > 0).then(|| format!(
         "{} earlier edit segment(s) of this multi-segment plan were not individually measured; the final segment's protected-complement comparison cannot verify them",
         capture.earlier_mutations));
-    RegionMeasurement { target, protected, available: true, target_is_canvas: false, target_source, uncovered }
+    RegionMeasurement { target, protected, available: true, target_is_canvas: false, target_source, uncovered, tonal: None }
 }
 
 fn measure_target_colour<S: LiveEditSession + ?Sized>(session: &mut S, intent: &EditingIntent, plan: &EditingPlan, final_scene: &VisualScene, capture: Option<&SelectionCapture>, evaluation: &mut EvaluationReport) -> ColourCriterion {
@@ -1110,6 +1217,39 @@ fn measure_target_colour<S: LiveEditSession + ?Sized>(session: &mut S, intent: &
 #[cfg(test)]
 mod region_watch_tests {
     use super::*;
+
+    fn flat(rgb: [f32; 3], n: usize) -> Vec<f32> { (0..n).flat_map(|_| [rgb[0], rgb[1], rgb[2], 1.0]).collect() }
+
+    #[test]
+    fn tonal_goal_reads_one_direction_from_words_only() {
+        assert_eq!(tonal_goal("Make this photo brighter"), Some(TonalGoal::Brighter));
+        assert_eq!(tonal_goal("convert to black and white"), Some(TonalGoal::Monochrome));
+        assert_eq!(tonal_goal("warm up the tones"), Some(TonalGoal::Warmer));
+        assert_eq!(tonal_goal("brighter but also darker"), None, "opposed goals are not one measured direction");
+        assert_eq!(tonal_goal("brighter and warmer"), None, "several properties stay unverified");
+        assert_eq!(tonal_goal("make it nicer"), None);
+    }
+
+    #[test]
+    fn tonal_criterion_measures_direction_exactly() {
+        let dark = TonalStats::of(&flat([0.2, 0.2, 0.2], 16)).unwrap();
+        let light = TonalStats::of(&flat([0.6, 0.6, 0.6], 16)).unwrap();
+        let both = (dark, light);
+        let cat = IntentCategory::PhotoEnhancement;
+        assert!(matches!(measure_tonal_goal(cat, "make it brighter", Some(&both), true), TonalCriterion::Met(_)));
+        assert!(matches!(measure_tonal_goal(cat, "make it darker", Some(&both), true), TonalCriterion::Unmet(_)));
+        let same = (dark, dark);
+        assert!(matches!(measure_tonal_goal(cat, "make it brighter", Some(&same), true), TonalCriterion::Unmet(_)), "a null edit is not met");
+        assert!(matches!(measure_tonal_goal(cat, "make it brighter", None, true), TonalCriterion::Unavailable(_)));
+        assert!(matches!(measure_tonal_goal(cat, "make it brighter", Some(&both), false), TonalCriterion::Unavailable(_)), "not a canvas-wide target");
+        assert!(matches!(measure_tonal_goal(cat, "make it nicer", Some(&both), true), TonalCriterion::NotApplicable));
+        assert!(matches!(measure_tonal_goal(IntentCategory::GraphicDesign, "make it brighter", Some(&both), true), TonalCriterion::NotApplicable));
+        let colour = TonalStats::of(&flat([0.8, 0.4, 0.2], 16)).unwrap();
+        let grey = TonalStats::of(&flat([0.5, 0.5, 0.5], 16)).unwrap();
+        assert!(matches!(measure_tonal_goal(cat, "black and white please", Some(&(colour, grey)), true), TonalCriterion::Met(_)));
+        assert!(matches!(measure_tonal_goal(cat, "black and white please", Some(&(colour, colour)), true), TonalCriterion::Unmet(_)));
+        assert!(TonalStats::of(&[f32::NAN, 0.0, 0.0, 1.0]).is_none() && TonalStats::of(&[0.0, 0.0, 0.0, 0.0]).is_none());
+    }
     use super::super::VisualElement;
 
     fn scene(width: u32, height: u32, layers: &[(u64, [i32; 4])]) -> VisualScene {
@@ -1161,6 +1301,7 @@ mod region_watch_tests {
             target_is_canvas: canvas,
             target_source: "test region",
             uncovered: None,
+            tonal: None,
         }
     }
 
@@ -1197,11 +1338,11 @@ mod region_watch_tests {
         let grounding = measurement(Some((VisualEvidenceClass::Unknown, false)), vec![(VisualEvidenceClass::Unknown, false)], false)
             .apply(IntentCategory::ColorStyling, &mut report);
         assert!(matches!(grounding, CompletionGrounding::Unverified(_)));
-        let grounding = RegionMeasurement { target: None, protected: Vec::new(), available: false, target_is_canvas: false, target_source: "test region", uncovered: None }
+        let grounding = RegionMeasurement { target: None, protected: Vec::new(), available: false, target_is_canvas: false, target_source: "test region", uncovered: None, tonal: None }
             .apply(IntentCategory::ColorStyling, &mut satisfied_report());
         assert!(matches!(grounding, CompletionGrounding::Unverified(_)), "no digest capability must never complete");
         let mut design = satisfied_report();
-        let grounding = RegionMeasurement { target: None, protected: Vec::new(), available: false, target_is_canvas: false, target_source: "test region", uncovered: None }
+        let grounding = RegionMeasurement { target: None, protected: Vec::new(), available: false, target_is_canvas: false, target_source: "test region", uncovered: None, tonal: None }
             .apply(IntentCategory::GraphicDesign, &mut design);
         assert!(matches!(grounding, CompletionGrounding::Unverified(_)), "heuristic design checks without any measurement are not completion proof");
     }
