@@ -40,6 +40,13 @@ for f in files:
     # style_specs!(bool, "type.paragraphStyle", ...) emits seven commands per prefix
     for prefix in re.findall(r'style_specs!\(\s*\w+,\s*"([\w.]+)"', s):
         ids |= {f"{prefix}.{leaf}" for leaf in ("new", "duplicate", "delete", "rename", "set", "apply", "redefine")}
+# style_cmd!("dropShadow", ...) builds id concat!("layer.layerStyle.", kind)
+for f in files:
+    if f.endswith("layer_style.rs"):
+        ids |= {"layer.layerStyle." + k for k in re.findall(r'style_cmd!\(\s*"(\w+)"', read(f))}
+# bare layer-style kind names are macro-argument artifacts of the id regexes, not engine ids
+ids -= {"bevelEmboss", "dropShadow", "innerGlow", "innerShadow", "outerGlow", "satin",
+        "colorOverlay", "gradientOverlay", "patternOverlay", "stroke"}
 # Filter Gallery commands live in the algo crate's gallery! table: id = "filter.gallery.<key>"
 gal = read("crates/algo/src/artistic.rs")
 ids |= {"filter.gallery." + k for k in re.findall(r'^\s*\w+ = "(\w+)",\s*"', gal[gal.index("gallery! {"):], re.M)}

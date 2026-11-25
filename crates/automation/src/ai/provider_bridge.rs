@@ -1533,6 +1533,10 @@ const SELECTED_COMMANDS: &[&str] = &["file.new", "type.create", "type.edit", "ty
     "type.convertToParagraphText", "type.convertToPointText", "type.rasterize", "type.warpText",
     "shape.create", "shape.edit", "shape.rasterize",
     "gradient.fill.create", "gradient.fill.set", "gradient.fill.stop",
+    "layer.layerStyle.dropShadow", "layer.layerStyle.innerShadow", "layer.layerStyle.outerGlow",
+    "layer.layerStyle.innerGlow", "layer.layerStyle.stroke", "layer.layerStyle.colorOverlay",
+    "layer.layerStyle.gradientOverlay", "layer.layerStyle.bevelEmboss", "layer.layerStyle.satin",
+    "layer.layerStyle.clear",
     "layer.newAdjustmentLayer.brightnessContrast",
     "layer.newAdjustmentLayer.vibrance", "layer.newAdjustmentLayer.hueSaturation",
     "layer.newAdjustmentLayer.levels", "layer.newAdjustmentLayer.colorBalance",
@@ -1771,6 +1775,19 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
                 "gradient.fill.create" => vec!["from", "to", "style", "stops", "transparency", "reverse", "dither", "opacity", "mode"],
                 "gradient.fill.set" => vec!["layer", "from", "to", "style", "angle", "scale", "offset", "reverse", "dither", "align", "stops", "transparency", "midpoints"],
                 "gradient.fill.stop" => vec!["layer", "action", "kind", "index", "location", "color", "opacity"],
+                // Layer styles: one effect per command. Pattern/texture keys
+                // are asset references and curve-object contours are free-form
+                // geometry; neither is admitted. layer is required (below).
+                "layer.layerStyle.dropShadow" => vec!["layer", "color", "opacity", "blend", "angle", "useGlobalLight", "distance", "spread", "size", "contour", "antiAlias", "noise", "knocksOut", "add"],
+                "layer.layerStyle.innerShadow" => vec!["layer", "color", "opacity", "blend", "angle", "useGlobalLight", "distance", "choke", "size", "contour", "antiAlias", "noise", "add"],
+                "layer.layerStyle.outerGlow" => vec!["layer", "color", "opacity", "blend", "technique", "spread", "size", "range", "contour", "antiAlias", "noise", "add"],
+                "layer.layerStyle.innerGlow" => vec!["layer", "color", "opacity", "blend", "technique", "source", "choke", "size", "range", "contour", "antiAlias", "noise", "add"],
+                "layer.layerStyle.stroke" => vec!["layer", "size", "position", "color", "opacity", "blend", "overprint", "add"],
+                "layer.layerStyle.colorOverlay" => vec!["layer", "color", "opacity", "blend", "add"],
+                "layer.layerStyle.gradientOverlay" => vec!["layer", "from", "to", "stops", "opacityStops", "style", "angle", "scale", "reverse", "dither", "opacity", "blend", "add"],
+                "layer.layerStyle.bevelEmboss" => vec!["layer", "style", "technique", "depth", "direction", "size", "soften", "angle", "altitude", "useGlobalLight", "highlightColor", "highlightOpacity", "highlightBlend", "shadowColor", "shadowOpacity", "shadowBlend", "add"],
+                "layer.layerStyle.satin" => vec!["layer", "color", "opacity", "blend", "angle", "distance", "size", "contour", "antiAlias", "invert", "add"],
+                "layer.layerStyle.clear" => vec!["layer"],
                 "type.setStyle" => vec!["layer", "range", "size", "color",
                     "font", "fontStyle", "weight", "italic", "tracking", "leading", "baselineShift",
                     "horizontalScale", "verticalScale", "underline", "strikethrough", "fauxBold", "fauxItalic",
@@ -2273,6 +2290,59 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
                     }
                 }
             }
+        }
+        if step.command.starts_with("layer.layerStyle.") {
+            // Effects on one explicitly named visible layer (existing or
+            // plan-created); every value is range-checked against the engine
+            // units (percent 0..100, px sizes, degrees, #rrggbb colours).
+            let kind = &step.command["layer.layerStyle.".len()..];
+            match layer_ref(map.get("layer")).ok_or_else(refuse)? {
+                LayerRef::Existing(id) => {
+                    if hidden.contains(&id) || !scene.layers.iter().any(|l| l.id == id && l.is_visible) { return Err(refuse()); }
+                }
+                LayerRef::Created(n) => {
+                    if n >= pos || hidden_created.contains(&n) || created_at(&created, n).is_none() { return Err(refuse()); }
+                }
+            }
+            let hex = |v: &Value| v.as_str().is_some_and(|s| s.len() == 7 && s.starts_with('#') && s.as_bytes()[1..].iter().all(u8::is_ascii_hexdigit));
+            let num = |v: &Value, lo: f64, hi: f64| v.as_f64().is_some_and(|x| x.is_finite() && (lo..=hi).contains(&x));
+            let blend_ok = |v: &Value| v.as_str().is_some_and(|m| SELECTED_BLEND_MODES.iter().any(|b| b.eq_ignore_ascii_case(m)));
+            let contour_ok = |v: &Value| v.as_str().is_some_and(|m| matches!(m, "Linear" | "Cone" | "Cone - Inverted" | "Cove - Deep" | "Cove - Shallow"
+                | "Gaussian" | "Half Round" | "Ring" | "Ring - Double" | "Rolling Slope - Descending" | "Rounded Steps" | "Sawtooth 1"));
+            for (key, value) in map {
+                let ok = match key.as_str() {
+                    "layer" => true,
+                    "color" | "from" | "to" | "highlightColor" | "shadowColor" => hex(value),
+                    "opacity" | "spread" | "choke" | "noise" | "highlightOpacity" | "shadowOpacity" => num(value, 0.0, 100.0),
+                    "range" => num(value, 1.0, 100.0),
+                    "blend" | "highlightBlend" | "shadowBlend" => blend_ok(value),
+                    "angle" | "altitude" => num(value, -360.0, 360.0),
+                    "distance" => num(value, 0.0, 30000.0),
+                    "size" => num(value, 0.0, 250.0),
+                    "soften" => num(value, 0.0, 16.0),
+                    "depth" => num(value, 1.0, 1000.0),
+                    "scale" => if kind == "gradientOverlay" { num(value, 10.0, 150.0) } else { false },
+                    "contour" => contour_ok(value),
+                    "technique" => if kind == "bevelEmboss" { matches!(value.as_str(), Some("smooth" | "chiselHard" | "chiselSoft")) }
+                        else { matches!(value.as_str(), Some("softer" | "precise")) },
+                    "source" => matches!(value.as_str(), Some("edge" | "center")),
+                    "position" => matches!(value.as_str(), Some("inside" | "outside" | "center")),
+                    "direction" => matches!(value.as_str(), Some("up" | "down")),
+                    "style" => match kind {
+                        "gradientOverlay" => matches!(value.as_str(), Some("linear" | "radial" | "angle" | "reflected" | "diamond")),
+                        _ => matches!(value.as_str(), Some("inner" | "outer" | "emboss" | "pillow" | "stroke")),
+                    },
+                    "useGlobalLight" | "antiAlias" | "knocksOut" | "overprint" | "dither" | "reverse" | "invert" | "add" => value.is_boolean(),
+                    "stops" => value.as_array().is_some_and(|a| (2..=64).contains(&a.len())
+                        && a.iter().all(|st| st.as_array().is_some_and(|p| p.len() == 2 && num(&p[0], 0.0, 1.0) && hex(&p[1])))),
+                    "opacityStops" => value.as_array().is_some_and(|a| a.len() <= 64 && a.len() != 1
+                        && a.iter().all(|st| st.as_array().is_some_and(|p| p.len() == 2 && num(&p[0], 0.0, 1.0) && num(&p[1], 0.0, 100.0)))),
+                    _ => false,
+                };
+                if !ok { return Err(refuse()); }
+            }
+            // A style step must change something beyond naming the layer.
+            if step.command != "layer.layerStyle.clear" && map.len() < 1 { return Err(refuse()); }
         }
         if step.command == "layer.removeBackground" {
             if let Some(value) = map.get("layer") {
@@ -3434,6 +3504,25 @@ mod tests {
             ("no layer and the active layer is not a fill", json!({"action": "delete", "index": 0})),
         ] {
             assert!(validate_selected_plan(&contract_plan("gradient.fill.stop", params), &contract_scene()).is_err(), "{name}");
+        }
+        // Layer styles: one explicit visible layer, engine units, no assets.
+        assert!(validate_selected_plan(&contract_plan("layer.layerStyle.dropShadow", json!({"layer": 7, "color": "#000000", "opacity": 60, "angle": 120, "distance": 8, "size": 10, "blend": "multiply", "contour": "Cone"})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("layer.layerStyle.stroke", json!({"layer": 7, "size": 3, "position": "outside", "color": "#ffffff"})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("layer.layerStyle.gradientOverlay", json!({"layer": 7, "stops": [[0.0, "#000000"], [1.0, "#ffffff"]], "style": "radial", "scale": 120})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("layer.layerStyle.clear", json!({"layer": 7})), &contract_scene()).is_ok());
+        for (name, cmd, params) in [
+            ("no layer", "layer.layerStyle.colorOverlay", json!({"color": "#ff0000"})),
+            ("opacity out of range", "layer.layerStyle.colorOverlay", json!({"layer": 7, "opacity": 150})),
+            ("bad colour", "layer.layerStyle.colorOverlay", json!({"layer": 7, "color": "red"})),
+            ("pattern asset key", "layer.layerStyle.bevelEmboss", json!({"layer": 7, "texture": "Clouds"})),
+            ("key of another kind", "layer.layerStyle.satin", json!({"layer": 7, "choke": 5})),
+            ("curve contour object", "layer.layerStyle.dropShadow", json!({"layer": 7, "contour": {"points": [[0, 0], [1, 1]]}})),
+            ("unknown contour", "layer.layerStyle.dropShadow", json!({"layer": 7, "contour": "Zigzag"})),
+            ("scale on a non-gradient kind", "layer.layerStyle.stroke", json!({"layer": 7, "scale": 100})),
+            ("one opacity stop", "layer.layerStyle.gradientOverlay", json!({"layer": 7, "opacityStops": [[0.0, 50]]})),
+            ("pattern overlay not admitted", "layer.layerStyle.patternOverlay", json!({"layer": 7})),
+        ] {
+            assert!(validate_selected_plan(&contract_plan(cmd, params), &contract_scene()).is_err(), "{name}");
         }
         // A plan-made gradient fill can be tuned by reference.
         let mut plan = contract_plan("layer.newFillLayer.gradient", json!({"from": "#000000", "to": "#ffffff"}));
