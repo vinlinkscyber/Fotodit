@@ -263,6 +263,15 @@ the goal coordinator's exact measurement substrate: they carry raw
 pixels/coverage, are never provider-admitted (pinned by a provider_bridge
 unit test), and are read-only, non-journaled and allocation-bounded.
 
+Status of the layer-style slice (admitted after run 9): 9 effect-kind
+commands plus layer.layerStyle.clear are **implemented-unverified**, not done.
+They are counted as admitted in the inventory only because the contract lists
+them; validator and compiler success do not establish real engine execution.
+Remaining qualification: engine-executed AI-path style tests (plan -> engine ->
+rendered effect), a CI run for the 14 new validator tests, and a measured
+goal criterion for styles. patternOverlay and bevel texture stay excluded
+(asset references).
+
 ## 7. Verification gates
 
 A change counts as done only when its gate evidence exists. Gates run only with
