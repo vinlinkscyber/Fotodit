@@ -33,7 +33,7 @@ fotodit-io = { workspace = true }
 fotodit-psd = { workspace = true }
 fotodit-format = { workspace = true }
 fotodit-plugins = { workspace = true }
-base64 = "0.22"
+base64 = "0.23"
 blake3 = { version = "1.8", default-features = false, features = ["pure"] }
 fotodit-codecs = { workspace = true }
 flate2 = { workspace = true }
