@@ -1527,6 +1527,11 @@ fn selected_contract_prompt(intent: &EditingIntent, scene: &VisualScene, image: 
 /// (filesystem/external-content boundary), read-only info commands
 /// (observations flow through the scene JSON, not plan steps - an explicit
 /// design choice to keep plans effect-only).
+/// True for an id the provider contract admits. Those plans were already
+/// validated per command by validate_selected_plan; the generic catalog has
+/// no entry for most of them, so re-validating there would refuse them.
+pub(crate) fn is_selected_command(id: &str) -> bool { SELECTED_COMMANDS.contains(&id) }
+
 const SELECTED_COMMANDS: &[&str] = &["file.new", "type.create", "type.edit", "type.setStyle",
     "layer.newFillLayer.solidColor", "layer.newFillLayer.gradient",
     "type.orientation.horizontal", "type.orientation.vertical",
@@ -2439,7 +2444,11 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
             && w < b + 2.0 { return Err(refuse()); }
         // Per-key rules for the non-filter commands; filter values were
         // already checked against the mirrored engine table above.
-        if filter.is_none() {
+        // layer.layerStyle.* validates every key in its own block above: the
+        // generic per-key vocabulary below (size 6..512, position above/below,
+        // color forms, blend subset) is for other commands and must not
+        // override the engine's per-style units.
+        if filter.is_none() && !step.command.starts_with("layer.layerStyle.") {
             for (key, value) in map {
                 let valid = match key.as_str() {
                     // Quick Selection's brush size has its own 1..5000 block.
@@ -3546,6 +3555,14 @@ mod tests {
         assert!(validate_selected_plan(&contract_plan("layer.layerStyle.stroke", json!({"layer": 7, "size": 3, "position": "outside", "color": "#ffffff"})), &contract_scene()).is_ok());
         assert!(validate_selected_plan(&contract_plan("layer.layerStyle.gradientOverlay", json!({"layer": 7, "stops": [[0.0, "#000000"], [1.0, "#ffffff"]], "style": "radial", "scale": 120})), &contract_scene()).is_ok());
         assert!(validate_selected_plan(&contract_plan("layer.layerStyle.clear", json!({"layer": 7})), &contract_scene()).is_ok());
+        // Per-style units must not be narrowed by other commands' generic key rules.
+        assert!(validate_selected_plan(&contract_plan("layer.layerStyle.stroke", json!({"layer": 7, "size": 1, "position": "inside", "opacity": 100})), &contract_scene()).is_ok(), "stroke size below 6 and inside position");
+        assert!(validate_selected_plan(&contract_plan("layer.layerStyle.dropShadow", json!({"layer": 7, "size": 0, "distance": 0, "angle": -45, "blend": "multiply"})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("layer.layerStyle.bevelEmboss", json!({"layer": 7, "style": "emboss", "technique": "chiselHard", "size": 3, "soften": 2, "depth": 200})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("layer.layerStyle.satin", json!({"layer": 7, "size": 2, "distance": 3, "invert": true})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("layer.layerStyle.outerGlow", json!({"layer": 7, "technique": "precise", "size": 4, "range": 30, "color": "#ffffbe"})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("layer.layerStyle.stroke", json!({"layer": 7, "position": "above"})), &contract_scene()).is_err(), "above/below is not a stroke position");
+        assert!(validate_selected_plan(&contract_plan("layer.layerStyle.stroke", json!({"layer": 7, "size": 400})), &contract_scene()).is_err());
         for (name, cmd, params) in [
             ("no layer", "layer.layerStyle.colorOverlay", json!({"color": "#ff0000"})),
             ("opacity out of range", "layer.layerStyle.colorOverlay", json!({"layer": 7, "opacity": 150})),

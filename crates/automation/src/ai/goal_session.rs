@@ -228,6 +228,7 @@ impl AiEngine {
                 return outcome.stop(GoalStop::RepeatedPlan, "my next plan was the same as the last one, so I stopped instead of repeating it");
             }
             for step in &plan.steps {
+                if super::provider_bridge::is_selected_command(&step.command) { continue; }
                 if let Err(error) = self.catalog.validate_command(&step.command, &step.params) {
                     return outcome.stop(GoalStop::PlanningFailed, error.to_string());
                 }
