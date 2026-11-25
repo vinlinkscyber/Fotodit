@@ -352,11 +352,11 @@ shirt. Passing means every link, not a plausible render:
    covered pixels (+/-32 per channel), so it binds colour to region even
    after the selection is consumed. Layer masks now report their bounds in
    scene inspection. Mask-only plans are measured against the targeted
-   layer's mask bounds (whole rect; per-pixel mask coverage split is open).
+   layer's mask bounds; a single masked target layer also gets the exact per-pixel covered/collateral split (image.analysis.layerMaskCoverage, tiled; commits 234f919, 6d62945). A mask target spanning several layers, or overridden by an active-selection region, is still measured as a whole rect.
    Remaining open: per-segment capture for multi-segment plans (withheld as
-   unverified); per-pixel mask coverage split; goal-relevant measurement
-   for global enhancements; regions between the 2M-px aggregate budget and
-   the 16M-px digest budget stay diagnostic-only.
+   unverified); exact mask-coverage split for a multi-layer mask target (single-layer is done); goal-relevant measurement
+   for global enhancements; regions above the 4M-px evidence budget
+   (EVIDENCE_MAX_PIXELS) are unmeasured, and the 2M-px aggregate budget bounds the combined check.
 4. **Correction or honest outcome.** If the measured criterion fails, the one
    structured correction pass runs; if it is exhausted, the chat says the
    goal is unmet or ambiguous, what was left in the document, and that Undo
