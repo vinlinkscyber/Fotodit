@@ -1566,7 +1566,8 @@ const SELECTED_COMMANDS: &[&str] = &["file.new", "type.create", "type.edit", "ty
     "edit.transform", "layer.removeBackground",
     "edit.fill", "edit.stroke", "image.autoTone", "image.autoContrast", "image.autoColor",
     "image.imageSize", "image.canvasSize", "image.crop",
-    "image.imageRotation.180", "image.imageRotation.90cw", "image.imageRotation.90ccw", "image.imageRotation.flipCanvasHorizontal", "image.imageRotation.flipCanvasVertical"];
+    "image.imageRotation.180", "image.imageRotation.90cw", "image.imageRotation.90ccw", "image.imageRotation.flipCanvasHorizontal", "image.imageRotation.flipCanvasVertical",
+    "image.trim"];
 
 /// The reviewed core commands whose full engine schemas always ride in the
 /// provider contract. Every other admitted command (the rest of
@@ -1866,6 +1867,7 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
                     "mirror", "rotationAdaptation", "mode", "opacity", "preserveTransparency", "target"],
                 "edit.stroke" => vec!["width", "color", "location", "mode", "opacity", "preserveTransparency"],
                 "image.autoTone" | "image.autoContrast" | "image.autoColor" => vec![],
+                "image.trim" => vec!["basedOn", "top", "bottom", "left", "right"],
                 "image.imageRotation.180" | "image.imageRotation.90cw" | "image.imageRotation.90ccw"
                 | "image.imageRotation.flipCanvasHorizontal" | "image.imageRotation.flipCanvasVertical" => vec![],
                 "layer.removeBackground" => vec!["layer", "sampleAllLayers", "refine"],
@@ -1887,6 +1889,8 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
                 // Drop and reselect take no parameters at all (empty key list).
                 | "select.drop" | "select.reselect"
                 | "image.autoTone" | "image.autoContrast" | "image.autoColor"
+                // Trim defaults (transparent, all four sides) need no keys.
+                | "image.trim"
                 // Whole-canvas turns/flips take no parameters.
                 | "image.imageRotation.180" | "image.imageRotation.90cw" | "image.imageRotation.90ccw"
                 | "image.imageRotation.flipCanvasHorizontal" | "image.imageRotation.flipCanvasVertical");
@@ -3027,6 +3031,13 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
         if matches!(step.command.as_str(), "image.imageRotation.90cw" | "image.imageRotation.90ccw") {
             std::mem::swap(&mut width, &mut height);
         }
+        // Trim: the new canvas depends on pixel content the plan cannot know,
+        // so nothing may follow it (later coordinates would be unprovable).
+        if step.command == "image.trim" {
+            if index + 1 != plan.steps.len() { return Err(refuse()); }
+            if map.get("basedOn").is_some_and(|v| !matches!(v.as_str(), Some("transparent" | "topLeft" | "bottomRight"))) { return Err(refuse()); }
+            if ["top", "bottom", "left", "right"].iter().any(|k| map.get(*k).is_some_and(|v| !v.is_boolean())) { return Err(refuse()); }
+        }
         if step.command == "image.canvasSize" {
             if map.get("units").is_some_and(|v| !matches!(v.as_str(), Some("px" | "percent"))) { return Err(refuse()); }
             if map.get("relative").is_some_and(|v| !v.is_boolean()) { return Err(refuse()); }
@@ -3520,6 +3531,10 @@ mod tests {
         assert!(validate_selected_plan(&contract_plan("image.imageRotation.90cw", json!({})), &contract_scene()).is_ok());
         assert!(validate_selected_plan(&contract_plan("image.imageRotation.flipCanvasHorizontal", json!({})), &contract_scene()).is_ok());
         assert!(validate_selected_plan(&contract_plan("image.imageRotation.180", json!({"angle": 10})), &contract_scene()).is_err());
+        // Trim: valid only as the last step, with enum/bool keys.
+        assert!(validate_selected_plan(&contract_plan("image.trim", json!({"basedOn": "topLeft", "left": false})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("image.trim", json!({"basedOn": "center"})), &contract_scene()).is_err());
+        assert!(validate_selected_plan(&contract_plan("image.trim", json!({"top": "yes"})), &contract_scene()).is_err());
         // Layer styles: one explicit visible layer, engine units, no assets.
         assert!(validate_selected_plan(&contract_plan("layer.layerStyle.dropShadow", json!({"layer": 7, "color": "#000000", "opacity": 60, "angle": 120, "distance": 8, "size": 10, "blend": "multiply", "contour": "Cone"})), &contract_scene()).is_ok());
         assert!(validate_selected_plan(&contract_plan("layer.layerStyle.stroke", json!({"layer": 7, "size": 3, "position": "outside", "color": "#ffffff"})), &contract_scene()).is_ok());
