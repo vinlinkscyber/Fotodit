@@ -385,3 +385,46 @@ fn planner_led_file_new_with_an_open_document_stays_refused() {
     assert!(host.calls.is_empty(), "nothing dispatched: {calls:?}", calls = host.calls);
     assert_eq!(host.document, before, "the open document is untouched");
 }
+
+fn tonal_observations(outcome: &fotodit_automation::ai::GoalOutcome) -> Vec<String> {
+    outcome.attempts.iter()
+        .filter_map(|a| a.evaluation.as_ref())
+        .flat_map(|e| e.observations.iter().cloned())
+        .filter(|o| o.contains("tonal"))
+        .collect()
+}
+
+fn tonal_plan() -> EditingPlan {
+    plan(vec![step("layer.newAdjustmentLayer.brightnessContrast", json!({"brightness": 60, "contrast": 0}))])
+}
+
+/// Real engine, real exact canvas pixels: a sole tonal request is measured on
+/// the canvas and the direction is judged (met or not met, never skipped).
+#[test]
+fn real_engine_measures_a_sole_tonal_request_on_exact_canvas_pixels() {
+    let mut host = Headless::trusted_local();
+    host.command_run("file.new", json!({"width": 16, "height": 16, "background": "black"})).unwrap();
+    let outcome = engine(tonal_plan()).process_goal_in(&mut host, &GoalRequest::new("make this photo brighter"), &mut AiContext::new(), &NoGoalRepair);
+    assert!(outcome.attempts[0].execution.as_ref().unwrap().is_success);
+    let obs = tonal_observations(&outcome);
+    assert!(obs.iter().any(|o| o.contains("global tonal criterion")), "the tonal criterion must run on exact pixels: {obs:?}");
+}
+
+/// A multi-part request: one tonal match is evidence for that property only and
+/// can never clear the request's other requirements or complete the goal.
+#[test]
+fn real_engine_tonal_match_does_not_complete_a_multi_part_request() {
+    for prompt in ["make this photo brighter and add a vignette", "make it brighter, then crop it square", "don't make this photo brighter"] {
+        let mut host = black_canvas_host();
+        let outcome = engine(tonal_plan()).process_goal_in(&mut host, &GoalRequest::new(prompt), &mut AiContext::new(), &NoGoalRepair);
+        assert_ne!(outcome.stop, GoalStop::Completed, "{prompt}");
+        let obs = tonal_observations(&outcome);
+        assert!(!obs.iter().any(|o| o.contains("global tonal criterion met")), "{prompt}: {obs:?}");
+    }
+}
+
+fn black_canvas_host() -> Headless {
+    let mut host = Headless::trusted_local();
+    host.command_run("file.new", json!({"width": 16, "height": 16, "background": "black"})).unwrap();
+    host
+}
