@@ -1530,6 +1530,7 @@ fn selected_contract_prompt(intent: &EditingIntent, scene: &VisualScene, image: 
 const SELECTED_COMMANDS: &[&str] = &["file.new", "type.create", "type.edit", "type.setStyle",
     "layer.newFillLayer.solidColor", "layer.newFillLayer.gradient",
     "type.orientation.horizontal", "type.orientation.vertical",
+    "type.antiAlias.none", "type.antiAlias.sharp", "type.antiAlias.crisp", "type.antiAlias.strong", "type.antiAlias.smooth", "type.antiAlias.windowsLcd", "type.antiAlias.windows",
     "type.convertToParagraphText", "type.convertToPointText", "type.rasterize", "type.warpText",
     "shape.create", "shape.edit", "shape.rasterize",
     "gradient.fill.create", "gradient.fill.set", "gradient.fill.stop",
@@ -1763,6 +1764,7 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
                 // equivalent of, and metricsAsShown involves transform-scale
                 // semantics the scene does not carry.
                 "type.orientation.horizontal" | "type.orientation.vertical"
+                | "type.antiAlias.none" | "type.antiAlias.sharp" | "type.antiAlias.crisp" | "type.antiAlias.strong" | "type.antiAlias.smooth" | "type.antiAlias.windowsLcd" | "type.antiAlias.windows"
                 | "type.convertToParagraphText" | "type.convertToPointText" | "type.rasterize" => vec!["layer"],
                 "type.warpText" => vec!["layer", "style", "orientation", "bend", "horizontalDistortion", "verticalDistortion"],
                 // Geometric shapes only: inline path data, work-path state,
@@ -2067,6 +2069,7 @@ fn validate_selected_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(),
         // point text from paragraph text, so a conversion that does not
         // apply fails truthfully at execution).
         if matches!(step.command.as_str(), "type.orientation.horizontal" | "type.orientation.vertical"
+            | "type.antiAlias.none" | "type.antiAlias.sharp" | "type.antiAlias.crisp" | "type.antiAlias.strong" | "type.antiAlias.smooth" | "type.antiAlias.windowsLcd" | "type.antiAlias.windows"
             | "type.convertToParagraphText" | "type.convertToPointText" | "type.warpText") {
             match layer_ref(map.get("layer")).ok_or_else(refuse)? {
                 LayerRef::Existing(id) => {
@@ -3535,6 +3538,9 @@ mod tests {
         assert!(validate_selected_plan(&contract_plan("image.trim", json!({"basedOn": "topLeft", "left": false})), &contract_scene()).is_ok());
         assert!(validate_selected_plan(&contract_plan("image.trim", json!({"basedOn": "center"})), &contract_scene()).is_err());
         assert!(validate_selected_plan(&contract_plan("image.trim", json!({"top": "yes"})), &contract_scene()).is_err());
+        assert!(validate_selected_plan(&contract_plan("type.antiAlias.crisp", json!({"layer": 9})), &contract_scene()).is_ok());
+        assert!(validate_selected_plan(&contract_plan("type.antiAlias.crisp", json!({"layer": 7})), &contract_scene()).is_err(), "not a Type layer");
+        assert!(validate_selected_plan(&contract_plan("type.antiAlias.smooth", json!({})), &contract_scene()).is_err(), "layer required");
         // Layer styles: one explicit visible layer, engine units, no assets.
         assert!(validate_selected_plan(&contract_plan("layer.layerStyle.dropShadow", json!({"layer": 7, "color": "#000000", "opacity": 60, "angle": 120, "distance": 8, "size": 10, "blend": "multiply", "contour": "Cone"})), &contract_scene()).is_ok());
         assert!(validate_selected_plan(&contract_plan("layer.layerStyle.stroke", json!({"layer": 7, "size": 3, "position": "outside", "color": "#ffffff"})), &contract_scene()).is_ok());
