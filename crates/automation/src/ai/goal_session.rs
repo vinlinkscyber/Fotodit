@@ -300,9 +300,14 @@ impl AiEngine {
                     // other unverified reason (unmeasured segments, budgets) stays.
                     match &tonal {
                         TonalCriterion::NotApplicable => {}
-                        TonalCriterion::Met(text) => {
-                            unverified.retain(|r| r != GENERIC_GLOBAL_GAP);
-                            evaluation.observations.push(format!("Measured global tonal criterion met ({text})."));
+                        TonalCriterion::Met(text, sole) => {
+                            if *sole {
+                                unverified.retain(|r| r != GENERIC_GLOBAL_GAP);
+                                evaluation.observations.push(format!("Measured global tonal criterion met ({text})."));
+                            } else {
+                                evaluation.observations.push(format!(
+                                    "Measured tonal evidence ({text}) matches one requested property; the request's other requirements are not verified by it."));
+                            }
                         }
                         TonalCriterion::Unmet(text) => {
                             evaluation.intent_satisfied = false;
@@ -616,13 +621,29 @@ fn tonal_goal(prompt: &str) -> Option<TonalGoal> {
         (TonalGoal::Warmer, &["warmer", "warm up", "warm tone"]),
         (TonalGoal::Cooler, &["cooler", "cool down", "cool tone"]),
     ];
+    // Negated or conditional wording is not a stated direction.
+    if p.split_whitespace().any(|w| matches!(w.trim_matches(|c: char| !c.is_alphanumeric()),
+        "not" | "don't" | "dont" | "no" | "without" | "never" | "avoid" | "unless" | "instead" | "stop")) { return None; }
     let mut found = table.iter().filter(|(_, ws)| has(ws)).map(|(g, _)| *g);
     let first = found.next()?;
     if found.next().is_some() { return None; }
     Some(first)
 }
 
-enum TonalCriterion { NotApplicable, Met(String), Unmet(String), Unavailable(String) }
+/// `Met(text, sole)`: `sole` is true only when the whole request is that one
+/// tonal property; otherwise the match is recorded as evidence and the
+/// request's other requirements stay unverified.
+enum TonalCriterion { NotApplicable, Met(String, bool), Unmet(String), Unavailable(String) }
+
+/// True when the request is a single short tonal ask: no conjunction, list
+/// or sequencing words, no extra clause. "black and white" is one phrase.
+fn tonal_request_is_sole(prompt: &str) -> bool {
+    let p = prompt.to_lowercase().replace("black and white", "blackandwhite").replace("black & white", "blackandwhite");
+    if p.contains([',', ';', '.', '!', '?', '+', '&']) && p.trim_end_matches(['.', '!', '?']).contains([',', ';', '+', '&', '.', '?', '!']) { return false; }
+    let words: Vec<&str> = p.split_whitespace().collect();
+    words.len() <= 10 && !words.iter().any(|w| matches!(w.trim_matches(|c: char| !c.is_alphanumeric()),
+        "and" | "also" | "then" | "plus" | "but" | "while" | "with" | "after" | "before" | "except" | "keep" | "only" | "but"))
+}
 
 /// Checks the named tonal direction against the exact before/after canvas
 /// statistics. The thresholds are small fixed margins so a visibly null edit
@@ -648,7 +669,7 @@ fn measure_tonal_goal(category: IntentCategory, prompt: &str, tonal: Option<&(To
         TonalGoal::Cooler => ("mean warmth (R-B)", b.warmth, a.warmth, a.warmth <= b.warmth - M),
     };
     let text = format!("{goal:?}: {name} went from {before:.4} to {after:.4}");
-    if ok { TonalCriterion::Met(text) } else { TonalCriterion::Unmet(text) }
+    if ok { TonalCriterion::Met(text, tonal_request_is_sole(prompt)) } else { TonalCriterion::Unmet(text) }
 }
 
 /// Whether a satisfied evaluation may stop as Completed. Unknown goal
@@ -1228,6 +1249,8 @@ mod region_watch_tests {
         assert_eq!(tonal_goal("brighter but also darker"), None, "opposed goals are not one measured direction");
         assert_eq!(tonal_goal("brighter and warmer"), None, "several properties stay unverified");
         assert_eq!(tonal_goal("make it nicer"), None);
+        assert_eq!(tonal_goal("don't make it brighter"), None, "negated wording");
+        assert_eq!(tonal_goal("brighter without losing the shadows"), None, "conditional wording");
     }
 
     #[test]
@@ -1236,7 +1259,7 @@ mod region_watch_tests {
         let light = TonalStats::of(&flat([0.6, 0.6, 0.6], 16)).unwrap();
         let both = (dark, light);
         let cat = IntentCategory::PhotoEnhancement;
-        assert!(matches!(measure_tonal_goal(cat, "make it brighter", Some(&both), true), TonalCriterion::Met(_)));
+        assert!(matches!(measure_tonal_goal(cat, "make it brighter", Some(&both), true), TonalCriterion::Met(_, true)));
         assert!(matches!(measure_tonal_goal(cat, "make it darker", Some(&both), true), TonalCriterion::Unmet(_)));
         let same = (dark, dark);
         assert!(matches!(measure_tonal_goal(cat, "make it brighter", Some(&same), true), TonalCriterion::Unmet(_)), "a null edit is not met");
@@ -1244,9 +1267,16 @@ mod region_watch_tests {
         assert!(matches!(measure_tonal_goal(cat, "make it brighter", Some(&both), false), TonalCriterion::Unavailable(_)), "not a canvas-wide target");
         assert!(matches!(measure_tonal_goal(cat, "make it nicer", Some(&both), true), TonalCriterion::NotApplicable));
         assert!(matches!(measure_tonal_goal(IntentCategory::GraphicDesign, "make it brighter", Some(&both), true), TonalCriterion::NotApplicable));
+        // Multi-part requests: one tonal match is evidence, never overall satisfaction.
+        for multi in ["make it brighter and add a vignette", "brighter, then crop to a square", "make the photo brighter but keep the sky as it is", "make it brighter. also add my logo"] {
+            assert!(matches!(measure_tonal_goal(cat, multi, Some(&both), true), TonalCriterion::Met(_, false)), "{multi}");
+        }
+        assert!(!tonal_request_is_sole("enhance this holiday photo so it looks much brighter and more natural across the whole frame"));
+        assert!(tonal_request_is_sole("make this photo brighter"));
+        assert!(tonal_request_is_sole("convert to black and white"));
         let colour = TonalStats::of(&flat([0.8, 0.4, 0.2], 16)).unwrap();
         let grey = TonalStats::of(&flat([0.5, 0.5, 0.5], 16)).unwrap();
-        assert!(matches!(measure_tonal_goal(cat, "black and white please", Some(&(colour, grey)), true), TonalCriterion::Met(_)));
+        assert!(matches!(measure_tonal_goal(cat, "black and white please", Some(&(colour, grey)), true), TonalCriterion::Met(_, true)));
         assert!(matches!(measure_tonal_goal(cat, "black and white please", Some(&(colour, colour)), true), TonalCriterion::Unmet(_)));
         assert!(TonalStats::of(&[f32::NAN, 0.0, 0.0, 1.0]).is_none() && TonalStats::of(&[0.0, 0.0, 0.0, 0.0]).is_none());
     }
