@@ -227,8 +227,17 @@ impl AiEngine {
             if !fingerprints.insert(fingerprint) {
                 return outcome.stop(GoalStop::RepeatedPlan, "my next plan was the same as the last one, so I stopped instead of repeating it");
             }
+            // Admitted commands without a catalog entry get the same pre-dispatch
+            // per-command validation the provider route applies (whole plan, so
+            // $step references and earlier-step state are checked before any
+            // edit). Everything else keeps catalog validation.
+            if plan.steps.iter().any(|step| super::provider_bridge::is_selected_command(&step.command) && !self.catalog.has_command(&step.command)) {
+                if let Err(error) = super::provider_bridge::validate_admitted_plan(&plan, &scene) {
+                    return outcome.stop(GoalStop::PlanningFailed, error.to_string());
+                }
+            }
             for step in &plan.steps {
-                if super::provider_bridge::is_selected_command(&step.command) { continue; }
+                if super::provider_bridge::is_selected_command(&step.command) && !self.catalog.has_command(&step.command) { continue; }
                 if let Err(error) = self.catalog.validate_command(&step.command, &step.params) {
                     return outcome.stop(GoalStop::PlanningFailed, error.to_string());
                 }

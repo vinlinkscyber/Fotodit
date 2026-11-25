@@ -1532,6 +1532,9 @@ fn selected_contract_prompt(intent: &EditingIntent, scene: &VisualScene, image: 
 /// no entry for most of them, so re-validating there would refuse them.
 pub(crate) fn is_selected_command(id: &str) -> bool { SELECTED_COMMANDS.contains(&id) }
 
+/// Pre-dispatch per-command validation of a whole plan of admitted commands.
+pub(crate) fn validate_admitted_plan(plan: &EditingPlan, scene: &VisualScene) -> Result<(), AiError> { validate_selected_plan(plan, scene) }
+
 const SELECTED_COMMANDS: &[&str] = &["file.new", "type.create", "type.edit", "type.setStyle",
     "layer.newFillLayer.solidColor", "layer.newFillLayer.gradient",
     "type.orientation.horizontal", "type.orientation.vertical",

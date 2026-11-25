@@ -465,3 +465,27 @@ fn admission_refuses_unknown_ids_and_engine_still_rejects_bad_style_params() {
         .process_goal_in(&mut host, &GoalRequest::new("add an outline"), &mut AiContext::new(), &NoGoalRepair);
     assert!(bad.attempts.first().and_then(|a| a.execution.as_ref()).is_none_or(|e| !e.is_success), "bad style params must not succeed");
 }
+
+/// Invalid parameters on an admitted, uncatalogued command are refused before
+/// dispatch for the whole plan: an earlier valid step must not have edited the
+/// document.
+#[test]
+fn invalid_admitted_params_are_refused_before_any_earlier_step_edits_the_document() {
+    for bad in [
+        json!({"layer": {"$step": 1}, "size": 100000, "position": "outside"}),
+        json!({"layer": {"$step": 1}, "size": 2, "position": "above"}),
+        json!({"layer": {"$step": 1}, "size": 2, "notAStyleKey": true}),
+    ] {
+        let mut host = Headless::trusted_local();
+        host.command_run("file.new", json!({"width": 32, "height": 24, "background": "white"})).unwrap();
+        let before = host.inspect_active().unwrap();
+        let steps = vec![
+            step("shape.create", json!({"kind": "rect", "rect": [4, 4, 16, 10], "fill": "#cc2200"})),
+            step("layer.layerStyle.stroke", bad.clone()),
+        ];
+        let outcome = engine(plan(steps)).process_goal_in(&mut host, &GoalRequest::new("add a red box with an outline"), &mut AiContext::new(), &NoGoalRepair);
+        assert_eq!(outcome.stop, GoalStop::PlanningFailed, "{bad}");
+        assert!(outcome.attempts.iter().all(|a| a.execution.is_none()), "{bad}: nothing may dispatch");
+        assert_eq!(host.inspect_active().unwrap(), before, "{bad}: the document must be untouched");
+    }
+}
