@@ -30,7 +30,7 @@ jobs:
       - name: Run automation tests
         run: |
           set -o pipefail
-          cargo test --locked -p fotodit-automation 2>&1 | tee test-output.txt
+          cargo test --locked --no-fail-fast -p fotodit-automation 2>&1 | tee test-output.txt
       - name: Run engine tests
         if: always()
         run: |
