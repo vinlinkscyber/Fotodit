@@ -316,7 +316,27 @@ impl ExecutionEngine {
         };
         let value = result?;
         let invalid = || "the host's digest output failed schema validation".to_string();
-        if value.get("domain").and_then(Value::as_str) != Some(if region.is_some() { "region" } else { "canvas" })
+        // The engine labels a region that covers the whole canvas (for example a
+        // select.all bounding rect) "canvas". That label is accepted for a region
+        // request ONLY when the request, the reported geometry and the live
+        // document dimensions all show the same full-canvas rect; a partial
+        // region answered as "canvas" is unbound evidence and is rejected.
+        let domain_ok = match value.get("domain").and_then(Value::as_str) {
+            Some("region") => region.is_some(),
+            Some("canvas") => match region {
+                None => true,
+                Some(rect) => {
+                    let doc = session.inspect_active().ok().flatten();
+                    let dims = doc.as_ref().and_then(|d| d.get("width").and_then(Value::as_i64).zip(d.get("height").and_then(Value::as_i64)));
+                    let reported = [value.get("x").and_then(Value::as_i64), value.get("y").and_then(Value::as_i64),
+                        value.get("width").and_then(Value::as_i64), value.get("height").and_then(Value::as_i64)];
+                    dims.is_some_and(|(w, h)| w > 0 && h > 0 && rect == [0, 0, w, h]
+                        && reported == [Some(0), Some(0), Some(w), Some(h)])
+                }
+            },
+            _ => false,
+        };
+        if !domain_ok
             || value.get("schema").and_then(Value::as_u64) != Some(1)
             || value.get("hash").and_then(Value::as_str) != Some("fnv1a64")
             || value.get("quantization").and_then(Value::as_str) != Some("8bit/channel")
@@ -1146,5 +1166,52 @@ impl ExecutionEngine {
             .map(|e| e.as_str().map(str::to_string))
             .collect::<Option<Vec<String>>>()?;
         Some(DocMark { name, path, entries })
+    }
+}
+
+#[cfg(test)]
+mod digest_domain_tests {
+    use super::*;
+    use crate::AutomationError;
+
+    struct Fixed { doc: Value, digest: Value }
+    impl LiveEditSession for Fixed {
+        fn inspect_active(&self) -> Result<Option<Value>, AutomationError> { Ok(Some(self.doc.clone())) }
+        fn command_run(&mut self, _: &str, _: Value) -> Result<Value, AutomationError> { Ok(json!({})) }
+        fn visual_digest(&mut self, _: u64, _: Option<[i64; 4]>) -> Option<Result<Value, String>> { Some(Ok(self.digest.clone())) }
+    }
+    fn digest(domain: &str, x: i64, y: i64, w: u64, h: u64) -> Value {
+        json!({"schema": 1, "hash": "fnv1a64", "quantization": "8bit/channel", "digest": "00000000000000ab",
+            "domain": domain, "x": x, "y": y, "width": w, "height": h, "stride": 1, "sampledPixels": w * h, "revision": 1})
+    }
+    fn host(domain: &str, x: i64, y: i64, w: u64, h: u64) -> Fixed {
+        Fixed { doc: json!({"width": 64, "height": 64}), digest: digest(domain, x, y, w, h) }
+    }
+
+    #[test]
+    fn full_canvas_region_answered_as_canvas_is_accepted() {
+        let mark = ExecutionEngine::capture_digest(&mut host("canvas", 0, 0, 64, 64), Some([0, 0, 64, 64])).unwrap().unwrap();
+        assert_eq!((mark.x, mark.y, mark.width, mark.height), (0, 0, 64, 64));
+    }
+
+    #[test]
+    fn partial_region_answered_as_canvas_is_rejected() {
+        for rect in [[0, 0, 32, 64], [8, 8, 32, 32], [0, 0, 64, 63]] {
+            // Even if the host reports the full canvas, the request was partial.
+            assert!(ExecutionEngine::capture_digest(&mut host("canvas", 0, 0, 64, 64), Some(rect)).is_err(), "{rect:?}");
+        }
+        // Full-canvas request, but the reported geometry is partial.
+        assert!(ExecutionEngine::capture_digest(&mut host("canvas", 0, 0, 32, 64), Some([0, 0, 64, 64])).is_err());
+        assert!(ExecutionEngine::capture_digest(&mut host("canvas", 4, 0, 64, 64), Some([0, 0, 64, 64])).is_err());
+        // Full-canvas-looking request against a document of a different size.
+        let mut other = Fixed { doc: json!({"width": 128, "height": 64}), digest: digest("canvas", 0, 0, 64, 64) };
+        assert!(ExecutionEngine::capture_digest(&mut other, Some([0, 0, 64, 64])).is_err());
+    }
+
+    #[test]
+    fn region_label_stays_valid_for_partial_region_and_invalid_without_region() {
+        assert!(ExecutionEngine::capture_digest(&mut host("region", 8, 8, 32, 32), Some([8, 8, 32, 32])).unwrap().is_some());
+        assert!(ExecutionEngine::capture_digest(&mut host("region", 0, 0, 64, 64), None).is_err());
+        assert!(ExecutionEngine::capture_digest(&mut host("canvas", 0, 0, 64, 64), None).unwrap().is_some());
     }
 }
